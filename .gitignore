@@ -1,0 +1,17 @@
+venv/
+scripts/venv/
+__pycache__/
+*.pyc
+*.mp4
+*.obj
+*.png
+*.jpg
+input_grids/*
+debug_output/*
+shared/*
+sim_output/*
+output_matrices/*
+!.gitignore
+.env
+*.env
+config.json
