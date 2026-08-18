@@ -15,3 +15,5 @@ shared/*
 sim_output/*
 output_matrices/*
 !.gitignore
+logs/
+*.log
