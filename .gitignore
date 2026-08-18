@@ -6,12 +6,12 @@ __pycache__/
 *.obj
 *.png
 *.jpg
+.env
+*.env
+config.json
 input_grids/*
 debug_output/*
 shared/*
 sim_output/*
 output_matrices/*
 !.gitignore
-.env
-*.env
-config.json
