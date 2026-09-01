@@ -30,10 +30,10 @@ def load_matrix(txt_path: str):
     return grid
 
 def generate_fabric_3d(grid_matrix, props: MaterialProps, n_samples: int = 24, max_iter: int = 200, tol: float = 1e-5):
-    loops, curl_targets = build_flat_mesh(grid_matrix, props, n_samples=n_samples)
-    z_relaxed, iters = relax_to_convergence(curl_targets, max_iter=max_iter, tol=tol)
-    after_loops = apply_relaxed_z(loops, z_relaxed)
-    return loops, after_loops, iters, z_relaxed
+    loops, curl_targets, contact_map = build_flat_mesh(grid_matrix, props, n_samples=n_samples)
+    contact_z, iters = relax_to_convergence(curl_targets, contact_map, max_iter=max_iter, tol=tol)
+    after_loops = apply_relaxed_z(loops, contact_z, contact_map)
+    return loops, after_loops, iters, contact_z
 
 if __name__ == "__main__":
     sample_grid = [

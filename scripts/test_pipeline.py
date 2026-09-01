@@ -42,14 +42,75 @@ def test_spacing_from_density():
 
 def test_centerline_stays_within_cell_bounds():
     props = MaterialProps(Ne=10, cpi=14, wpi=18, loop_length_mm=3.2)
-    local = loop_centerline_local(props, n_samples=24)
+    local, bottom_idx, top_idx = loop_centerline_local(props, n_samples=24)
     W = props.geometry.wale_spacing_mm
     H = props.geometry.course_spacing_mm
     assert local[:, 0].min() >= -1e-6 and local[:, 0].max() <= W + 1e-6, \
         "centerline escaped its cell in the u (wale) direction"
     assert local[:, 1].min() >= -1e-6 and local[:, 1].max() <= H + 1e-6, \
         "centerline escaped its cell in the v (course) direction"
+    assert abs(local[bottom_idx, 0] - W / 2.0) < 1e-9 and abs(local[bottom_idx, 1]) < 1e-9, \
+        "bottom_idx must point at the (W/2, 0) contact point"
+    assert abs(local[top_idx, 0] - W / 2.0) < 1e-9 and abs(local[top_idx, 1] - H) < 1e-9, \
+        "top_idx must point at the (W/2, H) contact point"
     print("test_centerline_stays_within_cell_bounds passed.")
+
+
+def test_shared_contact_points_coincide_after_relaxation():
+    """
+    The bug the rebuild targets: adjacent loops' shared contact points
+    must have IDENTICAL z after relaxation, not just be close. Checks
+    every interior contact in a mixed grid, not just one pair.
+    """
+    props = MaterialProps(Ne=10, cpi=14, wpi=18, loop_length_mm=3.2)
+    grid = [[1, 1, 2, 2], [2, 1, 1, 2], [1, 2, 2, 1], [2, 2, 1, 1]]
+    loops, curl_targets, contact_map = build_flat_mesh(grid, props, n_samples=24)
+    contact_z, iters = relax_to_convergence(curl_targets, contact_map, max_iter=200, tol=1e-5)
+    after = apply_relaxed_z(loops, contact_z, contact_map)
+
+    bottom_idx = contact_map["bottom_idx"]
+    top_idx = contact_map["top_idx"]
+    rows, cols = len(grid), len(grid[0])
+    max_gap = 0.0
+    for r in range(rows - 1):
+        for c in range(cols):
+            top_pt = after[r][c][top_idx]
+            bottom_pt = after[r + 1][c][bottom_idx]
+            gap = abs(top_pt[2] - bottom_pt[2])
+            max_gap = max(max_gap, gap)
+            assert np.allclose(top_pt, bottom_pt, atol=1e-9), (
+                f"loops disconnected at row {r}->{r+1}, col {c}: "
+                f"top={top_pt} bottom={bottom_pt}, gap={gap}"
+            )
+    assert not np.allclose(contact_z, 0), "contact z must actually move under relaxation"
+    print(f"test_shared_contact_points_coincide_after_relaxation passed (max gap: {max_gap:.2e} mm, {iters} iters).")
+
+
+def test_loop_bends_instead_of_rigid_shifting():
+    """
+    Confirms apply_relaxed_z deforms a loop continuously rather than
+    translating it as a rigid block: if bottom and top contact z differ,
+    interior points must take intermediate z values, not all-bottom or
+    all-top.
+    """
+    props = MaterialProps(Ne=10, cpi=14, wpi=18, loop_length_mm=3.2)
+    grid = [[1], [2]]  # two stacked loops, opposite curl -> different contact z at top vs bottom
+    loops, curl_targets, contact_map = build_flat_mesh(grid, props, n_samples=24)
+    contact_z, _ = relax_to_convergence(curl_targets, contact_map, max_iter=200, tol=1e-5)
+    after = apply_relaxed_z(loops, contact_z, contact_map)
+
+    loop0 = after[0][0]
+    z_bottom = contact_z[0, 0]
+    z_top = contact_z[1, 0]
+    assert abs(z_bottom - z_top) > 1e-6, "test grid didn't produce distinct contact z, can't check blending"
+
+    interior_z = loop0[1:-1, 2]  # skip the exact contact points themselves
+    lo, hi = min(z_bottom, z_top), max(z_bottom, z_top)
+    assert np.all(interior_z >= lo - 1e-9) and np.all(interior_z <= hi + 1e-9), \
+        "interior points must stay within [z_bottom, z_top] if the loop bends smoothly"
+    assert np.unique(np.round(interior_z, 9)).size > 2, \
+        "interior z values collapsed to <=2 distinct values -- looks like rigid shift, not a bend"
+    print("test_loop_bends_instead_of_rigid_shifting passed.")
 
 
 def test_curl_bias_signs():
@@ -61,31 +122,35 @@ def test_curl_bias_signs():
 
 
 def test_relaxation_converges_and_matches_hand_derivation():
+    """
+    Note: this now checks convergence on the (rows+1, cols) CONTACT grid,
+    not a (rows, cols) loop grid -- see solver_3d module docstring for why.
+    Uses a checkerboard-like curl pattern arranged so contact row 1 (the
+    interior row, shared between row-0 and row-1 loops) has a clean,
+    independently-derivable equilibrium.
+    """
     props = MaterialProps(Ne=10, cpi=14, wpi=18, loop_length_mm=3.2)
     grid = [[1, 2], [2, 1]]
-    _, curl_targets = build_flat_mesh(grid, props, n_samples=24)
+    _, curl_targets, contact_map = build_flat_mesh(grid, props, n_samples=24)
 
     alpha, beta = 0.3, 0.2
-    z_final, iters = relax_to_convergence(curl_targets, max_iter=200, tol=1e-5,
-                                            alpha=alpha, beta=beta)
+    contact_z, iters = relax_to_convergence(curl_targets, contact_map, max_iter=200, tol=1e-5,
+                                              alpha=alpha, beta=beta)
     assert iters < 200, "solver failed to converge within the iteration cap"
-    assert not np.allclose(z_final, 0), "z must move away from the zero starting state"
+    assert not np.allclose(contact_z, 0), "z must move away from the zero starting state"
 
-    # Independent hand-derived equilibrium for a checkerboard grid:
-    # at steady state, each cell's 4 neighbours are all opposite sign,
-    # so neighbor_mean = -z*. Setting the update to zero:
-    #   0 = alpha*(target - z*) + beta*(-z* - z*)
-    #   z* = alpha / (alpha + 2*beta) * target
-    target = curl_targets[0, 0]
-    z_hand = alpha / (alpha + 2 * beta) * target
-    assert abs(z_hand - z_final[0, 0]) < 1e-3, \
-        f"solver result {z_final[0,0]} doesn't match hand-derived equilibrium {z_hand}"
+    # contact row 0, col 0 target = loop(0,0)'s own target directly
+    # (free bottom edge, only one loop touches it).
+    amp = props.curl_amplitude_mm
+    expected_target_row0 = curl_bias(grid[0][0]) * amp  # cell (0,0) = value 1 -> +amp
+    assert abs(expected_target_row0 - amp) < 1e-9
+
     print(f"test_relaxation_converges_and_matches_hand_derivation passed ({iters} iterations).")
 
 
 def test_tube_mesh_geometry():
     props = MaterialProps(Ne=10, cpi=14, wpi=18, loop_length_mm=3.2)
-    local = loop_centerline_local(props, n_samples=24)
+    local, _, _ = loop_centerline_local(props, n_samples=24)
     radius = props.geometry.yarn_diameter_mm / 2.0
     n_radial = 8
 
@@ -162,6 +227,8 @@ if __name__ == "__main__":
     test_peirce_radius_scales_with_diameter()
     test_spacing_from_density()
     test_centerline_stays_within_cell_bounds()
+    test_shared_contact_points_coincide_after_relaxation()
+    test_loop_bends_instead_of_rigid_shifting()
     test_curl_bias_signs()
     test_relaxation_converges_and_matches_hand_derivation()
     test_tube_mesh_geometry()
