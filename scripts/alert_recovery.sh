@@ -14,7 +14,7 @@ if [ -n "$ENV_PATH" ]; then
     set +o allexport
 fi
 
-CHAT_ID="8826140715"
+CHAT_ID="${ALLOWED_CHAT_ID}"
 MESSAGE="✅ RECOVERY ALERT: The telegram-bot daemon on KS-LinuxMintServer has been restored and is running."
 
 curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \

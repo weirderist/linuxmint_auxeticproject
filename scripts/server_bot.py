@@ -17,7 +17,7 @@ if not BOT_TOKEN:
     print("ERROR: TELEGRAM_BOT_TOKEN environment variable not set.")
     sys.exit(1)
 
-ALLOWED_CHAT_ID = 8826140715
+ALLOWED_CHAT_ID = int(os.environ.get("ALLOWED_CHAT_ID", "0"))
 
 BASE_DIR = "/home/sarvesh/auxetic_project"
 SIM_INPUT_DIR = os.path.join(BASE_DIR, "input_grids")
