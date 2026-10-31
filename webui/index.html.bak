@@ -1,0 +1,186 @@
+<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Auxetic sim UI</title>
+<style>
+:root{color-scheme:light dark}
+*{box-sizing:border-box}
+body{margin:0;font-family:system-ui,sans-serif;display:flex;flex-direction:column;height:100vh}
+header{padding:.6rem 1rem;border-bottom:1px solid #8884;display:flex;gap:.6rem;align-items:center}
+header h1{font-size:1.1rem;margin:0;flex:1}
+#fps{opacity:.7;font-size:.85rem;min-width:4.5rem;text-align:right}
+main{flex:1;display:flex;min-height:0}
+#list{width:260px;overflow-y:auto;border-right:1px solid #8884}
+.item{padding:.6rem .8rem;border-bottom:1px solid #8882;cursor:pointer}
+.item:hover{background:#8881}.item.sel{background:#4a90e233}
+.item small{display:block;opacity:.7}
+#right{flex:1;display:flex;flex-direction:column;min-width:0}
+#view{flex:1;min-height:0;position:relative}
+#view canvas{display:block;width:100%;height:100%}
+#zoomBox{position:absolute;left:.7rem;bottom:.7rem;z-index:2;padding:.4rem .7rem;border-radius:8px;background:#8883;backdrop-filter:blur(4px);font-size:.8rem;display:flex;align-items:center;gap:.5rem}
+#zoomBox input{width:130px}
+#info{max-height:30%;overflow:auto;margin:0;padding:.6rem 1rem;border-top:1px solid #8884;font-size:.8rem;white-space:pre-wrap}
+button{padding:.35rem .8rem;font-size:.9rem}
+#toast{position:fixed;right:1rem;bottom:1rem;background:Canvas;color:CanvasText;border:1px solid #8888;border-radius:8px;padding:.8rem 1rem;box-shadow:0 4px 16px #0004;max-width:300px}
+#toast[hidden]{display:none}
+#toast button{margin:.5rem .5rem 0 0}
+@media (max-width:700px){main{flex-direction:column}#list{width:100%;max-height:30%;border-right:0;border-bottom:1px solid #8884}}
+</style></head><body>
+<header><h1>Auxetic sim UI</h1><span id="fps"></span>
+<button id="bTube">Tube</button><button id="bAxis">Axis</button><button id="bReset">Reset view</button></header>
+<main><div id="list"></div><div id="right"><div id="view"><div id="zoomBox"><label for="zoom">Zoom speed</label><input id="zoom" type="range" min="0.5" max="8" step="0.1"><output id="zoomVal"></output></div></div><pre id="info"></pre></div></main>
+<div id="toast" hidden></div>
+<script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"}}</script>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+const $ = s => document.querySelector(s);
+const LITE = new URLSearchParams(location.search).has('lite');   // open /?lite for a lighter render
+const view = $('#view');
+const renderer = new THREE.WebGLRenderer({ antialias: !LITE, alpha: true });
+renderer.setPixelRatio(LITE ? 1 : Math.min(window.devicePixelRatio || 1, 1.5));
+view.appendChild(renderer.domElement);
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(40, 1, 0.1, 1000);
+const controls = new OrbitControls(camera, renderer.domElement);
+// Zoom speed slider (bottom-left of the 3D view); the value is remembered by the browser.
+let zs = 2.5;
+try { const v = parseFloat(localStorage.getItem('zoomSpeed')); if (v >= 0.5 && v <= 8) zs = v; } catch (e) {}
+function setZoom(v) {
+  controls.zoomSpeed = v; $('#zoom').value = v; $('#zoomVal').textContent = (+v).toFixed(1) + 'x';
+  try { localStorage.setItem('zoomSpeed', v); } catch (e) {}
+}
+$('#zoom').oninput = () => setZoom(+$('#zoom').value);
+setZoom(zs);
+const sun = new THREE.DirectionalLight(0xffffff, 1.2);
+sun.position.set(0, 0, 1); sun.target.position.set(0, 0, -1);
+camera.add(sun); camera.add(sun.target); scene.add(camera);
+scene.add(new THREE.HemisphereLight(0xffffff, 0x666666, 1.1));
+
+// Draw only when something changed (orbit, resize, new object), not 60 times a second while idle.
+let needDraw = false, lastDraw = 0;
+function invalidate() { if (!needDraw) { needDraw = true; requestAnimationFrame(draw); } }
+function draw() {
+  needDraw = false;
+  const t = performance.now();
+  renderer.render(scene, camera);
+  const gap = t - lastDraw; lastDraw = t;
+  if (gap < 300) $('#fps').textContent = Math.round(1000 / gap) + ' fps';
+}
+controls.addEventListener('change', invalidate);
+function resize() {
+  const w = view.clientWidth, h = view.clientHeight || 1;
+  renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix(); invalidate();
+}
+new ResizeObserver(resize).observe(view); resize();
+
+function parseOBJ(t) {
+  const v = [], f = [];
+  for (const line of t.split('\n')) {
+    if (line.charCodeAt(0) === 118 && line[1] === ' ') { const p = line.split(' '); v.push(+p[1], +p[2], +p[3]); }
+    else if (line.charCodeAt(0) === 102) { const p = line.split(' '); f.push(p[1] - 1, p[2] - 1, p[3] - 1); }
+  }
+  return { v: new Float32Array(v), f: new Uint32Array(f) };
+}
+function axisLines(t) {
+  const g = new THREE.Group(); let cur = -1, pts = [];
+  const flush = () => {
+    if (!pts.length) return;
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
+    g.add(new THREE.Line(geo, new THREE.LineBasicMaterial({ color: new THREE.Color().setHSL((cur * 0.17) % 1, 0.7, 0.5) })));
+    pts = [];
+  };
+  for (const line of t.split('\n')) {
+    const p = line.split(',');
+    if (p.length < 4 || isNaN(+p[0])) continue;
+    if (+p[0] !== cur) { flush(); cur = +p[0]; }
+    pts.push(+p[1], +p[2], +p[3]);
+  }
+  flush(); return g;
+}
+function fit(obj) {
+  const box = new THREE.Box3().setFromObject(obj), c = box.getCenter(new THREE.Vector3()), s = box.getSize(new THREE.Vector3());
+  const r = Math.max(s.x, s.y, s.z, 1e-3) / 2;
+  const dist = r / Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) * 1.4;
+  controls.target.copy(c); camera.position.set(c.x, c.y, c.z + dist);
+  camera.near = dist / 100; camera.far = dist * 100; camera.updateProjectionMatrix(); controls.update(); invalidate();
+}
+
+// Each result is downloaded and built once; switching Tube/Axis or going back to a result reuses it.
+const cache = new Map();                       // id -> { tube: Promise<Object3D>, axis: Promise<Object3D> }
+async function load(id, kind) {
+  const r = await fetch('/api/results/' + id + '/' + kind);
+  if (!r.ok) throw new Error(kind + ' file: HTTP ' + r.status);
+  const t = await r.text();
+  if (kind === 'axis') return axisLines(t);
+  const { v, f } = parseOBJ(t), g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(v, 3));
+  g.setIndex(new THREE.BufferAttribute(f, 1)); g.computeVertexNormals();
+  return new THREE.Mesh(g, new THREE.MeshLambertMaterial({ color: 0xd8c8a0, side: THREE.DoubleSide }));
+}
+function disposeObj(o) { o.traverse(x => { if (x.geometry) x.geometry.dispose(); if (x.material) x.material.dispose(); }); }
+function entry(id) {
+  let e = cache.get(id);
+  if (!e) {
+    const first = mode, second = mode === 'tube' ? 'axis' : 'tube';
+    e = {}; e[first] = load(id, first);
+    e[second] = e[first].catch(() => 0).then(() => load(id, second));   // the other view loads in the background
+    cache.set(id, e);
+    while (cache.size > 5) {
+      const [oldId, old] = cache.entries().next().value;
+      if (oldId === current) break;
+      cache.delete(oldId);
+      Promise.all([old.tube, old.axis]).then(os => os.forEach(disposeObj)).catch(() => {});
+    }
+  }
+  return e;
+}
+
+let results = [], sig = '', current = null, shown = null, mode = 'tube', known = null;
+const fmt = r => r.created ? new Date(r.created).toLocaleString() : r.id;
+function renderList() {
+  const el = $('#list'); el.textContent = '';
+  if (!results.length) { el.textContent = 'No results yet.'; return; }
+  for (const r of results) {
+    const d = document.createElement('div'); d.className = 'item' + (r.id === current ? ' sel' : ''); d.dataset.id = r.id;
+    const a = document.createElement('div'); a.textContent = fmt(r);
+    const s = document.createElement('small'); s.textContent = r.label || r.id;
+    d.append(a, s); d.onclick = () => show(r.id, true); el.append(d);
+  }
+}
+async function show(id, refit) {
+  current = id; const m = mode;
+  document.querySelectorAll('.item').forEach(e => e.classList.toggle('sel', e.dataset.id === id));
+  const rec = results.find(r => r.id === id);
+  $('#info').textContent = rec ? id + '\n' + JSON.stringify(rec.settings) + '\n\n' + rec.report : id;
+  try {
+    const obj = await entry(id)[m];
+    if (current !== id || mode !== m) return;          // user already moved on
+    if (shown) scene.remove(shown);
+    shown = obj; scene.add(obj);
+    if (refit) fit(obj);
+    invalidate();
+  } catch (e) { cache.delete(id); $('#info').textContent += '\nCould not load: ' + e; }
+}
+function toast(r) {
+  const t = $('#toast'); t.hidden = false; t.textContent = '';
+  const m = document.createElement('div'); m.textContent = 'New result available: ' + fmt(r);
+  const b1 = document.createElement('button'); b1.textContent = 'View'; b1.onclick = () => { t.hidden = true; show(r.id, true); };
+  const b2 = document.createElement('button'); b2.textContent = 'Dismiss'; b2.onclick = () => { t.hidden = true; };
+  t.append(m, b1, b2);
+}
+async function poll() {
+  try {
+    results = await (await fetch('/api/results')).json();
+    const s = results.map(r => r.id).join(',');
+    if (s !== sig) { sig = s; renderList(); }
+    const newest = results.length ? results[0].id : '';
+    if (known === null) { known = newest; if (newest && !current) show(newest, true); }
+    else if (newest && newest !== known) { known = newest; toast(results[0]); }
+  } catch (e) {}
+}
+$('#bTube').onclick = () => { mode = 'tube'; if (current) show(current, false); };
+$('#bAxis').onclick = () => { mode = 'axis'; if (current) show(current, false); };
+$('#bReset').onclick = () => { if (shown) fit(shown); };
+setInterval(poll, 5000); poll();
+</script></body></html>

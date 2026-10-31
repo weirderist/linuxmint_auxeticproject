@@ -5,29 +5,72 @@
 :root{color-scheme:light dark}
 *{box-sizing:border-box}
 body{margin:0;font-family:system-ui,sans-serif;display:flex;flex-direction:column;height:100vh}
-header{padding:.6rem 1rem;border-bottom:1px solid #8884;display:flex;gap:.6rem;align-items:center}
+header{padding:.6rem 1rem;border-bottom:1px solid #8884;display:flex;gap:.6rem;align-items:center;flex-wrap:wrap}
 header h1{font-size:1.1rem;margin:0;flex:1}
 #fps{opacity:.7;font-size:.85rem;min-width:4.5rem;text-align:right}
+.seg{display:inline-flex}.seg button{border-radius:0;margin:0 -1px 0 0}.seg button.on{background:#4a90e255;font-weight:600}
 main{flex:1;display:flex;min-height:0}
 #list{width:260px;overflow-y:auto;border-right:1px solid #8884}
 .item{padding:.6rem .8rem;border-bottom:1px solid #8882;cursor:pointer}
 .item:hover{background:#8881}.item.sel{background:#4a90e233}
 .item small{display:block;opacity:.7}
+.badge{font-size:.7rem;border:1px solid #8886;border-radius:6px;padding:0 .35rem;margin-left:.3rem}
 #right{flex:1;display:flex;flex-direction:column;min-width:0}
 #view{flex:1;min-height:0;position:relative}
 #view canvas{display:block;width:100%;height:100%}
-#zoomBox{position:absolute;left:.7rem;bottom:.7rem;z-index:2;padding:.4rem .7rem;border-radius:8px;background:#8883;backdrop-filter:blur(4px);font-size:.8rem;display:flex;align-items:center;gap:.5rem}
-#zoomBox input{width:130px}
+#tools{max-height:45%;overflow:auto;border-top:1px solid #8884;font-size:.85rem}
+#tools details{border-bottom:1px solid #8882;padding:.4rem 1rem}
+#tools summary{cursor:pointer;font-weight:600}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:.5rem .9rem;margin:.5rem 0}
+.grid label{display:flex;flex-direction:column;gap:.15rem}
+.grid input[type=number]{width:100%;padding:.25rem}
+.grid .row{flex-direction:row;align-items:center;gap:.5rem}
+.note{opacity:.75;font-size:.78rem;margin:.2rem 0}
+#simState{margin:.4rem 0;font-weight:600}
+progress{width:100%;height:.6rem}
 #info{max-height:30%;overflow:auto;margin:0;padding:.6rem 1rem;border-top:1px solid #8884;font-size:.8rem;white-space:pre-wrap}
 button{padding:.35rem .8rem;font-size:.9rem}
-#toast{position:fixed;right:1rem;bottom:1rem;background:Canvas;color:CanvasText;border:1px solid #8888;border-radius:8px;padding:.8rem 1rem;box-shadow:0 4px 16px #0004;max-width:300px}
+button:disabled{opacity:.45}
+#toast{position:fixed;right:1rem;bottom:1rem;background:Canvas;color:CanvasText;border:1px solid #8888;border-radius:8px;padding:.8rem 1rem;box-shadow:0 4px 16px #0004;max-width:320px;z-index:5}
 #toast[hidden]{display:none}
 #toast button{margin:.5rem .5rem 0 0}
 @media (max-width:700px){main{flex-direction:column}#list{width:100%;max-height:30%;border-right:0;border-bottom:1px solid #8884}}
 </style></head><body>
 <header><h1>Auxetic sim UI</h1><span id="fps"></span>
-<button id="bTube">Tube</button><button id="bAxis">Axis</button><button id="bReset">Reset view</button></header>
-<main><div id="list"></div><div id="right"><div id="view"><div id="zoomBox"><label for="zoom">Zoom speed</label><input id="zoom" type="range" min="0.5" max="8" step="0.1"><output id="zoomVal"></output></div></div><pre id="info"></pre></div></main>
+<span class="seg"><button id="bBase" class="on">Baseline</button><button id="bRelax" disabled>Relaxed</button></span>
+<span class="seg"><button id="bTube" class="on">Tube</button><button id="bAxis">Axis</button></span>
+<button id="bReset">Reset view</button></header>
+<main><div id="list"></div><div id="right"><div id="view"></div>
+<div id="tools">
+<details id="simBox" open><summary>Simulate (relaxation and yarn length migration)</summary>
+ <div class="grid">
+  <label><span id="lE">Yarn modulus E</span><input id="fE" type="number" step="any" min="0"></label>
+  <label><span>Friction coefficient &mu; (required)</span><input id="fMu" type="number" step="any" min="0" max="2" placeholder="enter a value"></label>
+  <label><span>Contact stiffness (x EA/R)</span><input id="fKc" type="number" step="any" min="0"></label>
+  <label><span>Out-of-plane perturbation (x R)</span><input id="fPert" type="number" step="any" min="0" max="0.2"></label>
+  <label><span>Outer iterations</span><input id="fOuter" type="number" step="1" min="1" max="500"></label>
+  <label><span>L-BFGS iterations per round</span><input id="fMax" type="number" step="1" min="10" max="3000"></label>
+ </div>
+ <div><button id="bSim" disabled>Simulate</button> <button id="bCancel" disabled>Cancel</button></div>
+ <div id="simState">Select a result.</div><progress id="simProg" value="0" max="1" hidden></progress>
+ <p class="note" id="eNote"></p>
+ <p class="note">The solver runs only when Simulate is pressed. Contact stiffness is a numerical choice (tested on one fabric); the yarn is treated as a solid elastic rod, so its bending stiffness is an upper estimate for a twisted staple yarn.</p>
+</details>
+<details id="setBox"><summary>View settings</summary>
+ <div class="grid">
+  <label><span>Zoom speed <output id="oZoom"></output></span><input id="sZoom" type="range" min="0.5" max="8" step="0.1"></label>
+  <label><span>Rotate speed <output id="oRot"></output></span><input id="sRot" type="range" min="0.2" max="4" step="0.1"></label>
+  <label><span>Pan speed <output id="oPan"></output></span><input id="sPan" type="range" min="0.2" max="4" step="0.1"></label>
+  <label><span>Damping <output id="oDamp"></output></span><input id="sDamp" type="range" min="0" max="0.3" step="0.01"></label>
+  <label class="row"><input id="sAuto" type="checkbox"><span>Auto-rotate</span></label>
+  <label><span>Auto-rotate speed <output id="oAutoS"></output></span><input id="sAutoS" type="range" min="0.2" max="6" step="0.2"></label>
+  <label class="row"><input id="sInvert" type="checkbox"><span>Reverse zoom direction</span></label>
+  <label class="row"><input id="sColor" type="color"><span>Tube colour</span></label>
+ </div>
+ <button id="sReset">Reset view settings</button>
+</details>
+</div>
+<pre id="info"></pre></div></main>
 <div id="toast" hidden></div>
 <script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"}}</script>
 <script type="module">
@@ -42,19 +85,36 @@ view.appendChild(renderer.domElement);
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(40, 1, 0.1, 1000);
 const controls = new OrbitControls(camera, renderer.domElement);
-// Zoom speed slider (bottom-left of the 3D view); the value is remembered by the browser.
-let zs = 2.5;
-try { const v = parseFloat(localStorage.getItem('zoomSpeed')); if (v >= 0.5 && v <= 8) zs = v; } catch (e) {}
-function setZoom(v) {
-  controls.zoomSpeed = v; $('#zoom').value = v; $('#zoomVal').textContent = (+v).toFixed(1) + 'x';
-  try { localStorage.setItem('zoomSpeed', v); } catch (e) {}
-}
-$('#zoom').oninput = () => setZoom(+$('#zoom').value);
-setZoom(zs);
 const sun = new THREE.DirectionalLight(0xffffff, 1.2);
 sun.position.set(0, 0, 1); sun.target.position.set(0, 0, -1);
 camera.add(sun); camera.add(sun.target); scene.add(camera);
 scene.add(new THREE.HemisphereLight(0xffffff, 0x666666, 1.1));
+
+// ---- view settings (kept in this browser)
+const DEF = { zoom: 2.5, rot: 1, pan: 1, damp: 0, auto: false, autoS: 2, invert: false, color: '#d8c8a0' };
+let S = { ...DEF };
+try { Object.assign(S, JSON.parse(localStorage.getItem('viewSettings') || '{}')); } catch (e) {}
+try { const z = parseFloat(localStorage.getItem('zoomSpeed')); if (z >= 0.5 && z <= 8 && !localStorage.getItem('viewSettings')) S.zoom = z; } catch (e) {}   // old key
+let tubeMat = null, loopOn = false;
+function applySettings(save) {
+  controls.zoomSpeed = S.invert ? -S.zoom : S.zoom; controls.rotateSpeed = S.rot; controls.panSpeed = S.pan;
+  controls.enableDamping = S.damp > 0; controls.dampingFactor = S.damp || 0.05;
+  controls.autoRotate = !!S.auto; controls.autoRotateSpeed = S.autoS;
+  if (tubeMat) tubeMat.color.set(S.color);
+  const set = (id, o, v, d) => { $(id).value = v; if (o) $(o).textContent = (+v).toFixed(d); };
+  set('#sZoom', '#oZoom', S.zoom, 1); set('#sRot', '#oRot', S.rot, 1); set('#sPan', '#oPan', S.pan, 1);
+  set('#sDamp', '#oDamp', S.damp, 2); set('#sAutoS', '#oAutoS', S.autoS, 1);
+  $('#sAuto').checked = !!S.auto; $('#sInvert').checked = !!S.invert; $('#sColor').value = S.color;
+  if (save) { try { localStorage.setItem('viewSettings', JSON.stringify(S)); } catch (e) {} }
+  const need = controls.enableDamping || controls.autoRotate;          // these need controls.update() every frame
+  if (need && !loopOn) { loopOn = true; requestAnimationFrame(loop); }
+  invalidate();
+}
+function loop() { if (!(controls.enableDamping || controls.autoRotate)) { loopOn = false; return; } controls.update(); requestAnimationFrame(loop); }
+const bind = (id, key, num) => { $(id).oninput = () => { S[key] = num ? +$(id).value : ($(id).type === 'checkbox' ? $(id).checked : $(id).value); applySettings(true); }; };
+bind('#sZoom', 'zoom', 1); bind('#sRot', 'rot', 1); bind('#sPan', 'pan', 1); bind('#sDamp', 'damp', 1); bind('#sAutoS', 'autoS', 1);
+bind('#sAuto', 'auto'); bind('#sInvert', 'invert'); bind('#sColor', 'color');
+$('#sReset').onclick = () => { S = { ...DEF }; applySettings(true); };
 
 // Draw only when something changed (orbit, resize, new object), not 60 times a second while idle.
 let needDraw = false, lastDraw = 0;
@@ -72,6 +132,7 @@ function resize() {
   renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix(); invalidate();
 }
 new ResizeObserver(resize).observe(view); resize();
+applySettings(false);
 
 function parseOBJ(t) {
   const v = [], f = [];
@@ -106,81 +167,161 @@ function fit(obj) {
   camera.near = dist / 100; camera.far = dist * 100; camera.updateProjectionMatrix(); controls.update(); invalidate();
 }
 
-// Each result is downloaded and built once; switching Tube/Axis or going back to a result reuses it.
-const cache = new Map();                       // id -> { tube: Promise<Object3D>, axis: Promise<Object3D> }
-async function load(id, kind) {
-  const r = await fetch('/api/results/' + id + '/' + kind);
+let results = [], sig = '', current = null, shown = null, mode = 'tube', variant = 'baseline', known = null, CFG = null, st = null;
+const recOf = id => results.find(r => r.id === id);
+const stamp = rec => variant === 'relaxed' ? ((rec && rec.sim && rec.sim.relaxed_at) || 0) : 0;
+const ckey = id => id + '|' + variant + '|' + stamp(recOf(id));
+
+// Each result view is downloaded and built once; switching Tube/Axis or going back to a result reuses it.
+const cache = new Map();                       // key -> { tube: Promise<Object3D>, axis: Promise<Object3D> }
+async function load(id, kind, v) {
+  const r = await fetch('/api/results/' + id + '/' + kind + (v === 'relaxed' ? '?v=relaxed' : ''));
   if (!r.ok) throw new Error(kind + ' file: HTTP ' + r.status);
   const t = await r.text();
   if (kind === 'axis') return axisLines(t);
-  const { v, f } = parseOBJ(t), g = new THREE.BufferGeometry();
-  g.setAttribute('position', new THREE.BufferAttribute(v, 3));
+  const { v: vv, f } = parseOBJ(t), g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(vv, 3));
   g.setIndex(new THREE.BufferAttribute(f, 1)); g.computeVertexNormals();
-  return new THREE.Mesh(g, new THREE.MeshLambertMaterial({ color: 0xd8c8a0, side: THREE.DoubleSide }));
+  if (!tubeMat) tubeMat = new THREE.MeshLambertMaterial({ color: S.color, side: THREE.DoubleSide });
+  return new THREE.Mesh(g, tubeMat);          // one shared material so the colour setting applies to every tube
 }
-function disposeObj(o) { o.traverse(x => { if (x.geometry) x.geometry.dispose(); if (x.material) x.material.dispose(); }); }
+function disposeObj(o) { o.traverse(x => { if (x.geometry) x.geometry.dispose(); if (x.material && x.material !== tubeMat) x.material.dispose(); }); }
 function entry(id) {
-  let e = cache.get(id);
+  const k = ckey(id); let e = cache.get(k);
   if (!e) {
-    const first = mode, second = mode === 'tube' ? 'axis' : 'tube';
-    e = {}; e[first] = load(id, first);
-    e[second] = e[first].catch(() => 0).then(() => load(id, second));   // the other view loads in the background
-    cache.set(id, e);
-    while (cache.size > 5) {
-      const [oldId, old] = cache.entries().next().value;
-      if (oldId === current) break;
-      cache.delete(oldId);
+    const first = mode, second = mode === 'tube' ? 'axis' : 'tube', v = variant;
+    e = {}; e[first] = load(id, first, v);
+    e[second] = e[first].catch(() => 0).then(() => load(id, second, v));   // the other view loads in the background
+    cache.set(k, e);
+    while (cache.size > 6) {
+      const [oldK, old] = cache.entries().next().value;
+      if (oldK.startsWith(current + '|')) break;
+      cache.delete(oldK);
       Promise.all([old.tube, old.axis]).then(os => os.forEach(disposeObj)).catch(() => {});
     }
   }
   return e;
 }
 
-let results = [], sig = '', current = null, shown = null, mode = 'tube', known = null;
 const fmt = r => r.created ? new Date(r.created).toLocaleString() : r.id;
 function renderList() {
   const el = $('#list'); el.textContent = '';
   if (!results.length) { el.textContent = 'No results yet.'; return; }
   for (const r of results) {
     const d = document.createElement('div'); d.className = 'item' + (r.id === current ? ' sel' : ''); d.dataset.id = r.id;
-    const a = document.createElement('div'); a.textContent = fmt(r);
-    const s = document.createElement('small'); s.textContent = r.label || r.id;
+    const a = document.createElement('div'); a.textContent = r.name || fmt(r);
+    if (r.sim && r.sim.state) { const b = document.createElement('span'); b.className = 'badge'; b.textContent = r.sim.state; a.append(b); }
+    const s = document.createElement('small'); s.textContent = fmt(r) + '  ' + r.id;
     d.append(a, s); d.onclick = () => show(r.id, true); el.append(d);
   }
 }
+function infoText() {
+  const rec = recOf(current); if (!rec) return current || '';
+  let t = rec.info && rec.info.length ? rec.info.join('\n') : (rec.id + '\n' + JSON.stringify(rec.settings) + '\n\n' + rec.report);
+  if (st && st.state && st.state !== 'none') {
+    t += '\n\n--- simulation ---\nstate: ' + st.state;
+    if (st.last) t += '\niteration ' + st.iter + '/' + (st.outer || '?') + ', energy ' + (+st.last.E).toPrecision(6) + ', largest rest-length change ' + (+st.last.max_dl0).toExponential(2);
+    if (st.summary) {
+      const a = st.summary.start, b = st.summary.end;
+      t += '\nenergy start ' + a.total.toPrecision(5) + ' (stretch ' + a.stretch.toPrecision(3) + ', bend ' + a.bend.toPrecision(3) + ', contact ' + a.contact.toPrecision(3) + ')';
+      t += '\nenergy end   ' + b.total.toPrecision(5) + ' (stretch ' + b.stretch.toPrecision(3) + ', bend ' + b.bend.toPrecision(3) + ', contact ' + b.contact.toPrecision(3) + ')';
+      t += '\nmin axis distance ' + (100 * st.summary.min_dist_over_2R_start).toFixed(1) + '% -> ' + (100 * st.summary.min_dist_over_2R_end).toFixed(1) + '% of 2R';
+      if (st.state === 'failed') t += '\nthe iteration limit was reached before the energy and rest lengths settled; the relaxed shape is the last iterate';
+    }
+  }
+  if (st && st.log && (st.running || st.state === 'none' || st.state === 'interrupted')) t += '\n\n' + st.log;
+  return t;
+}
+function setVariantButtons() {
+  const rec = recOf(current), has = !!(rec && rec.sim && rec.sim.has_relaxed);
+  $('#bRelax').disabled = !has; if (!has && variant === 'relaxed') variant = 'baseline';
+  $('#bBase').classList.toggle('on', variant === 'baseline'); $('#bRelax').classList.toggle('on', variant === 'relaxed');
+  $('#bTube').classList.toggle('on', mode === 'tube'); $('#bAxis').classList.toggle('on', mode === 'axis');
+}
 async function show(id, refit) {
-  current = id; const m = mode;
+  const changed = id !== current; current = id; if (changed) st = null;
+  setVariantButtons(); const m = mode, v = variant;
   document.querySelectorAll('.item').forEach(e => e.classList.toggle('sel', e.dataset.id === id));
-  const rec = results.find(r => r.id === id);
-  $('#info').textContent = rec ? id + '\n' + JSON.stringify(rec.settings) + '\n\n' + rec.report : id;
+  $('#info').textContent = infoText(); setupSim(); pollState();
   try {
     const obj = await entry(id)[m];
-    if (current !== id || mode !== m) return;          // user already moved on
+    if (current !== id || mode !== m || variant !== v) return;          // user already moved on
     if (shown) scene.remove(shown);
     shown = obj; scene.add(obj);
     if (refit) fit(obj);
     invalidate();
-  } catch (e) { cache.delete(id); $('#info').textContent += '\nCould not load: ' + e; }
+  } catch (e) { cache.delete(ckey(id)); $('#info').textContent += '\nCould not load: ' + e; }
 }
-function toast(r) {
+function toast(text, label, fn) {
   const t = $('#toast'); t.hidden = false; t.textContent = '';
-  const m = document.createElement('div'); m.textContent = 'New result available: ' + fmt(r);
-  const b1 = document.createElement('button'); b1.textContent = 'View'; b1.onclick = () => { t.hidden = true; show(r.id, true); };
-  const b2 = document.createElement('button'); b2.textContent = 'Dismiss'; b2.onclick = () => { t.hidden = true; };
-  t.append(m, b1, b2);
+  const m = document.createElement('div'); m.textContent = text; t.append(m);
+  if (label) { const b1 = document.createElement('button'); b1.textContent = label; b1.onclick = () => { t.hidden = true; fn(); }; t.append(b1); }
+  const b2 = document.createElement('button'); b2.textContent = 'Dismiss'; b2.onclick = () => { t.hidden = true; }; t.append(b2);
+}
+
+// ---- simulate panel
+function setupSim() {
+  const rec = recOf(current), mm = rec && rec.units === 'mm';
+  if (!rec || !CFG) return;
+  const dirty = $('#simBox').dataset.for !== rec.id; if (dirty) {
+    $('#simBox').dataset.for = rec.id;
+    $('#fE').value = mm ? CFG.yarn_E_MPa : 1;
+    $('#lE').textContent = mm ? 'Yarn modulus E (MPa = N/mm\u00b2)' : 'Yarn modulus E (R-unit result: only the ratio to contact stiffness matters)';
+    $('#fKc').value = CFG.kc_ratio; $('#fPert').value = CFG.perturb; $('#fOuter').value = CFG.outer; $('#fMax').value = CFG.maxiter;
+    $('#eNote').textContent = mm ? 'E = 3700 MPa: ' + CFG.yarn_E_source : 'This result is in R-units (no physical yarn size), so no physical modulus applies.';
+  }
+  updateSimButtons();
+}
+function updateSimButtons() {
+  const busy = st && st.busy, mine = st && st.running;
+  const ok = current && $('#fMu').value !== '' && $('#fE').value !== '';
+  $('#bSim').disabled = !ok || !!busy; $('#bCancel').disabled = !mine;
+  const el = $('#simState'), pr = $('#simProg');
+  if (!st) { el.textContent = current ? '' : 'Select a result.'; pr.hidden = true; return; }
+  const txt = { none: mine ? 'starting (compiling the solver)\u2026' : 'not simulated', released: 'starting\u2026', relaxing: 'relaxing', settled: 'settled', failed: 'finished without settling (iteration limit)', cancelled: 'cancelled', interrupted: 'interrupted (the job stopped without finishing)', loaded: 'loaded' };
+  el.textContent = 'Simulation: ' + (txt[st.state] || st.state) + (st.running && st.outer ? '  (outer iteration ' + st.iter + '/' + st.outer + ')' : '') + (busy && !mine ? '  \u2014 another result is being simulated' : '');
+  pr.hidden = !(st.running && st.outer); if (!pr.hidden) { pr.max = st.outer; pr.value = st.iter; }
+}
+['#fMu', '#fE'].forEach(i => $(i).oninput = updateSimButtons);
+$('#bSim').onclick = async () => {
+  const body = { E: +$('#fE').value, mu: +$('#fMu').value, kc_ratio: +$('#fKc').value, perturb: +$('#fPert').value, outer: +$('#fOuter').value, maxiter: +$('#fMax').value };
+  $('#bSim').disabled = true;
+  try {
+    const r = await fetch('/api/results/' + current + '/simulate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    if (!r.ok) { const e = await r.json().catch(() => ({})); toast('Could not start: ' + (typeof e.detail === 'string' ? e.detail : JSON.stringify(e.detail || r.status))); return; }
+  } catch (e) { toast('Could not start: ' + e); }
+  prevState = 'relaxing'; pollState();
+};
+$('#bCancel').onclick = async () => { $('#bCancel').disabled = true; await fetch('/api/results/' + current + '/cancel', { method: 'POST' }).catch(() => {}); pollState(); poll(); };
+let prevState = null;
+async function pollState() {
+  if (!current) return; const id = current;
+  try {
+    const r = await fetch('/api/results/' + id + '/state'); if (!r.ok) return;
+    const s = await r.json(); if (current !== id) return;
+    const was = prevState; st = s; prevState = s.state;
+    $('#info').textContent = infoText(); updateSimButtons();
+    if (was && (was === 'relaxing' || was === 'released' || was === 'none') && !s.running && s.has_relaxed) {
+      await poll();
+      toast('Simulation finished (' + s.state + ').', 'View relaxed', () => { variant = 'relaxed'; show(id, true); });
+    }
+  } catch (e) {}
 }
 async function poll() {
   try {
     results = await (await fetch('/api/results')).json();
-    const s = results.map(r => r.id).join(',');
-    if (s !== sig) { sig = s; renderList(); }
+    const s = results.map(r => r.id + ':' + ((r.sim && r.sim.state) || '') + ((r.sim && r.sim.relaxed_at) || '')).join(',');
+    if (s !== sig) { sig = s; renderList(); setVariantButtons(); }
     const newest = results.length ? results[0].id : '';
     if (known === null) { known = newest; if (newest && !current) show(newest, true); }
-    else if (newest && newest !== known) { known = newest; toast(results[0]); }
+    else if (newest && newest !== known) { known = newest; toast('New result available: ' + (results[0].name || fmt(results[0])), 'View', () => show(results[0].id, true)); }
   } catch (e) {}
 }
 $('#bTube').onclick = () => { mode = 'tube'; if (current) show(current, false); };
 $('#bAxis').onclick = () => { mode = 'axis'; if (current) show(current, false); };
+$('#bBase').onclick = () => { variant = 'baseline'; if (current) show(current, true); };
+$('#bRelax').onclick = () => { variant = 'relaxed'; if (current) show(current, true); };
 $('#bReset').onclick = () => { if (shown) fit(shown); };
-setInterval(poll, 5000); poll();
+fetch('/api/config').then(r => r.json()).then(c => { CFG = c; setupSim(); }).catch(() => {});
+setInterval(poll, 5000); setInterval(pollState, 2000); poll();
 </script></body></html>
