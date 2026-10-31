@@ -5,10 +5,12 @@ Fabrics", Computer Aided Geometric Design.  8 unit cells (a leg spline and a hea
 P = (a_x*W, a_y*C, a_z*R) from the paper's Table 1, optimised once with the paper's cost function (eq. 2-9, Table 5 weights), then tiled
 (eq. 10) for any knit/purl pattern.  Defaults are the paper's: W = 16, C = 9, R = 1.  Cost is evaluated in units of R, as in the paper.
 
-Usage: python3 build_knit.py --matrix "1 1 2 2 1/2 1 1 2 2" --tiles 4 --out run_knit
+Usage: python3 build_knit.py --matrix "1 1 2 2 1/2 1 1 2 2" --tiles 4 --out run_knit [--name "my fabric"] [--id custom_id]
        (digits: 1 = front loop = purl frame, 2 = back loop = knit frame; rows separated by '/', first row = bottom course)
        Optional physical sizing instead of W, C, R:  --ne 10 --cpi 14 --wpi 18   (W = 25.4/WPI, C = 25.4/CPI, R = d/2, d = 25.4/(28 sqrt Ne) mm)
-Output: fab_axis.csv (course,x,y,z), fab_nodes.csv (control points), meta.json.
+Output: fab_axis.csv (course,x,y,z), fab_nodes.csv (control points), fab_tube.obj (swept tube), meta.json (written last, atomically).
+Tube: circular cross-section of radius R swept along each course axis with rotation-minimising frames (double reflection method,
+      Wang, Juttler, Zheng, Liu 2008, "Computation of Rotation Minimizing Frames", ACM Trans. Graphics 27(1)).
 
 Choices the paper leaves open (each checked by measuring the yarn-to-yarn distance of the assembled fabric):
   * Its Table 3 and Table 4 disagree on some copies; Table 4's copy sources are used (same sign).
@@ -16,7 +18,8 @@ Choices the paper leaves open (each checked by measuring the yarn-to-yarn distan
   * Optimised nodes stay inside their half-stitch cell (0 <= x <= W/2, 0 <= y <= C); the paper gives no explicit bounds.
   * K_Join: sigma = local chord length; rho, tau from C1 continuity at theta = pi/4 (the paper defers these to Breen et al. 1994).
 """
-import argparse, json, math, os, sys, time
+import argparse, hashlib, json, math, os, sys, time
+from datetime import datetime
 import numpy as np
 from scipy.optimize import minimize
 from scipy.ndimage import minimum_filter
@@ -262,8 +265,66 @@ def verify(curves, R, margin_x, arc_skip=3.0, border_rows=1):
     return best, byg
 
 
+# ---------------------------------------------------------------- tube sweep
+def _unit(v):
+    n = np.linalg.norm(v, axis=-1, keepdims=True)
+    return v/np.where(n < 1e-15, 1.0, n)
+
+def rmf_frames(P):
+    """Rotation-minimising frames (r, s) along polyline P by the double reflection method (Wang et al. 2008). Tangent t, with (r, s, t) right-handed."""
+    n = len(P)
+    T = _unit(np.gradient(P, axis=0))
+    a = np.zeros(3); a[int(np.argmin(np.abs(T[0])))] = 1.0
+    r = _unit((a - (a @ T[0])*T[0])[None])[0]
+    Rr = np.empty((n, 3)); Rr[0] = r
+    for i in range(n-1):
+        v1 = P[i+1] - P[i]; c1 = v1 @ v1
+        if c1 < 1e-24: Rr[i+1] = r; continue
+        rL = r - (2.0/c1)*(v1 @ r)*v1
+        tL = T[i] - (2.0/c1)*(v1 @ T[i])*v1
+        v2 = T[i+1] - tL; c2 = v2 @ v2
+        r = rL - (2.0/c2)*(v2 @ rL)*v2 if c2 > 1e-24 else rL
+        r = r - (r @ T[i+1])*T[i+1]; r = r/ (np.linalg.norm(r) + 1e-15)          # remove numerical drift
+        Rr[i+1] = r
+    S = np.cross(T, Rr)
+    return T, Rr, S
+
+def sweep_tube(curve, R, sides):
+    """Circular tube of radius R about curve. Returns vertices, normals, triangles (0-based) with end caps."""
+    keep = np.r_[True, np.linalg.norm(np.diff(curve, axis=0), axis=1) > 1e-9]
+    P = curve[keep]; n = len(P)
+    T, Rr, S = rmf_frames(P)
+    phi = 2*np.pi*np.arange(sides)/sides
+    ring = np.cos(phi)[None, :, None]*Rr[:, None, :] + np.sin(phi)[None, :, None]*S[:, None, :]     # n x sides x 3 (unit normals)
+    V = (P[:, None, :] + R*ring).reshape(-1, 3); N = ring.reshape(-1, 3)
+    i = np.arange(n-1)[:, None]; j = np.arange(sides)[None, :]
+    a = (i*sides + j).ravel(); b = (i*sides + (j+1) % sides).ravel(); c = a + sides; d = b + sides
+    F = np.vstack([np.c_[a, b, d], np.c_[a, d, c]])
+    c0 = len(V); c1 = c0 + 1
+    V = np.vstack([V, P[0], P[-1]]); N = np.vstack([N, -T[0], T[-1]])
+    js = np.arange(sides); jn = (js+1) % sides; last = (n-1)*sides
+    F = np.vstack([F, np.c_[jn, js, np.full(sides, c0)], np.c_[last+js, last+jn, np.full(sides, c1)]])
+    return V, N, F
+
+def write_obj(path, curves_tube, R, sides, header):
+    """curves_tube: list of axis polylines. Writes one OBJ (one object per course)."""
+    Vs, Ns, Fs, off = [], [], [], 0
+    for k, cv in enumerate(curves_tube):
+        V, N, F = sweep_tube(cv, R, sides)
+        Vs.append(V); Ns.append(N); Fs.append(F + off); off += len(V)
+    V = np.vstack(Vs); N = np.vstack(Ns); F = np.vstack(Fs) + 1
+    with open(path, 'w') as f:
+        f.write('# %s\n' % header)
+        np.savetxt(f, V, fmt='v %.5f %.5f %.5f')
+        np.savetxt(f, N, fmt='vn %.4f %.4f %.4f')
+        np.savetxt(f, F, fmt='f %d %d %d')                                  # plain indices: the web viewer's parseOBJ reads 'f a b c' only
+    return len(V), len(F)
+
+
 def tile_matrix(M, n):
     return [[M[r % len(M)][c % len(M[0])] for c in range(n*len(M[0]))] for r in range(n*len(M))]
+
+def fnum(x, nd=4): return float('%.*g' % (nd, x))
 
 def main():
     a = argparse.ArgumentParser()
@@ -273,17 +334,26 @@ def main():
     a.add_argument('--tiles', type=int, default=25, help='repeats of the matrix in x and y')
     a.add_argument('--out', default='run_knit'); a.add_argument('--cache', default=os.path.join(os.path.dirname(os.path.abspath(__file__)), 'cell_cache'))
     a.add_argument('--labels', choices=('swapped', 'printed'), default='swapped'); a.add_argument('--swap-types', action='store_true')
-    a.add_argument('--per', type=int, default=16, help='curve samples per control-point interval')
+    a.add_argument('--per', type=int, default=16, help='curve samples per control-point interval (axis CSV)')
+    a.add_argument('--name', default=None, help='human-readable label stored in meta.json (default: matrix and tiles)')
+    a.add_argument('--id', default=None, help='result id stored in meta.json (default: timestamp + short hash); independent of --name and of the folder name')
+    a.add_argument('--sides', type=int, default=8, help='tube cross-section polygon sides')
+    a.add_argument('--tube-per', type=int, default=6, help='tube samples per control-point interval')
+    a.add_argument('--tube-max-verts', type=int, default=400000, help='tube is coarsened, then skipped, above this vertex count')
+    a.add_argument('--no-tube', action='store_true')
     g = a.parse_args()
     M0 = [[int(ch) for ch in row.replace(' ', '')] for row in g.matrix.split('/')]
     assert len({len(r) for r in M0}) == 1 and all(v in (1, 2) for r in M0 for v in r), 'matrix must be rectangular with digits 1 and 2'
     if g.swap_types: M0 = [[3 - v for v in r] for r in M0]
     W, C, R = g.W, g.C, g.R
+    physical = False
+    if (g.ne or g.cpi or g.wpi) and not (g.ne and g.cpi and g.wpi): sys.exit('error: give all of --ne --cpi --wpi, or none')
     if g.ne and g.cpi and g.wpi:
-        R = 25.4/(28.0*math.sqrt(g.ne))/2; W = 25.4/g.wpi; C = 25.4/g.cpi
+        R = 25.4/(28.0*math.sqrt(g.ne))/2; W = 25.4/g.wpi; C = 25.4/g.cpi; physical = True
     print('W = %.4f  C = %.4f  R = %.4f   (W/R = %.2f, C/R = %.2f)' % (W, C, R, W/R, C/R))
     t0 = time.time(); solved, rep = optimise_all(W/R, C/R, cache_dir=g.cache, verbose=True)
-    print('unit cells ready (%.0f s). Contact distances in units of 2R:' % (time.time()-t0))
+    opt_time = time.time()-t0
+    print('unit cells ready (%.0f s). Contact distances in units of 2R:' % opt_time)
     for c in range(1, 9): print('   cell %d: D1 %.3f  D2 %.3f  Dmin %.3f  %s' % (c, rep[c]['D1']/2, rep[c]['D2']/2, rep[c]['Dmin']/2, 'converged' if rep[c]['ok'] else 'NOT fully converged'))
     sw = g.labels == 'swapped'
     T = tile_matrix(M0, g.tiles)
@@ -294,13 +364,62 @@ def main():
     os.makedirs(g.out, exist_ok=True)
     np.savetxt(os.path.join(g.out, 'fab_axis.csv'), np.vstack([np.c_[np.full(len(c), k), c] for k, c in enumerate(curves)]), delimiter=',', header='course,x,y,z', comments='', fmt=['%d', '%.6f', '%.6f', '%.6f'])
     np.savetxt(os.path.join(g.out, 'fab_nodes.csv'), np.vstack([np.c_[np.full(len(p), k), np.arange(len(p)), p] for k, p in enumerate(rows)]), delimiter=',', header='course,idx,x,y,z', comments='', fmt=['%d', '%d', '%.6f', '%.6f', '%.6f'])
+
+    # ---- tube sweep (coarsened or skipped if too large for the viewer)
+    tube = None
+    if not g.no_tube:
+        per, sides = max(2, g.tube_per), max(3, g.sides)
+        est = lambda p, s: sum((len(r)-1)*p + 1 for r in rows)*s + 2*len(rows)
+        while est(per, sides) > g.tube_max_verts and per > 2: per -= 1
+        while est(per, sides) > g.tube_max_verts and sides > 4: sides -= 1
+        if est(per, sides) > g.tube_max_verts:
+            print('WARNING: tube would have about %d vertices (limit %d); fab_tube.obj not written. Use fewer --tiles.' % (est(per, sides), g.tube_max_verts))
+        else:
+            if (per, sides) != (g.tube_per, g.sides): print('note: tube coarsened to %d samples per interval, %d sides to stay under %d vertices' % (per, sides, g.tube_max_verts))
+            tcurves = [catmull_rom(p, per) for p in rows]
+            nv, nf = write_obj(os.path.join(g.out, 'fab_tube.obj'), tcurves, R, sides, 'build_knit.py tube, radius %.6f, %d sides, %d courses' % (R, sides, len(tcurves)))
+            tube = dict(file='fab_tube.obj', radius=fnum(R, 6), sides=sides, samples_per_interval=per, vertices=nv, triangles=nf, frames='rotation-minimising (double reflection, Wang et al. 2008)')
+            print('wrote %s/fab_tube.obj (%d vertices, %d triangles)' % (g.out, nv, nf))
+
     bad = sorted(c for c in used if not rep[c]['ok'])
-    json.dump(dict(W=W, C=C, R=R, matrix=M0, tiles=g.tiles, courses=len(rows), stitches_per_course=len(T[0]), labels=g.labels, cells_used=sorted(used),
-                   cells_not_converged_used=bad, min_axis_distance=float(vmin), min_axis_distance_over_2R=float(vmin/(2*R))), open(os.path.join(g.out, 'meta.json'), 'w'), indent=1)
     status = 'PASS' if vmin >= 0.97*2*R else ('WARN (slight interpenetration)' if vmin >= 0.80*2*R else 'FAIL (yarns collide)')
+    now = datetime.now()
+    name = g.name or ('%s x%d' % ('/'.join(''.join(map(str, r)) for r in M0), g.tiles))
+    rid = g.id or (now.strftime('%Y%m%d-%H%M%S') + '-' + hashlib.sha1(json.dumps([M0, g.tiles, W, C, R, g.labels, now.isoformat()]).encode()).hexdigest()[:4])
+    units = 'mm' if physical else 'R-units (R = %g, dimensionless)' % R
+    structure = dict(units=units, W=fnum(W, 6), C=fnum(C, 6), R=fnum(R, 6), W_over_R=fnum(W/R), C_over_R=fnum(C/R), yarn_diameter=fnum(2*R, 6),
+                     contact_distance_2R=fnum(2*R, 6), ne=g.ne, cpi=g.cpi, wpi=g.wpi, labels=g.labels, swap_types=bool(g.swap_types),
+                     matrix=M0, tiles=g.tiles, courses=len(rows), stitches_per_course=len(T[0]))
+    unit_cells = dict(method='Wadekar et al. 2020, 8 unit cells; uniform Catmull-Rom, control points 0-6, nodes 1-5 interpolated',
+                      optimiser='L-BFGS-B, node bounds 0<=x<=W/2, 0<=y<=C, contact tolerance 3%, alpha x10 per repeat',
+                      weights=dict(alpha=ALPHA, beta=BETA, beta0=BETA0, gamma=GAMMA, gamma0=GAMMA0, eta=ETA), optimisation_seconds=fnum(opt_time, 3),
+                      cells={str(c): dict(used=(c in used), converged=bool(rep[c]['ok']), D1_over_2R=fnum(rep[c]['D1']/2), D2_over_2R=fnum(rep[c]['D2']/2), Dmin_over_2R=fnum(rep[c]['Dmin']/2),
+                                          final_alpha=fnum(rep[c]['alpha'], 3), nodes_in_R=({'%s%d' % k: [fnum(float(v), 5) for v in x] for k, x in solved[c].items()} if True else None))
+                             for c in range(1, 9)})
+    info = ['Name: %s' % name, 'Id: %s' % rid, 'Created: %s' % now.isoformat(timespec='seconds'),
+            'Fabric: %d courses x %d stitches (matrix %dx%d, %d tiles)' % (len(rows), len(T[0]), len(M0), len(M0[0]), g.tiles),
+            'Units: %s' % units,
+            'W (wale spacing) = %.4f   C (course spacing) = %.4f   R (yarn radius) = %.4f' % (W, C, R),
+            'W/R = %.2f   C/R = %.2f   yarn diameter 2R = %.4f' % (W/R, C/R, 2*R)]
+    if physical: info.append('Ne %g   CPI %g   WPI %g' % (g.ne, g.cpi, g.wpi))
+    info += ['Table 2 labels: %s   type swap: %s' % (g.labels, 'yes' if g.swap_types else 'no'),
+             'Unit cells: 8, Catmull-Rom (nodes 0-6), L-BFGS-B; weights alpha %g beta %g beta0 %g gamma %g gamma0 %g eta %g' % (ALPHA, BETA, BETA0, GAMMA, GAMMA0, ETA)]
+    for c in range(1, 9):
+        info.append('  cell %d%s: D1 %.3f  D2 %.3f  Dmin %.3f (x2R)  %s' % (c, '' if c in used else ' (unused)', rep[c]['D1']/2, rep[c]['D2']/2, rep[c]['Dmin']/2, 'converged' if rep[c]['ok'] else 'NOT fully converged'))
+    info.append('Verification (3x3 repeat): min axis distance %.1f%% of 2R -> %s' % (100*vmin/(2*R), status))
+    if tube: info.append('Tube: radius %.4f, %d sides, %d vertices' % (R, tube['sides'], tube['vertices']))
+    meta = dict(schema=2, id=rid, name=name, created=now.isoformat(timespec='seconds'),
+                matrix=M0, tiles=g.tiles, courses=len(rows), stitches_per_course=len(T[0]), W=W, C=C, R=R, labels=g.labels, cells_used=sorted(used),
+                cells_not_converged_used=bad, min_axis_distance=float(vmin), min_axis_distance_over_2R=float(vmin/(2*R)),
+                structure=structure, unit_cells=unit_cells, verification=dict(status=status.split()[0], min_axis_distance=float(vmin), over_2R=float(vmin/(2*R)), sample='3x3 repeat'),
+                tube=tube, files=['fab_axis.csv', 'fab_nodes.csv'] + (['fab_tube.obj'] if tube else []), info=info)
+    if physical: meta.update(ne=g.ne, cpi=g.cpi, wpi=g.wpi, d=2*R)
+    tmp = os.path.join(g.out, 'meta.json.tmp')
+    json.dump(meta, open(tmp, 'w'), indent=1); os.replace(tmp, os.path.join(g.out, 'meta.json'))     # written last, atomically
     print('fabric: %d courses x %d stitches, cells used %s%s' % (len(rows), len(T[0]), sorted(used), ('; not fully converged: %s' % bad) if bad else ''))
     print('RESULT: minimum yarn-axis distance %.4f = %.1f%% of 2R (contact distance) -> %s' % (vmin, 100*vmin/(2*R), status))
-    print('wrote %s/fab_axis.csv (%d points), fab_nodes.csv, meta.json' % (g.out, sum(len(c) for c in curves)))
+    print('wrote %s/fab_axis.csv (%d points), fab_nodes.csv, meta.json  [id %s, name "%s"]' % (g.out, sum(len(c) for c in curves), rid, name))
+    print('--- info ---'); print('\n'.join(info))
 
 if __name__ == '__main__':
     main()
