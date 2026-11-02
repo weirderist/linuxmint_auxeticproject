@@ -10,6 +10,10 @@ Energy (positions x, rest lengths l0 held fixed inside one solve; slip changes l
               Modelling choice, not sourced. kb0 is a vector in space, so a rigid rotation of the whole fabric also costs bending energy.
   E_contact = sum_pairs kc/2 max(0, 2R - |x_p - x_q|)^2                 penalty, vertex-vertex, no tangential friction. Form is a numerical
               device, not sourced; kc is user-supplied.
+Curl: kb0 also carries a bias of size curl (turning angle per vertex) bending the yarn out of the fabric plane, toward +z for front (knit) loops
+and -z for back (purl) loops. This is the stored curl of the project's curling theory (front loops curl in, back loops out). Not sourced: fit it.
+Creep: between solves, rest lengths l0 and reference curvatures kb0 drift toward the current state, x += a (x_now - x), a = 1 - exp(-dt/tau)
+(a single-time-constant Maxwell element). Cotton yarn creep is really a spread of times, so this is a simplification; tau is user-supplied.
 Twist is NOT in this energy: for an isotropic circular section with free ends and no torque source the twist angles can always be set to
 minimise the twist energy to zero, so the term would add nothing. Gradients by JAX reverse-mode autodiff (exact), solver scipy L-BFGS-B.
 Section properties of a solid circular rod of radius R and effective modulus E: EA = E pi R^2, EI = E pi R^4 / 4 (standard).
@@ -42,13 +46,26 @@ def pack(sim):
         tri += [(o+i-1, o+i, o+i+1) for i in range(1, n-1)]; lbar += [0.5*(y.l0[i-1] + y.l0[i]) for i in range(1, n-1)]
     return off, np.array(seg), np.array(tri), np.array(l0), np.array(lbar)
 
+def _kb_np(sim, tri):
+    X = np.vstack([y.X for y in sim.yarns]); e1 = X[tri[:, 1]] - X[tri[:, 0]]; e2 = X[tri[:, 2]] - X[tri[:, 1]]
+    n1 = np.linalg.norm(e1, axis=1); n2 = np.linalg.norm(e2, axis=1)
+    return 2.0*np.cross(e1, e2)/(n1*n2 + np.sum(e1*e2, 1) + 1e-12)[:, None], e1/n1[:, None] + e2/n2[:, None]
+
 def baseline_curvature(sim, tri):
-    """kb0 per interior vertex, computed once from the first positions seen and kept on the Sim."""
+    """kb0 per interior vertex, computed once from the first positions seen (plus the curl bias) and kept on the Sim."""
     if not hasattr(sim, 'kb0'):
-        X = np.vstack([y.X for y in sim.yarns]); e1 = X[tri[:, 1]] - X[tri[:, 0]]; e2 = X[tri[:, 2]] - X[tri[:, 1]]
-        n1 = np.linalg.norm(e1, axis=1); n2 = np.linalg.norm(e2, axis=1)
-        sim.kb0 = 2.0*np.cross(e1, e2)/(n1*n2 + np.sum(e1*e2, 1) + 1e-12)[:, None]
+        kb, t = _kb_np(sim, tri)
+        if sim.params.curl:
+            sg = np.concatenate([y.s[1:-1] for y in sim.yarns]); t = t/np.linalg.norm(t, axis=1)[:, None]
+            b = np.cross(t, [0.0, 0.0, 1.0]); nb = np.linalg.norm(b, axis=1)[:, None]
+            kb = kb + sim.params.curl*sg[:, None]*np.where(nb > 0.3, b/np.maximum(nb, 1e-9), 0.0)     # b x t = +z: bends toward +z
+        sim.kb0 = kb
     return sim.kb0
+
+def creep(sim, a):
+    """One creep step, a = 1 - exp(-dt/tau): rest lengths and reference curvatures move a fraction a toward the current state."""
+    off, seg, tri, l0, lbar = pack(sim); kb0 = baseline_curvature(sim, tri); kb, _ = _kb_np(sim, tri); sim.kb0 = kb0 + a*(kb - kb0)
+    for y in sim.yarns: y.l0 = y.l0 + a*(np.linalg.norm(np.diff(y.X, axis=0), axis=1) - y.l0)
 
 def near_pairs(sim, off, skin=1.5, skip=6, pad=8192):
     P = np.vstack([y.X for y in sim.yarns]); yid = np.concatenate([[k]*len(y.X) for k, y in enumerate(sim.yarns)])

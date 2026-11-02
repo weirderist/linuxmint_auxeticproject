@@ -21,6 +21,10 @@ CONFIG = {
     "yarn_E_source": "Kharkova, Kononova, Krasnikovs, Eiduks, Machanovskis, Dzelzitis (2011), 'Elastic properties of cotton fabric based "
                      "polymer composites', Engineering for Rural Development, Jelgava, 26-27 May 2011: experimentally obtained cotton yarn "
                      "elastic modulus 3.7 GPa (yarn tension tests; yarn modelled as a homogeneous elastic rod).",
+    "tension_cN": 10.0,
+    "tension_source": "Input yarn tensions of 10, 20 and 30 cN were used for cotton, polyester and polyamide threads on a circular knitting machine with passive "
+                      "yarn feeding (Control of the stability circular knitting process with passive yarn feeding, Mechanika, Kaunas University of Technology). "
+                      "Experimental settings in that study, not a certified standard; the lowest is offered as the default.",
     "kc_ratio": 30.0,                        # contact stiffness as a multiple of EA/R. Numerical choice, tested on one fabric only.
     "perturb": 0.02, "outer": 40, "maxiter": 300,
 }
@@ -92,6 +96,10 @@ class SimBody(BaseModel):
     perturb: float = Field(0.02, ge=0, le=0.2)
     outer: int = Field(40, ge=1, le=500)
     maxiter: int = Field(300, ge=10, le=3000)
+    curl: float = Field(0.0, ge=0, le=0.5, description="stored curl, turning angle (rad) per vertex")
+    tension_cN: float = Field(0.0, ge=0, le=200)
+    creep_tau_h: float = Field(0.0, ge=0)
+    hours: float = Field(0.0, ge=0)
 
 def _folder(rid):
     if not ID_RE.match(rid) or not (RESULTS / rid / "meta.json").exists():
@@ -107,11 +115,16 @@ def simulate(rid: str, b: SimBody):
     R = meta.get("R")
     if not R:
         raise HTTPException(422, "this result has no yarn radius R in meta.json (built by an older pipeline)")
+    if b.creep_tau_h > 0 and b.hours <= 0:
+        raise HTTPException(422, "creep needs a simulated duration (hours) above 0")
+    if b.tension_cN > 0 and (meta.get("structure") or {}).get("units") != "mm":
+        raise HTTPException(422, "feeder tension needs a result built in mm; set it to 0 for R-unit results")
     kc = b.kc_ratio * b.E * math.pi * R          # kc = ratio * EA / R, with EA = E pi R^2
     for f in ("relaxed_axis.csv", "relaxed_tube.obj", "state.json"):
         (d / f).unlink(missing_ok=True)          # never leave a previous run's files next to a new one
     cmd = [sys.executable, str(SCRIPTS / "relax_job.py"), "--folder", str(d), "--E", repr(b.E), "--mu", repr(b.mu),
-           "--k-contact", repr(kc), "--perturb", repr(b.perturb), "--outer", str(b.outer), "--maxiter", str(b.maxiter)]
+           "--k-contact", repr(kc), "--perturb", repr(b.perturb), "--outer", str(b.outer), "--maxiter", str(b.maxiter),
+           "--curl", repr(b.curl), "--tension", repr(b.tension_cN), "--creep-tau", repr(b.creep_tau_h), "--hours", repr(b.hours)]
     log = open(d / "job.log", "w")
     JOBS[rid] = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT, cwd=str(SCRIPTS), start_new_session=True)
     return {"started": rid, "k_contact": kc}

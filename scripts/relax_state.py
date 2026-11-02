@@ -31,7 +31,10 @@ class Params:
     """All physical inputs. None = not supplied; nothing is assumed."""
     mu: float = None; EA: float = None; EI: float = None; GJ: float = None; k_contact: float = None
     rest_length_ratio: float = 1.0     # rest length = ratio * baseline length. 1.0 = baseline is length-relaxed. Modelling choice, not sourced.
-    rest_curvature: float = 0.0        # stress-free yarn is straight. Modelling choice (heat-setting excluded by the project).
+    rest_curvature: float = 0.0        # unused: the stress-free curvature is the baseline curvature plus the curl bias (see relax_solver)
+    curl: float = 0.0                  # stored out-of-plane curl, turning angle (rad) per vertex; front loops +, back loops -. NOT sourced: fit to a known fabric.
+    creep_tau: float = 0.0             # creep relaxation time (hours); 0 = no creep. NOT sourced: no single certified value exists for cotton yarn.
+    hours: float = 0.0                 # simulated duration (hours); only used with creep
     slip_step_max: float = 0.2         # max fraction of a segment's rest length moved per outer iteration (numerical control)
     outer_max: int = 200; tol_len: float = 1e-6; tol_energy: float = 1e-8
     def missing(self): return [k for k in ('mu', 'EA', 'EI', 'GJ', 'k_contact') if getattr(self, k) is None]
@@ -43,6 +46,7 @@ class Yarn:
     l0: np.ndarray                     # (n-1,) rest length per segment (the migrating quantity)
     theta: np.ndarray                  # (n-1,) material-frame twist angle per segment (DER degree of freedom), 0 at start
     pinned: np.ndarray                 # (n,) bool, True while rigid locks are on
+    s: np.ndarray = None               # (n,) +1 front (knit) / -1 back (purl) loop type of each vertex, from the matrix in meta.json
 
 @dataclass
 class Contact:
@@ -72,10 +76,15 @@ def resample(P, ds):
 def load(folder, params, ds_over_R=1.0):
     meta = json.load(open(os.path.join(folder, 'meta.json'))); R = meta['R']
     A = np.loadtxt(os.path.join(folder, 'fab_axis.csv'), delimiter=',', skiprows=1)
-    yarns = []
+    yarns = []; st = meta.get('structure', {}); M = meta.get('matrix')
+    T = np.tile(np.array(M), (meta['tiles'], meta['tiles'])) if M and 'tiles' in meta else None
     for c in np.unique(A[:, 0]).astype(int):
         X = resample(A[A[:, 0] == c][:, 1:], ds_over_R*R)
-        yarns.append(Yarn(c, X, np.linalg.norm(np.diff(X, axis=0), axis=1)*params.rest_length_ratio, np.zeros(len(X)-1), np.ones(len(X), bool)))
+        s = None
+        if T is not None:       # legs (y up to the next course line) belong to stitch row c, heads above it to row c+1; column = x // W
+            r = np.clip(c + (X[:, 1] > (c+1)*st['C']).astype(int), 0, len(T)-1); j = np.clip((X[:, 0]//st['W']).astype(int), 0, T.shape[1]-1)
+            s = np.where(T[r, j] == 1, 1.0, -1.0)
+        yarns.append(Yarn(c, X, np.linalg.norm(np.diff(X, axis=0), axis=1)*params.rest_length_ratio, np.zeros(len(X)-1), np.ones(len(X), bool), s))
     sim = Sim(folder, R, yarns, params); sim.history.append(dict(state='loaded', t=time.strftime('%Y-%m-%dT%H:%M:%S'), note=meta.get('id', ''))); sim.save()
     return sim
 
@@ -141,6 +150,7 @@ def run(sim, relax_fn, energy_fn):
     for k in range(p.outer_max):
         relax_fn(sim); dmax = migrate(sim); E = energy_fn(sim); sim.energy_log.append(dict(iter=k, E=E, max_dl0=dmax))
         if not np.isfinite(E): return sim.to(S.FAILED, 'non-finite energy')
-        if dmax < p.tol_len and E_prev is not None and abs(E - E_prev) < p.tol_energy*max(1.0, abs(E)): return sim.to(S.SETTLED, 'iter %d' % k)
+        if not p.creep_tau and dmax < p.tol_len and E_prev is not None and abs(E - E_prev) < p.tol_energy*max(1.0, abs(E)): return sim.to(S.SETTLED, 'iter %d' % k)
         E_prev = E; sim.contacts = build_contacts(sim); sim.to(S.RELAXING, 'iter %d E %.6g dl0 %.3g' % (k, E, dmax))
+    if p.creep_tau: return sim.to(S.SETTLED, 'time horizon %g h reached' % p.hours)      # with creep the run is a fixed time, not a convergence test
     sim.to(S.FAILED, 'outer_max reached without settling')

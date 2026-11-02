@@ -50,6 +50,10 @@ button:disabled{opacity:.45}
   <label><span>Out-of-plane perturbation (x R)</span><input id="fPert" type="number" step="any" min="0" max="0.2"></label>
   <label><span>Outer iterations</span><input id="fOuter" type="number" step="1" min="1" max="500"></label>
   <label><span>L-BFGS iterations per round</span><input id="fMax" type="number" step="1" min="10" max="3000"></label>
+  <label><span>Stored curl (rad per vertex, front +, back &minus;)</span><input id="fCurl" type="number" step="any" min="0" max="0.5"></label>
+  <label><span>Feeder tension (cN, mm results)</span><input id="fTen" type="number" step="any" min="0" max="200"></label>
+  <label><span>Creep time constant (hours, 0 = off)</span><input id="fTau" type="number" step="any" min="0"></label>
+  <label><span>Simulated duration (hours, with creep)</span><input id="fHours" type="number" step="any" min="0"></label>
  </div>
  <div><button id="bSim" disabled>Simulate</button> <button id="bCancel" disabled>Cancel</button></div>
  <div id="simState">Select a result.</div><progress id="simProg" value="0" max="1" hidden></progress>
@@ -267,8 +271,9 @@ function setupSim() {
     $('#simBox').dataset.for = rec.id;
     $('#fE').value = mm ? CFG.yarn_E_MPa : 1;
     $('#lE').textContent = mm ? 'Yarn modulus E (MPa = N/mm\u00b2)' : 'Yarn modulus E (R-unit result: only the ratio to contact stiffness matters)';
+    $('#fCurl').value = 0; $('#fTen').value = mm ? CFG.tension_cN : 0; $('#fTau').value = 0; $('#fHours').value = 0; $('#fTen').disabled = !mm;
     $('#fKc').value = CFG.kc_ratio; $('#fPert').value = CFG.perturb; $('#fOuter').value = CFG.outer; $('#fMax').value = CFG.maxiter;
-    $('#eNote').textContent = mm ? 'E = 3700 MPa: ' + CFG.yarn_E_source : 'This result is in R-units (no physical yarn size), so no physical modulus applies.';
+    $('#eNote').textContent = mm ? 'E = 3700 MPa: ' + CFG.yarn_E_source + '\n\nFeeder tension: ' + CFG.tension_source : 'This result is in R-units (no physical yarn size), so no physical modulus applies.';
   }
   updateSimButtons();
 }
@@ -284,7 +289,8 @@ function updateSimButtons() {
 }
 ['#fMu', '#fE'].forEach(i => $(i).oninput = updateSimButtons);
 $('#bSim').onclick = async () => {
-  const body = { E: +$('#fE').value, mu: +$('#fMu').value, kc_ratio: +$('#fKc').value, perturb: +$('#fPert').value, outer: +$('#fOuter').value, maxiter: +$('#fMax').value };
+  const body = { E: +$('#fE').value, mu: +$('#fMu').value, kc_ratio: +$('#fKc').value, perturb: +$('#fPert').value, outer: +$('#fOuter').value, maxiter: +$('#fMax').value,
+    curl: +$('#fCurl').value, tension_cN: +$('#fTen').value, creep_tau_h: +$('#fTau').value, hours: +$('#fHours').value };
   $('#bSim').disabled = true;
   try {
     const r = await fetch('/api/results/' + current + '/simulate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });

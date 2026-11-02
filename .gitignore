@@ -66,3 +66,6 @@ output_matrices/
 shared/
 logs/
 test_output/
+*.ggb
+scripts/cell_cache/
+scripts/run_knit/
