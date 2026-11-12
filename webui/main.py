@@ -27,6 +27,7 @@ CONFIG = {
                       "Experimental settings in that study, not a certified standard; the lowest is offered as the default.",
     "kc_ratio": 30.0,                        # contact stiffness as a multiple of EA/R. Numerical choice, tested on one fabric only.
     "perturb": 0.02, "outer": 40, "maxiter": 300,
+    "shell_w": 1.0,                          # hold on the shell fold, x EA/R per vertex. Numerical choice, not tested on the real solver.
 }
 
 def _alive(rid):
@@ -100,6 +101,8 @@ class SimBody(BaseModel):
     tension_cN: float = Field(0.0, ge=0, le=200)
     creep_tau_h: float = Field(0.0, ge=0)
     hours: float = Field(0.0, ge=0)
+    shell: bool = False
+    shell_w: float = Field(1.0, ge=0, le=1000, description="hold on the shell fold, x EA/R per vertex (0 = start from the fold only)")
 
 def _folder(rid):
     if not ID_RE.match(rid) or not (RESULTS / rid / "meta.json").exists():
@@ -119,12 +122,16 @@ def simulate(rid: str, b: SimBody):
         raise HTTPException(422, "creep needs a simulated duration (hours) above 0")
     if b.tension_cN > 0 and (meta.get("structure") or {}).get("units") != "mm":
         raise HTTPException(422, "feeder tension needs a result built in mm; set it to 0 for R-unit results")
+    if b.shell and not meta.get("matrix"):
+        raise HTTPException(422, "the shell option needs the stitch matrix in meta.json (result built by an older pipeline)")
     kc = b.kc_ratio * b.E * math.pi * R          # kc = ratio * EA / R, with EA = E pi R^2
-    for f in ("relaxed_axis.csv", "relaxed_tube.obj", "state.json"):
+    for f in ("relaxed_axis.csv", "relaxed_tube.obj", "state.json", "shell.npz"):
         (d / f).unlink(missing_ok=True)          # never leave a previous run's files next to a new one
     cmd = [sys.executable, str(SCRIPTS / "relax_job.py"), "--folder", str(d), "--E", repr(b.E), "--mu", repr(b.mu),
            "--k-contact", repr(kc), "--perturb", repr(b.perturb), "--outer", str(b.outer), "--maxiter", str(b.maxiter),
            "--curl", repr(b.curl), "--tension", repr(b.tension_cN), "--creep-tau", repr(b.creep_tau_h), "--hours", repr(b.hours)]
+    if b.shell:
+        cmd += ["--shell", "--shell-w", repr(b.shell_w)]
     log = open(d / "job.log", "w")
     JOBS[rid] = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT, cwd=str(SCRIPTS), start_new_session=True)
     return {"started": rid, "k_contact": kc}

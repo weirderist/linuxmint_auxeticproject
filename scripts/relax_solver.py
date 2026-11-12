@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""relax_solver.py - modified for high-stress latent energy storage and buckling.
-Changes from original: baseline curvature kb0 is set to 0 (straight reference state), 
-meaning the initial tightly packed loops are heavily pre-stressed and store high bending energy.
-When released, this stored strain energy drives natural out-of-plane buckling and folding.
+"""relax_solver.py - yarn-level relaxation: stretch + bend + penalty contact, plus an optional hold on the shell fold.
+Reference curvature kb0 = the BASELINE curvature (the loops are stress-free in the shape they were built in). The earlier straight-reference
+version (kb0 = 0) made the loops open and the fabric unravel, so it is not used with the shell hold.
+Shell hold (optional, set by relax_job.py as sim.shell): the mean position of the vertices in each stitch-sized cell is pulled toward the
+position the shell model gives that cell, with stiffness ks per vertex. Loop shape, contact and slip inside a cell are left free.
 """
 import numpy as np
 import jax, jax.numpy as jnp
@@ -12,20 +13,19 @@ jax.config.update('jax_enable_x64', True)
 
 def section(E, R): return E*np.pi*R**2, E*np.pi*R**4/4.0
 
-def _energy(x, l0, seg, tri, lbar, kb0, pairs, pmask, EA, EI, kc, R2):
+def _energy(x, l0, seg, tri, lbar, kb0, pairs, pmask, EA, EI, kc, R2, cell, tgt, cnt, ks):
     X = x.reshape(-1, 3)
     e = X[seg[:, 1]] - X[seg[:, 0]]; l = jnp.sqrt(jnp.sum(e*e, 1) + 1e-30)
     Es = 0.5*EA*jnp.sum((l - l0)**2/l0)
     e1 = X[tri[:, 1]] - X[tri[:, 0]]; e2 = X[tri[:, 2]] - X[tri[:, 1]]
     n1 = jnp.sqrt(jnp.sum(e1*e1, 1) + 1e-30); n2 = jnp.sqrt(jnp.sum(e2*e2, 1) + 1e-30)
     kb = 2.0*jnp.cross(e1, e2)/(n1*n2 + jnp.sum(e1*e2, 1) + 1e-12)[:, None]
-    
-    # kd uses kb0 = 0 (straight state reference), forcing initial loops to store max bending energy
     kd = kb - kb0; Eb = 0.5*EI*jnp.sum(jnp.sum(kd*kd, 1)/lbar)
-    
     d = jnp.sqrt(jnp.sum((X[pairs[:, 0]] - X[pairs[:, 1]])**2, 1) + 1e-30)
     Ec = 0.5*kc*jnp.sum(pmask*jnp.maximum(0.0, R2 - d)**2)
-    return Es + Eb + Ec
+    mean = jax.ops.segment_sum(X, cell, num_segments=tgt.shape[0])/cnt[:, None]          # mean position of the vertices in each stitch cell
+    Esh = 0.5*ks*jnp.sum(cnt*jnp.sum((mean - tgt)**2, 1))                                  # hold on the shell fold (ks = 0 when no shell)
+    return Es + Eb + Ec + Esh
 _vg = jax.jit(jax.value_and_grad(_energy))
 
 def pack(sim):
@@ -41,12 +41,8 @@ def _kb_np(sim, tri):
     return 2.0*np.cross(e1, e2)/(n1*n2 + np.sum(e1*e2, 1) + 1e-12)[:, None], e1/n1[:, None] + e2/n2[:, None]
 
 def baseline_curvature(sim, tri):
-    """CRITICAL FIX: Setting kb0 to 0 (or near-zero) makes a straight yarn stress-free. 
-    Thus, the initial knitted loops store massive internal bending strain energy."""
-    if not hasattr(sim, 'kb0'):
-        # Initialize kb0 as a zero array so the initial curved loops carry high bending potential
-        _, t = _kb_np(sim, tri)
-        sim.kb0 = np.zeros((len(tri), 3))
+    """Reference curvature = the curvature of the configuration the first time it is asked for (the baseline, before any perturbation or shell seeding)."""
+    if not hasattr(sim, 'kb0'): sim.kb0 = _kb_np(sim, tri)[0]
     return sim.kb0
 
 def creep(sim, a):
@@ -60,19 +56,35 @@ def near_pairs(sim, off, skin=1.5, skip=6, pad=8192):
     n = max(pad, int(np.ceil(len(pr)/pad))*pad); out = np.zeros((n, 2), int); m = np.zeros(n); out[:len(pr)] = pr; m[:len(pr)] = 1.0
     return out, m, len(pr)
 
+def shell_args(sim, hold=True):
+    """(cell, tgt, cnt, ks) for _energy. No shell set: one dummy cell and ks = 0, so the term is zero."""
+    sh = getattr(sim, 'shell', None)
+    if sh is None: return np.zeros(sum(len(y.X) for y in sim.yarns), int), np.zeros((1, 3)), np.ones(1), 0.0
+    return sh['cell'], sh['tgt'], sh['cnt'], (sh['ks'] if hold else 0.0)
+
+def shell_deviation(sim):
+    """RMS and max distance between each stitch cell's mean position and its shell target (same units as the fabric)."""
+    sh = getattr(sim, 'shell', None)
+    if sh is None: return None
+    X = np.vstack([y.X for y in sim.yarns]); n = len(sh['cnt'])
+    mean = np.c_[[np.bincount(sh['cell'], weights=X[:, k], minlength=n) for k in range(3)]].T/sh['cnt'][:, None]
+    d = np.linalg.norm(mean - sh['tgt'], axis=1)
+    return dict(rms=float(np.sqrt((d**2).mean())), max=float(d.max()))
+
 def energy_parts(sim, kc, E):
     EA, EI = section(E, sim.R); off, seg, tri, l0, lbar = pack(sim); pairs, pm, _ = near_pairs(sim, off)
-    x = np.vstack([y.X for y in sim.yarns]).ravel(); kb0 = baseline_curvature(sim, tri)
-    tot = float(_energy(x, l0, seg, tri, lbar, kb0, pairs, pm, EA, EI, kc, 2*sim.R))
-    st = float(_energy(x, l0, seg, tri, lbar, kb0, pairs, pm, EA, 0.0, 0.0, 0.0)); bd = float(_energy(x, l0, seg, tri, lbar, kb0, pairs, pm, 0.0, EI, 0.0, 0.0))
-    return dict(total=tot, stretch=st, bend=bd, contact=tot - st - bd)
+    x = np.vstack([y.X for y in sim.yarns]).ravel(); kb0 = baseline_curvature(sim, tri); sa, s0 = shell_args(sim), shell_args(sim, False)
+    tot = float(_energy(x, l0, seg, tri, lbar, kb0, pairs, pm, EA, EI, kc, 2*sim.R, *sa))
+    st = float(_energy(x, l0, seg, tri, lbar, kb0, pairs, pm, EA, 0.0, 0.0, 0.0, *s0)); bd = float(_energy(x, l0, seg, tri, lbar, kb0, pairs, pm, 0.0, EI, 0.0, 0.0, *s0))
+    sh = float(_energy(x, l0, seg, tri, lbar, kb0, pairs, pm, 0.0, 0.0, 0.0, 0.0, *sa))
+    return dict(total=tot, stretch=st, bend=bd, shell=sh, contact=tot - st - bd - sh)
 
 def relax(sim, E, kc, maxiter=300, rounds=4, verbose=False):
     EA, EI = section(E, sim.R)
     for r in range(rounds):
-        off, seg, tri, l0, lbar = pack(sim); pairs, pm, npair = near_pairs(sim, off); kb0 = baseline_curvature(sim, tri)
+        off, seg, tri, l0, lbar = pack(sim); pairs, pm, npair = near_pairs(sim, off); kb0 = baseline_curvature(sim, tri); sa = shell_args(sim)
         x0 = np.vstack([y.X for y in sim.yarns]).ravel()
-        f = lambda x: tuple(np.asarray(v, float) for v in _vg(x, l0, seg, tri, lbar, kb0, pairs, pm, EA, EI, kc, 2*sim.R))
+        f = lambda x: tuple(np.asarray(v, float) for v in _vg(x, l0, seg, tri, lbar, kb0, pairs, pm, EA, EI, kc, 2*sim.R, *sa))
         res = minimize(f, x0, jac=True, method='L-BFGS-B', options=dict(maxiter=maxiter, maxcor=30, ftol=1e-13, gtol=1e-9))
         X = res.x.reshape(-1, 3)
         for y, o in zip(sim.yarns, off): y.X = X[o:o+len(y.X)].copy()
