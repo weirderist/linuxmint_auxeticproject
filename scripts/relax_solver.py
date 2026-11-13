@@ -1,9 +1,31 @@
 #!/usr/bin/env python3
-"""relax_solver.py - yarn-level relaxation: stretch + bend + penalty contact, plus an optional hold on the shell fold.
-Reference curvature kb0 = the BASELINE curvature (the loops are stress-free in the shape they were built in). The earlier straight-reference
-version (kb0 = 0) made the loops open and the fabric unravel, so it is not used with the shell hold.
-Shell hold (optional, set by relax_job.py as sim.shell): the mean position of the vertices in each stitch-sized cell is pulled toward the
-position the shell model gives that cell, with stiffness ks per vertex. Loop shape, contact and slip inside a cell are left free.
+"""relax_solver.py - quasi-static relaxation of the yarn polylines held in a relax_state.Sim.
+Energy (positions x, rest lengths l0 held fixed inside one solve; slip changes l0 between solves, see relax_state.migrate):
+  E = E_stretch + E_bend + E_contact
+  E_stretch = sum_i EA/2 (l_i - l0_i)^2 / l0_i                         Hookean axial law (unsourced assumption, EA user-supplied)
+  E_bend    = sum_i EI/(2 lbar_i) |kb_i - kb0_i|^2, kb_i = 2 e_{i-1} x e_i / (|e_{i-1}||e_i| + e_{i-1}.e_i), lbar_i = (l0_{i-1}+l0_i)/2
+              (discrete curvature binormal and energy of Bergou, Wardetzky, Robinson, Audoly, Grinspun 2008, Discrete Elastic Rods)
+  E_contact = sum_pairs kc/2 max(0, 2R - |x_p - x_q|)^2                 penalty, vertex-vertex, no tangential friction. Form is a numerical
+              device, not sourced; kc is user-supplied.
+Stress-free (reference) curvature, taken once from the first state seen (before any perturbation):
+  kb0 = ref_scale * (curvature of the baseline loops) + curl bias
+  ref_scale = 0 (DEFAULT, the latent-energy model): the stress-free yarn is straight, so the tightly packed baseline loops start heavily pre-stressed and store
+              high bending energy; releasing it drives buckling and folding. Measured side effect (R-unit test, 3x3 fabric): with no other drive the fabric
+              rolls up strongly and keeps creeping (z-range 4.7 R -> 25..35 R, energy still falling after 3000+ L-BFGS iterations); it can also unravel loops.
+  ref_scale = 1: the yarn is stress-free in its knitted loop shape; the baseline has zero bending energy and nothing moves unless a curl bias is added.
+  0 < ref_scale < 1: partial memory of the loop shape; the response was smooth in the same test (z-range 4.6 R -> 6.6 R at 0.6 and -> 8.5 R at 0.3, 7200 iterations).
+  All values are modelling choices, not sourced: calibrate against a known fabric.
+Curl bias (curl > 0): a turning angle per vertex (rad) bending the yarn out of the fabric plane, toward +z for front (digit 1) loops and -z for back (digit 2) loops.
+  curl_aniso: the sign also flips between wale-direction yarn and course-direction yarn (anticlastic, as single-jersey edge curl: Niu, Dion, Kamien, PNAS 2025).
+  A same-sign bias asks the sheet to dome, which needs in-plane stretch; in tests it stalled at a local minimum with most of the stored energy left.
+Creep: between solves, rest lengths l0 and reference curvatures kb0 drift toward the current state, x += a (x_now - x), a = 1 - exp(-dt/tau)
+  (a single-time-constant Maxwell element). Cotton yarn creep is really a spread of times, so this is a simplification; tau is user-supplied.
+Shell hold (optional, sim.shell set by relax_job.py --shell): E_shell = ks/2 sum_cells n_c |mean position of the vertices in the cell - shell target|^2, one cell per stitch (W x C).
+  The target is the folded shape from shell_sim.py (Niu et al. 2025). Only the cell mean is held, so loop shape, contact and slip inside a cell stay free. ks is a numerical
+  choice (relax_job --shell-w x EA/R). Use ref_scale = 1 with it: with the straight-yarn reference the loops open and fight the hold.
+Twist is NOT in this energy: for an isotropic circular section with free ends and no torque source the twist angles can always be set to
+minimise the twist energy to zero, so the term would add nothing. Gradients by JAX reverse-mode autodiff (exact), solver scipy L-BFGS-B.
+Section properties of a solid circular rod of radius R and effective modulus E: EA = E pi R^2, EI = E pi R^4 / 4 (standard).
 """
 import numpy as np
 import jax, jax.numpy as jnp
@@ -11,7 +33,7 @@ from scipy.optimize import minimize
 from scipy.spatial import cKDTree
 jax.config.update('jax_enable_x64', True)
 
-def section(E, R): return E*np.pi*R**2, E*np.pi*R**4/4.0
+def section(E, R): return E*np.pi*R**2, E*np.pi*R**4/4.0                      # EA, EI
 
 def _energy(x, l0, seg, tri, lbar, kb0, pairs, pmask, EA, EI, kc, R2, cell, tgt, cnt, ks):
     X = x.reshape(-1, 3)
@@ -41,11 +63,20 @@ def _kb_np(sim, tri):
     return 2.0*np.cross(e1, e2)/(n1*n2 + np.sum(e1*e2, 1) + 1e-12)[:, None], e1/n1[:, None] + e2/n2[:, None]
 
 def baseline_curvature(sim, tri):
-    """Reference curvature = the curvature of the configuration the first time it is asked for (the baseline, before any perturbation or shell seeding)."""
-    if not hasattr(sim, 'kb0'): sim.kb0 = _kb_np(sim, tri)[0]
+    """kb0 per interior vertex, computed once from the first positions seen and kept on the Sim: ref_scale * (baseline loop curvature) + curl bias.
+    With ref_scale = 0 and curl = 0 this is exactly the all-zero (straight yarn) reference."""
+    if not hasattr(sim, 'kb0'):
+        kb, t = _kb_np(sim, tri); kb = getattr(sim.params, 'ref_scale', 0.0)*kb
+        if sim.params.curl:
+            sg = np.concatenate([y.s[1:-1] for y in sim.yarns]); t = t/np.linalg.norm(t, axis=1)[:, None]
+            b = np.cross(t, [0.0, 0.0, 1.0]); nb = np.linalg.norm(b, axis=1)[:, None]
+            dsg = np.where(np.abs(t[:, 1]) >= np.abs(t[:, 0]), 1.0, -1.0) if getattr(sim.params, 'curl_aniso', False) else 1.0      # anticlastic: wale-direction yarn one way, course-direction yarn the other
+            kb = kb + sim.params.curl*(sg*dsg)[:, None]*np.where(nb > 0.3, b/np.maximum(nb, 1e-9), 0.0)     # b x t = +z: bends toward +z
+        sim.kb0 = kb
     return sim.kb0
 
 def creep(sim, a):
+    """One creep step, a = 1 - exp(-dt/tau): rest lengths and reference curvatures move a fraction a toward the current state."""
     off, seg, tri, l0, lbar = pack(sim); kb0 = baseline_curvature(sim, tri); kb, _ = _kb_np(sim, tri); sim.kb0 = kb0 + a*(kb - kb0)
     for y in sim.yarns: y.l0 = y.l0 + a*(np.linalg.norm(np.diff(y.X, axis=0), axis=1) - y.l0)
 
@@ -63,7 +94,7 @@ def shell_args(sim, hold=True):
     return sh['cell'], sh['tgt'], sh['cnt'], (sh['ks'] if hold else 0.0)
 
 def shell_deviation(sim):
-    """RMS and max distance between each stitch cell's mean position and its shell target (same units as the fabric)."""
+    """RMS and max distance between each stitch cell's mean position and its shell target (fabric units); None without a shell."""
     sh = getattr(sim, 'shell', None)
     if sh is None: return None
     X = np.vstack([y.X for y in sim.yarns]); n = len(sh['cnt'])
@@ -80,6 +111,7 @@ def energy_parts(sim, kc, E):
     return dict(total=tot, stretch=st, bend=bd, shell=sh, contact=tot - st - bd - sh)
 
 def relax(sim, E, kc, maxiter=300, rounds=4, verbose=False):
+    """Minimise positions at fixed rest lengths. Contact pairs are rebuilt between rounds (positions move)."""
     EA, EI = section(E, sim.R)
     for r in range(rounds):
         off, seg, tri, l0, lbar = pack(sim); pairs, pm, npair = near_pairs(sim, off); kb0 = baseline_curvature(sim, tri); sa = shell_args(sim)

@@ -33,6 +33,8 @@ class Params:
     rest_length_ratio: float = 1.0     # rest length = ratio * baseline length. 1.0 = baseline is length-relaxed. Modelling choice, not sourced.
     rest_curvature: float = 0.0        # unused: the stress-free curvature is the baseline curvature plus the curl bias (see relax_solver)
     curl: float = 0.0                  # stored out-of-plane curl, turning angle (rad) per vertex; front loops +, back loops -. NOT sourced: fit to a known fabric.
+    curl_aniso: bool = False           # True: course-direction yarn curls opposite to wale-direction yarn (anticlastic, as in single-jersey edge curl)
+    ref_scale: float = 0.0             # stress-free curvature = ref_scale * baseline loop curvature (+ curl bias). 0 = straight yarn (latent-energy model), 1 = knitted shape
     creep_tau: float = 0.0             # creep relaxation time (hours); 0 = no creep. NOT sourced: no single certified value exists for cotton yarn.
     hours: float = 0.0                 # simulated duration (hours); only used with creep
     slip_step_max: float = 0.2         # max fraction of a segment's rest length moved per outer iteration (numerical control)
@@ -77,7 +79,7 @@ def load(folder, params, ds_over_R=1.0):
     meta = json.load(open(os.path.join(folder, 'meta.json'))); R = meta['R']
     A = np.loadtxt(os.path.join(folder, 'fab_axis.csv'), delimiter=',', skiprows=1)
     yarns = []; st = meta.get('structure', {}); M = meta.get('matrix')
-    T = np.tile(np.array(M), (meta['tiles'], meta['tiles'])) if M and 'tiles' in meta else None
+    T = np.tile(np.array(M), (meta['tiles'], meta['tiles'])) if M and 'tiles' in meta and 'W' in st and 'C' in st else None
     for c in np.unique(A[:, 0]).astype(int):
         X = resample(A[A[:, 0] == c][:, 1:], ds_over_R*R)
         s = None
@@ -144,13 +146,13 @@ def release(sim):
     for y in sim.yarns: y.pinned[:] = False                                   # rigid locks dropped
     sim.contacts = build_contacts(sim); sim.to(S.RELEASED, '%d contacts' % len(sim.contacts))
 
-def run(sim, relax_fn, energy_fn):
+def run(sim, relax_fn, energy_fn, on_round=None):
     """relax_fn(sim) -> None minimises positions at fixed l0 (e.g. L-BFGS-B on the DER + contact energy); energy_fn(sim) -> float."""
     p = sim.params; sim.to(S.RELAXING, 'outer loop start'); E_prev = None
     for k in range(p.outer_max):
-        relax_fn(sim); dmax = migrate(sim); E = energy_fn(sim); sim.energy_log.append(dict(iter=k, E=E, max_dl0=dmax))
+        relax_fn(sim); sim.contacts = build_contacts(sim); dmax = migrate(sim); E = energy_fn(sim); sim.energy_log.append(dict(iter=k, E=E, max_dl0=dmax)); on_round and on_round(k, E, dmax)
         if not np.isfinite(E): return sim.to(S.FAILED, 'non-finite energy')
         if not p.creep_tau and dmax < p.tol_len and E_prev is not None and abs(E - E_prev) < p.tol_energy*max(1.0, abs(E)): return sim.to(S.SETTLED, 'iter %d' % k)
-        E_prev = E; sim.contacts = build_contacts(sim); sim.to(S.RELAXING, 'iter %d E %.6g dl0 %.3g' % (k, E, dmax))
+        E_prev = E; sim.to(S.RELAXING, 'iter %d E %.6g dl0 %.3g' % (k, E, dmax))
     if p.creep_tau: return sim.to(S.SETTLED, 'time horizon %g h reached' % p.hours)      # with creep the run is a fixed time, not a convergence test
     sim.to(S.FAILED, 'outer_max reached without settling')

@@ -54,6 +54,10 @@ def _sim_summary(d):
     return {"state": st, "has_relaxed": t.exists() and (d / "relaxed_axis.csv").exists(),
             "relaxed_at": int(t.stat().st_mtime) if t.exists() else 0}
 
+def _matrix_text(m):
+    M = m.get("matrix")
+    return ("%d x %d stitches per unit" % (len(M[0]), len(M))) if M and M[0] else ""
+
 @app.get("/api/config")
 def config():
     return CONFIG
@@ -70,7 +74,7 @@ def list_results():
         out.append({"id": d.name, "created": m.get("created"), "name": m.get("name") or m.get("label", ""),
                     "label": m.get("label", ""), "units": st.get("units", ""), "R": m.get("R"),
                     "info": m.get("info"), "settings": m.get("settings", {}), "report": m.get("report", ""),
-                    "sim": _sim_summary(d)})
+                    "matrix_text": _matrix_text(m), "n_sims": len(m.get("simulations") or []), "sim": _sim_summary(d)})
     return out
 
 def _file(rid, pattern, media, variant="baseline"):
@@ -98,6 +102,8 @@ class SimBody(BaseModel):
     outer: int = Field(40, ge=1, le=500)
     maxiter: int = Field(300, ge=10, le=3000)
     curl: float = Field(0.0, ge=0, le=0.5, description="stored curl, turning angle (rad) per vertex")
+    curl_aniso: bool = False
+    ref_scale: float = Field(0.0, ge=0, le=1, description="stress-free curvature = ref_scale x baseline loop curvature")
     tension_cN: float = Field(0.0, ge=0, le=200)
     creep_tau_h: float = Field(0.0, ge=0)
     hours: float = Field(0.0, ge=0)
@@ -125,14 +131,15 @@ def simulate(rid: str, b: SimBody):
     if b.shell and not meta.get("matrix"):
         raise HTTPException(422, "the shell option needs the stitch matrix in meta.json (result built by an older pipeline)")
     kc = b.kc_ratio * b.E * math.pi * R          # kc = ratio * EA / R, with EA = E pi R^2
-    for f in ("relaxed_axis.csv", "relaxed_tube.obj", "state.json", "shell.npz"):
+    for f in ("relaxed_axis.csv", "relaxed_tube.obj", "relaxed_tube.bin", "state.json", "job.json", "shell.npz"):
         (d / f).unlink(missing_ok=True)          # never leave a previous run's files next to a new one
     cmd = [sys.executable, str(SCRIPTS / "relax_job.py"), "--folder", str(d), "--E", repr(b.E), "--mu", repr(b.mu),
            "--k-contact", repr(kc), "--perturb", repr(b.perturb), "--outer", str(b.outer), "--maxiter", str(b.maxiter),
-           "--curl", repr(b.curl), "--tension", repr(b.tension_cN), "--creep-tau", repr(b.creep_tau_h), "--hours", repr(b.hours)]
+           "--curl", repr(b.curl), "--tension", repr(b.tension_cN), "--creep-tau", repr(b.creep_tau_h), "--hours", repr(b.hours)] + (["--curl-aniso"] if b.curl_aniso else []) + ["--ref-scale", repr(b.ref_scale)]
     if b.shell:
         cmd += ["--shell", "--shell-w", repr(b.shell_w)]
     log = open(d / "job.log", "w")
+    (d / "job.json").write_text(json.dumps({"started": time.time()}))          # before the job starts, so it can always read it
     JOBS[rid] = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT, cwd=str(SCRIPTS), start_new_session=True)
     return {"started": rid, "k_contact": kc}
 
@@ -148,10 +155,43 @@ def state(rid: str):
         pass
     el = s.get("energy_log") or []
     outer = (s.get("params") or {}).get("outer_max")
-    return {"state": sim["state"] if sim else "none", "running": _alive(rid), "busy": _any_running(),
+    jj = _read_json(d / "job.json") or {}
+    sims = (_read_json(d / "meta.json") or {}).get("simulations") or []
+    seconds = sims[-1].get("seconds") if sims else None
+    elapsed = (time.time() - jj["started"]) if (_alive(rid) and jj.get("started")) else seconds
+    return {"elapsed": elapsed, "seconds": seconds, "state": sim["state"] if sim else "none", "running": _alive(rid), "busy": _any_running(),
             "iter": (el[-1]["iter"] + 1) if el else 0, "outer": outer, "last": el[-1] if el else None,
             "summary": s.get("summary"), "has_relaxed": bool(sim and sim["has_relaxed"]),
             "relaxed_at": sim["relaxed_at"] if sim else 0, "log": log}
+
+@app.get("/api/results/{rid}/log")
+def sim_log(rid: str):
+    return (_read_json(_folder(rid) / "meta.json") or {}).get("simulations") or []
+
+def _obj_to_bin(obj, binp):
+    """Legacy results only: convert fab_tube.obj to the compact binary mesh once and cache it."""
+    import numpy as np
+    V, F = [], []
+    with open(obj) as f:
+        for line in f:
+            if line.startswith("v "): V.append(line[2:].split())
+            elif line.startswith("f "): F.append([int(x.split("/")[0]) - 1 for x in line[2:].split()[:3]])
+    V = np.asarray(V, dtype="<f4"); F = np.asarray(F, dtype="<u4"); tmp = str(binp) + ".tmp"
+    with open(tmp, "wb") as o:
+        o.write(b"KMSH"); np.array([1, len(V), len(F)], dtype="<u4").tofile(o); V.tofile(o); F.tofile(o)
+    os.replace(tmp, binp)
+
+@app.get("/api/results/{rid}/mesh")
+def mesh(rid: str, v: str = "baseline"):
+    if not ID_RE.match(rid) or v not in ("baseline", "relaxed"):
+        raise HTTPException(404)
+    d = RESULTS / rid; rel = (v == "relaxed")
+    cand = sorted(h for h in d.glob("*_tube.bin") if h.name.startswith("relaxed_") == rel)
+    if not cand:
+        objs = sorted(h for h in d.glob("*_tube.obj") if h.name.startswith("relaxed_") == rel)
+        if not objs: raise HTTPException(404)
+        _obj_to_bin(objs[0], objs[0].with_suffix(".bin")); cand = [objs[0].with_suffix(".bin")]
+    return FileResponse(cand[0], media_type="application/octet-stream", headers={"Content-Encoding": "identity"})   # float data barely compresses: skip gzip
 
 @app.post("/api/results/{rid}/cancel")
 def cancel(rid: str):

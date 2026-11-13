@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """relax_job.py - run the baseline -> relaxation transition for one result folder. This is what the UI's Simulate button launches (as a subprocess).
-Usage: python3 relax_job.py --folder webui/results/<id> --E <modulus> --mu <friction> --k-contact <kc> [--perturb 0.15] [--outer 40] [--maxiter 300] [--shell [--shell-w 1.0]]
+Usage: python3 relax_job.py --folder webui/results/<id> --E <modulus> --mu <friction> --k-contact <kc> [--perturb 0.15] [--outer 40] [--maxiter 300]
 Units follow the folder: mm if built with --ne --cpi --wpi (E in N/mm^2 = MPa, kc in N/mm), otherwise R-units (dimensionless).
-Shell option: first the thin-shell model (shell_sim.py, Niu et al. 2025) is run on the stitch matrix to get the folded shape. The yarn is then moved onto that
-shape (each vertex keeps its offset from the sheet along the sheet normal) and the loops are relaxed with the mean position of every stitch-sized cell held
-toward the shell shape, with stiffness shell-w x EA/R per vertex (0 = start from the fold but do not hold it).
-Writes into the folder: state.json (progress, atomic, every outer iteration), relaxed_axis.csv (course,x,y,z), relaxed_tube.obj, shell.npz (with --shell). Never touches meta.json.
+Writes into the folder: state.json (progress, atomic, every outer iteration), relaxed_axis.csv (course,x,y,z), relaxed_tube.obj. With --shell also shell.npz. Appends one entry per run (with every round) to the 'simulations' list in meta.json.
+Shell option (--shell): first the thin-shell model (shell_sim.py, Niu et al. 2025) is run on the stitch matrix to get the folded shape. The yarn is then moved onto that shape
+(each vertex keeps its offset from the sheet along the sheet normal) and the loops are relaxed with the mean position of every stitch-sized cell held toward the shell shape,
+with stiffness shell-w x EA/R per vertex (0 = start from the fold but do not hold it). Use --ref-scale 1 with it.
 """
 import argparse, json, math, os, sys, time
 import numpy as np
@@ -59,6 +59,8 @@ def main():
     a.add_argument('--outer', type=int, default=40); a.add_argument('--maxiter', type=int, default=300); a.add_argument('--seed', type=int, default=0)
     a.add_argument('--sides', type=int, default=8)
     a.add_argument('--curl', type=float, default=0.0, help='stored curl, turning angle (rad) per vertex, front loops +, back loops -')
+    a.add_argument('--curl-aniso', action='store_true', help='anticlastic curl: course-direction yarn opposite to wale-direction yarn')
+    a.add_argument('--ref-scale', type=float, default=0.0, help='stress-free curvature = ref_scale x baseline loop curvature: 0 straight yarn (default), 1 knitted loop shape')
     a.add_argument('--tension', type=float, default=0.0, help='feeder tension in cN (mm results only); the yarn is knitted stretched by this force')
     a.add_argument('--creep-tau', type=float, default=0.0, help='creep relaxation time in hours (0 = no creep)'); a.add_argument('--hours', type=float, default=0.0, help='simulated duration in hours (with creep)')
     a.add_argument('--shell', action='store_true', help='run the shell model first and relax the loops toward its folded shape')
@@ -69,41 +71,67 @@ def main():
     EA, EI = sv.section(g.E, meta['R'])
     if g.tension and meta.get('structure', {}).get('units') != 'mm': sys.exit('feeder tension needs a result built in mm (--ne --cpi --wpi)')
     if g.curl and 'matrix' not in meta: sys.exit('curl needs the stitch matrix in meta.json (result built by an older pipeline)')
-    if g.shell and 'matrix' not in meta: sys.exit('the shell option needs the stitch matrix in meta.json (result built by an older pipeline)')
     if g.creep_tau and g.hours <= 0: sys.exit('creep needs --hours > 0')
+    if g.shell and 'matrix' not in meta: sys.exit('the shell option needs the stitch matrix in meta.json (result built by an older pipeline)')
+    if g.shell and g.ref_scale == 0: print('warning: --shell with --ref-scale 0 (straight-yarn reference): the loops will open against the shell hold; use --ref-scale 1', flush=True)
     shell = run_shell(g, meta) if g.shell else None
     ratio = 1.0/(1.0 + 0.01*g.tension/EA)                          # rest length = baseline length / (1 + T/EA), T in N (cN x 0.01)
-    p = rs.Params(mu=g.mu, EA=EA, EI=EI, GJ=0.0, k_contact=g.k_contact, outer_max=g.outer, rest_length_ratio=ratio, curl=g.curl, creep_tau=g.creep_tau, hours=g.hours)       # GJ unused: twist not in the energy (see relax_solver)
+    p = rs.Params(mu=g.mu, EA=EA, EI=EI, GJ=0.0, k_contact=g.k_contact, outer_max=g.outer, rest_length_ratio=ratio, curl=g.curl, curl_aniso=g.curl_aniso, ref_scale=g.ref_scale, creep_tau=g.creep_tau, hours=g.hours)       # GJ unused: twist not in the energy (see relax_solver)
     a_creep = 1.0 - math.exp(-(g.hours/g.outer)/g.creep_tau) if g.creep_tau else 0.0
-    sim = rs.load(g.folder, p); rs.release(sim)
-    e0 = sv.energy_parts(sim, g.k_contact, g.E); d0 = sv.min_axis_distance(sim)           # also fixes the reference curvature at the baseline
+    sim = rs.load(g.folder, p)
+    if g.curl and sim.yarns[0].s is None: sys.exit('curl needs the stitch types: meta.json must hold the matrix, tiles and structure W and C')
+    rs.release(sim)
+    stc = meta.get('structure', {}); ncol = len(meta['matrix'][0])*meta['tiles'] if 'matrix' in meta and 'tiles' in meta else 0
+    colf = (lambda y: np.clip(((y.X[:-1, 0] + y.X[1:, 0])/2//stc['W']).astype(int), 0, ncol-1)) if ncol and 'W' in stc else None
+    l0_start = [(colf(y), y.l0.copy()) for y in sim.yarns] if colf else None          # stitch column of each segment at the start, and its rest length
+    e0 = sv.energy_parts(sim, g.k_contact, g.E); d0 = sv.min_axis_distance(sim)
     if shell:
         U, N = shell_field(shell); P0 = np.vstack([y.X for y in sim.yarns]); T = shell_targets(shell, U, N, P0)
         cell, nc = shell_cells(P0, shell); cnt = np.bincount(cell, minlength=nc).astype(float)
         tgt = np.c_[[np.bincount(cell, weights=T[:, k], minlength=nc) for k in range(3)]].T/cnt[:, None]
         sim.shell = dict(cell=cell, tgt=tgt, cnt=cnt, ks=g.shell_w*EA/sim.R)
         o = 0
-        for y in sim.yarns: y.X = T[o:o+len(y.X)].copy(); o += len(y.X)                   # start the loops on the folded shape
+        for y in sim.yarns: y.X[:] = T[o:o+len(y.X)]; o += len(y.X)                      # start the loops on the folded shape
         es = sv.energy_parts(sim, g.k_contact, g.E)
         print('shell seed: %d stitch cells, hold %g x EA/R; energy on the folded shape %.6g (stretch %.4g bend %.4g contact %.4g shell %.4g)' % (nc, g.shell_w, es['total'], es['stretch'], es['bend'], es['contact'], es['shell']), flush=True)
     rng = np.random.default_rng(g.seed)
     for y in sim.yarns: y.X[:, 2] += g.perturb*sim.R*rng.standard_normal(len(y.X))
     print('curl %g, feeder tension %g cN (strain %.3g), creep tau %g h over %g h' % (g.curl, g.tension, 0.01*g.tension/EA, g.creep_tau, g.hours), flush=True)
     print('start: E %.6g (stretch %.4g bend %.4g contact %.4g), min axis distance %.4f = %.1f%% of 2R' % (e0['total'], e0['stretch'], e0['bend'], e0['contact'], d0, 100*d0/(2*sim.R)), flush=True)
+    mp = os.path.join(g.folder, 'meta.json')
+    try: t_start = json.load(open(os.path.join(g.folder, 'job.json')))['started']          # wall clock since Simulate was pressed, same clock as the UI timer
+    except Exception: t_start = time.time()
+    def meta_update(fn):
+        m = json.load(open(mp)); fn(m); json.dump(m, open(mp + '.tmp', 'w'), indent=1); os.replace(mp + '.tmp', mp)
+    run_entry = dict(started=time.strftime('%Y-%m-%dT%H:%M:%S'), status='running', finished=None, seconds=None,
+                     params=dict(E=g.E, mu=g.mu, k_contact=g.k_contact, curl=g.curl, curl_aniso=bool(g.curl_aniso), ref_scale=g.ref_scale, shell=bool(g.shell), shell_w=g.shell_w, tension_cN=g.tension, creep_tau_h=g.creep_tau, hours=g.hours, outer=g.outer, maxiter=g.maxiter, perturb=g.perturb, seed=g.seed),
+                     start=dict(e0, min_dist_over_2R=d0/(2*sim.R)), rounds=[])
+    meta_update(lambda m: m.__setitem__('simulations', (m.get('simulations') or []) + [run_entry]))
+    def on_round(k, E, dmax):
+        pr = sv.energy_parts(sim, g.k_contact, g.E)
+        rec = dict(round=k+1, t=round(time.time()-t_start, 2), E=pr['total'], stretch=pr['stretch'], bend=pr['bend'], contact=pr['contact'], shell=pr['shell'], max_dl0=dmax, min_dist_over_2R=sv.min_axis_distance(sim)/(2*sim.R))
+        meta_update(lambda m: m['simulations'][-1]['rounds'].append(rec))
     t0 = time.time()
     def relax(s):
         sv.relax(s, g.E, g.k_contact, maxiter=g.maxiter, verbose=True)
         if a_creep: sv.creep(s, a_creep)
     energy = lambda s: sv.energy_parts(s, g.k_contact, g.E)['total']
-    rs.run(sim, relax, energy)
+    rs.run(sim, relax, energy, on_round)
     e1 = sv.energy_parts(sim, g.k_contact, g.E); d1 = sv.min_axis_distance(sim)
     tot_l0 = sum(float(y.l0.sum()) for y in sim.yarns)
-    print('end (%s, %.0f s): E %.6g (stretch %.4g bend %.4g contact %.4g shell %.4g), min axis distance %.4f = %.1f%% of 2R, total rest length %.6g' % (sim.state.value, time.time()-t0, e1['total'], e1['stretch'], e1['bend'], e1['contact'], e1['shell'], d1, 100*d1/(2*sim.R), tot_l0))
+    print('end (%s, %.0f s): E %.6g (stretch %.4g bend %.4g contact %.4g), min axis distance %.4f = %.1f%% of 2R, total rest length %.6g' % (sim.state.value, time.time()-t0, e1['total'], e1['stretch'], e1['bend'], e1['contact'], d1, 100*d1/(2*sim.R), tot_l0))
     dv = sv.shell_deviation(sim)
-    if dv: print('shell hold: cell means are %.3g (rms) and %.3g (max) from the shell shape = %.2f and %.2f yarn radii' % (dv['rms'], dv['max'], dv['rms']/sim.R, dv['max']/sim.R))
+    if dv: print('shell hold: shell energy %.4g; cell means are %.3g (rms) and %.3g (max) from the shell shape = %.2f and %.2f yarn radii' % (e1['shell'], dv['rms'], dv['max'], dv['rms']/sim.R, dv['max']/sim.R))
+    meta_update(lambda m: m['simulations'][-1].update(status=sim.state.value, finished=time.strftime('%Y-%m-%dT%H:%M:%S'), seconds=round(time.time()-t_start, 1), end=dict(e1, min_dist_over_2R=d1/(2*sim.R))))
+    wale = None
+    if l0_start:
+        base = np.zeros(ncol); dl = np.zeros(ncol)
+        for y, (c, l) in zip(sim.yarns, l0_start): np.add.at(base, c, l); np.add.at(dl, c, y.l0 - l)
+        wale = (dl/np.maximum(base, 1e-12)).tolist(); w = np.array(wale)
+        print('rest-length change per wale: min %.3e (wale %d), max %.3e (wale %d), total %.3e' % (w.min(), w.argmin(), w.max(), w.argmax(), dl.sum()/base.sum()))
     np.savetxt(os.path.join(g.folder, 'relaxed_axis.csv'), np.vstack([np.c_[np.full(len(y.X), y.course), y.X] for y in sim.yarns]), delimiter=',', header='course,x,y,z', comments='', fmt=['%d', '%.6f', '%.6f', '%.6f'])
     write_obj(os.path.join(g.folder, 'relaxed_tube.obj'), [y.X for y in sim.yarns], sim.R, g.sides, 'relaxed state of %s' % os.path.basename(os.path.abspath(g.folder)))
-    d = json.load(open(os.path.join(g.folder, 'state.json'))); d['summary'] = dict(start=e0, end=e1, min_dist_over_2R_start=d0/(2*sim.R), min_dist_over_2R_end=d1/(2*sim.R))
+    d = json.load(open(os.path.join(g.folder, 'state.json'))); d['summary'] = dict(start=e0, end=e1, min_dist_over_2R_start=d0/(2*sim.R), min_dist_over_2R_end=d1/(2*sim.R), wale_length_change=wale)
     if dv: d['summary']['shell'] = dict(w=g.shell_w, rms_dev_over_R=dv['rms']/sim.R, max_dev_over_R=dv['max']/sim.R)
     json.dump(d, open(os.path.join(g.folder, 'state.json.tmp'), 'w'), indent=1); os.replace(os.path.join(g.folder, 'state.json.tmp'), os.path.join(g.folder, 'state.json'))
     sys.exit(0 if sim.state == rs.S.SETTLED else 2)

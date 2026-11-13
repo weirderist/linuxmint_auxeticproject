@@ -25,7 +25,7 @@ main{flex:1;display:flex;min-height:0}
 .grid label{display:flex;flex-direction:column;gap:.15rem}
 .grid input[type=number]{width:100%;padding:.25rem}
 .grid .row{flex-direction:row;align-items:center;gap:.5rem}
-.note{opacity:.75;font-size:.78rem;margin:.2rem 0}
+.note{opacity:.75;font-size:.78rem;margin:.2rem 0;white-space:pre-line}
 #simState{margin:.4rem 0;font-weight:600}
 progress{width:100%;height:.6rem}
 #info{max-height:30%;overflow:auto;margin:0;padding:.6rem 1rem;border-top:1px solid #8884;font-size:.8rem;white-space:pre-wrap}
@@ -51,6 +51,8 @@ button:disabled{opacity:.45}
   <label><span>Outer iterations</span><input id="fOuter" type="number" step="1" min="1" max="500"></label>
   <label><span>L-BFGS iterations per round</span><input id="fMax" type="number" step="1" min="10" max="3000"></label>
   <label><span>Stored curl (rad per vertex, front +, back &minus;)</span><input id="fCurl" type="number" step="any" min="0" max="0.5"></label>
+  <label class="row"><input id="fAniso" type="checkbox"><span>Anticlastic curl (course yarn opposite to wale yarn)</span></label>
+  <label><span>Reference curvature scale (0 straight yarn, 1 knitted shape; use 1 with the shell)</span><input id="fRef" type="number" step="any" min="0" max="1"></label>
   <label><span>Feeder tension (cN, mm results)</span><input id="fTen" type="number" step="any" min="0" max="200"></label>
   <label><span>Creep time constant (hours, 0 = off)</span><input id="fTau" type="number" step="any" min="0"></label>
   <label><span>Simulated duration (hours, with creep)</span><input id="fHours" type="number" step="any" min="0"></label>
@@ -58,10 +60,11 @@ button:disabled{opacity:.45}
   <label><span>Hold on the shell fold (x EA/R; 0 = start from the fold only)</span><input id="fShellW" type="number" step="any" min="0" max="1000"></label>
  </div>
  <div><button id="bSim" disabled>Simulate</button> <button id="bCancel" disabled>Cancel</button></div>
- <div id="simState">Select a result.</div><progress id="simProg" value="0" max="1" hidden></progress>
+ <div id="simState">Select a result.</div><div id="simTimer" class="note"></div><progress id="simProg" value="0" max="1" hidden></progress>
  <p class="note" id="eNote"></p>
  <p class="note">The solver runs only when Simulate is pressed. Contact stiffness is a numerical choice (tested on one fabric); the yarn is treated as a solid elastic rod, so its bending stiffness is an upper estimate for a twisted staple yarn.</p>
 </details>
+<details id="logBox"><summary>Simulation log (every round, saved in meta.json)</summary><div id="logHead" class="note"></div><div id="logBody" style="overflow:auto"></div></details>
 <details id="setBox"><summary>View settings</summary>
  <div class="grid">
   <label><span>Zoom speed <output id="oZoom"></output></span><input id="sZoom" type="range" min="0.5" max="8" step="0.1"></label>
@@ -180,14 +183,26 @@ const ckey = id => id + '|' + variant + '|' + stamp(recOf(id));
 
 // Each result view is downloaded and built once; switching Tube/Axis or going back to a result reuses it.
 const cache = new Map();                       // key -> { tube: Promise<Object3D>, axis: Promise<Object3D> }
+async function readWithProgress(resp) {
+  const total = +resp.headers.get('Content-Length') || 0, rd = resp.body.getReader(), chunks = []; let got = 0;
+  for (;;) { const { done, value } = await rd.read(); if (done) break; chunks.push(value); got += value.length; $('#fps').textContent = 'loading ' + (got / 1048576).toFixed(0) + (total ? '/' + (total / 1048576).toFixed(0) : '') + ' MB'; }
+  const out = new Uint8Array(got); let o = 0; for (const c of chunks) { out.set(c, o); o += c.length; } return out.buffer;
+}
 async function load(id, kind, v) {
-  const r = await fetch('/api/results/' + id + '/' + kind + (v === 'relaxed' ? '?v=relaxed' : ''));
-  if (!r.ok) throw new Error(kind + ' file: HTTP ' + r.status);
-  const t = await r.text();
-  if (kind === 'axis') return axisLines(t);
-  const { v: vv, f } = parseOBJ(t), g = new THREE.BufferGeometry();
-  g.setAttribute('position', new THREE.BufferAttribute(vv, 3));
-  g.setIndex(new THREE.BufferAttribute(f, 1)); g.computeVertexNormals();
+  const q = v === 'relaxed' ? '?v=relaxed' : '';
+  if (kind === 'axis') { const r = await fetch('/api/results/' + id + '/axis' + q); if (!r.ok) throw new Error('axis file: HTTP ' + r.status); return axisLines(await r.text()); }
+  const g = new THREE.BufferGeometry(), rb = await fetch('/api/results/' + id + '/mesh' + q);
+  if (rb.ok) {                                              // compact binary mesh: no text parsing, streams with a progress readout
+    const buf = await readWithProgress(rb), hd = new DataView(buf);
+    if (hd.getUint32(0, false) !== 0x4b4d5348) throw new Error('mesh: bad header');
+    const nv = hd.getUint32(8, true), nf = hd.getUint32(12, true);
+    g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(buf, 16, nv * 3), 3));
+    g.setIndex(new THREE.BufferAttribute(new Uint32Array(buf, 16 + nv * 12, nf * 3), 1));
+  } else {                                                  // older server without /mesh: text OBJ
+    const r = await fetch('/api/results/' + id + '/tube' + q); if (!r.ok) throw new Error('tube file: HTTP ' + r.status);
+    const { v: vv, f } = parseOBJ(await r.text()); g.setAttribute('position', new THREE.BufferAttribute(vv, 3)); g.setIndex(new THREE.BufferAttribute(f, 1));
+  }
+  g.computeVertexNormals();
   if (!tubeMat) tubeMat = new THREE.MeshLambertMaterial({ color: S.color, side: THREE.DoubleSide });
   return new THREE.Mesh(g, tubeMat);          // one shared material so the colour setting applies to every tube
 }
@@ -217,7 +232,7 @@ function renderList() {
     const d = document.createElement('div'); d.className = 'item' + (r.id === current ? ' sel' : ''); d.dataset.id = r.id;
     const a = document.createElement('div'); a.textContent = r.name || fmt(r);
     if (r.sim && r.sim.state) { const b = document.createElement('span'); b.className = 'badge'; b.textContent = r.sim.state; a.append(b); }
-    const s = document.createElement('small'); s.textContent = fmt(r) + '  ' + r.id;
+    const s = document.createElement('small'); s.textContent = (r.matrix_text ? r.matrix_text + ' | ' : '') + fmt(r); d.title = r.id;
     d.append(a, s); d.onclick = () => show(r.id, true); el.append(d);
   }
 }
@@ -246,10 +261,10 @@ function setVariantButtons() {
   $('#bTube').classList.toggle('on', mode === 'tube'); $('#bAxis').classList.toggle('on', mode === 'axis');
 }
 async function show(id, refit) {
-  const changed = id !== current; current = id; if (changed) st = null;
+  const changed = id !== current; current = id; if (changed) { st = null; timer = null; logRuns = []; logSel = -1; }
   setVariantButtons(); const m = mode, v = variant;
   document.querySelectorAll('.item').forEach(e => e.classList.toggle('sel', e.dataset.id === id));
-  $('#info').textContent = infoText(); setupSim(); pollState();
+  $('#info').textContent = infoText(); setupSim(); pollState(); loadLog();
   try {
     const obj = await entry(id)[m];
     if (current !== id || mode !== m || variant !== v) return;          // user already moved on
@@ -274,10 +289,10 @@ function setupSim() {
     $('#simBox').dataset.for = rec.id;
     $('#fE').value = mm ? CFG.yarn_E_MPa : 1;
     $('#lE').textContent = mm ? 'Yarn modulus E (MPa = N/mm\u00b2)' : 'Yarn modulus E (R-unit result: only the ratio to contact stiffness matters)';
-    $('#fCurl').value = 0; $('#fTen').value = mm ? CFG.tension_cN : 0; $('#fTau').value = 0; $('#fHours').value = 0; $('#fTen').disabled = !mm;
+    $('#fCurl').value = 0; $('#fAniso').checked = false; $('#fRef').value = 1; $('#fTen').value = mm ? CFG.tension_cN : 0; $('#fTau').value = 0; $('#fHours').value = 0; $('#fTen').disabled = !mm;
     $('#fShell').checked = true; $('#fShellW').value = CFG.shell_w;
     $('#fKc').value = CFG.kc_ratio; $('#fPert').value = CFG.perturb; $('#fOuter').value = CFG.outer; $('#fMax').value = CFG.maxiter;
-    $('#eNote').textContent = mm ? 'E = 3700 MPa: ' + CFG.yarn_E_source + '\n\nFeeder tension: ' + CFG.tension_source : 'This result is in R-units (no physical yarn size), so no physical modulus applies.';
+    $('#eNote').textContent = mm ? 'Units: mm. E in MPa (N/mm\u00b2), contact stiffness in N/mm, feeder tension in cN.' : 'R-unit result: no physical yarn size, so no physical modulus applies.';
   }
   updateSimButtons();
 }
@@ -294,7 +309,7 @@ function updateSimButtons() {
 ['#fMu', '#fE'].forEach(i => $(i).oninput = updateSimButtons);
 $('#bSim').onclick = async () => {
   const body = { E: +$('#fE').value, mu: +$('#fMu').value, kc_ratio: +$('#fKc').value, perturb: +$('#fPert').value, outer: +$('#fOuter').value, maxiter: +$('#fMax').value,
-    curl: +$('#fCurl').value, tension_cN: +$('#fTen').value, creep_tau_h: +$('#fTau').value, hours: +$('#fHours').value,
+    curl: +$('#fCurl').value, curl_aniso: $('#fAniso').checked, ref_scale: +$('#fRef').value, tension_cN: +$('#fTen').value, creep_tau_h: +$('#fTau').value, hours: +$('#fHours').value,
     shell: $('#fShell').checked, shell_w: +$('#fShellW').value };
   $('#bSim').disabled = true;
   try {
@@ -310,7 +325,7 @@ async function pollState() {
   try {
     const r = await fetch('/api/results/' + id + '/state'); if (!r.ok) return;
     const s = await r.json(); if (current !== id) return;
-    const was = prevState; st = s; prevState = s.state;
+    const was = prevState; st = s; prevState = s.state; timer = { base: s.elapsed, at: performance.now(), running: s.running }; tickTimer(); if (s.running || $('#logBox').open) loadLog();
     $('#info').textContent = infoText(); updateSimButtons();
     if (was && (was === 'relaxing' || was === 'released' || was === 'none') && !s.running && s.has_relaxed) {
       await poll();
@@ -334,5 +349,30 @@ $('#bBase').onclick = () => { variant = 'baseline'; if (current) show(current, t
 $('#bRelax').onclick = () => { variant = 'relaxed'; if (current) show(current, true); };
 $('#bReset').onclick = () => { if (shown) fit(shown); };
 fetch('/api/config').then(r => r.json()).then(c => { CFG = c; setupSim(); }).catch(() => {});
-setInterval(poll, 5000); setInterval(pollState, 2000); poll();
+const fmtDur = s => { s = Math.max(0, Math.round(s)); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); };
+let timer = null, logRuns = [], logSel = -1;
+function tickTimer() {
+  const el = $('#simTimer'); if (!timer || timer.base == null) { el.textContent = ''; return; }
+  el.textContent = timer.running ? 'running for ' + fmtDur(timer.base + (performance.now() - timer.at) / 1000) : 'last run took ' + fmtDur(timer.base);
+}
+async function loadLog() {
+  if (!current) return; const id = current;
+  try { const r = await fetch('/api/results/' + id + '/log'); if (!r.ok) return; const runs = await r.json(); if (current !== id) return; logRuns = runs; renderLog(); } catch (e) {}
+}
+function renderLog() {
+  const body = $('#logBody'), head = $('#logHead'); body.textContent = ''; head.textContent = '';
+  if (!logRuns.length) { head.textContent = 'No simulation runs saved for this result.'; return; }
+  if (logSel < 0 || logSel >= logRuns.length) logSel = logRuns.length - 1;
+  const run = logRuns[logSel], sel = document.createElement('select');
+  logRuns.forEach((r, i) => { const o = document.createElement('option'); o.value = i; o.textContent = 'run ' + (i + 1) + ' | ' + r.started + ' | ' + r.status + (r.seconds != null ? ' | ' + fmtDur(r.seconds) : ''); if (i === logSel) o.selected = true; sel.append(o); });
+  sel.onchange = () => { logSel = +sel.value; renderLog(); }; head.append(sel);
+  const pt = document.createElement('div'); pt.textContent = Object.entries(run.params || {}).map(([k, v]) => k + '=' + v).join('  '); head.append(pt);
+  const tb = document.createElement('table'); tb.style.cssText = 'font-size:.78rem;border-collapse:collapse;width:100%';
+  const cols = [['round', 'round', 0], ['t', 't (s)', 1], ['E', 'energy', 5], ['stretch', 'stretch', 3], ['bend', 'bend', 5], ['contact', 'contact', 3], ['shell', 'shell', 3], ['max_dl0', 'max dl0', -2], ['min_dist_over_2R', 'min dist (x2R)', 4]];
+  const tr = document.createElement('tr'); cols.forEach(c => { const th = document.createElement('th'); th.textContent = c[1]; th.style.cssText = 'text-align:right;padding:.1rem .5rem;border-bottom:1px solid #8886'; tr.append(th); }); tb.append(tr);
+  const fm = (v, d) => v == null ? '' : (d === -2 ? (+v).toExponential(2) : d === 0 ? String(v) : d === 1 ? (+v).toFixed(1) : (+v).toPrecision(d));
+  for (const rd of (run.rounds || [])) { const r2 = document.createElement('tr'); cols.forEach(c => { const td = document.createElement('td'); td.textContent = fm(rd[c[0]], c[2]); td.style.cssText = 'text-align:right;padding:.05rem .5rem'; r2.append(td); }); tb.append(r2); }
+  body.append(tb);
+}
+setInterval(poll, 5000); setInterval(pollState, 2000); setInterval(tickTimer, 500); poll();
 </script></body></html>

@@ -306,7 +306,7 @@ def sweep_tube(curve, R, sides):
     F = np.vstack([F, np.c_[jn, js, np.full(sides, c0)], np.c_[last+js, last+jn, np.full(sides, c1)]])
     return V, N, F
 
-def write_obj(path, curves_tube, R, sides, header):
+def write_obj(path, curves_tube, R, sides, header, vn_max=200000):
     """curves_tube: list of axis polylines. Writes one OBJ (one object per course)."""
     Vs, Ns, Fs, off = [], [], [], 0
     for k, cv in enumerate(curves_tube):
@@ -316,8 +316,10 @@ def write_obj(path, curves_tube, R, sides, header):
     with open(path, 'w') as f:
         f.write('# %s\n' % header)
         np.savetxt(f, V, fmt='v %.5f %.5f %.5f')
-        np.savetxt(f, N, fmt='vn %.4f %.4f %.4f')
+        if len(V) <= vn_max: np.savetxt(f, N, fmt='vn %.4f %.4f %.4f')        # normals only for small files: the web viewer ignores them and they are ~1/4 of a large OBJ
         np.savetxt(f, F, fmt='f %d %d %d')                                  # plain indices: the web viewer's parseOBJ reads 'f a b c' only
+    with open(os.path.splitext(path)[0] + '.bin', 'wb') as o:                 # binary mesh for the web viewer: 'KMSH', version 1, nv, nf (uint32 LE), float32 xyz, uint32 triangle indices (0-based)
+        o.write(b'KMSH'); np.array([1, len(V), len(F)], dtype='<u4').tofile(o); V.astype('<f4').tofile(o); (F - 1).astype('<u4').tofile(o)
     return len(V), len(F)
 
 
@@ -339,7 +341,8 @@ def main():
     a.add_argument('--id', default=None, help='result id stored in meta.json (default: timestamp + short hash); independent of --name and of the folder name')
     a.add_argument('--sides', type=int, default=8, help='tube cross-section polygon sides')
     a.add_argument('--tube-per', type=int, default=6, help='tube samples per control-point interval')
-    a.add_argument('--tube-max-verts', type=int, default=400000, help='tube is coarsened, then skipped, above this vertex count')
+    a.add_argument('--tube-max-verts', type=int, default=3000000, help='tube is coarsened, then skipped, above this vertex count')
+    a.add_argument('--obj-normals-max', type=int, default=200000, help='write vn lines to the OBJ only up to this many vertices (the viewer does not use them)')
     a.add_argument('--no-tube', action='store_true')
     g = a.parse_args()
     M0 = [[int(ch) for ch in row.replace(' ', '')] for row in g.matrix.split('/')]
@@ -377,14 +380,14 @@ def main():
         else:
             if (per, sides) != (g.tube_per, g.sides): print('note: tube coarsened to %d samples per interval, %d sides to stay under %d vertices' % (per, sides, g.tube_max_verts))
             tcurves = [catmull_rom(p, per) for p in rows]
-            nv, nf = write_obj(os.path.join(g.out, 'fab_tube.obj'), tcurves, R, sides, 'build_knit.py tube, radius %.6f, %d sides, %d courses' % (R, sides, len(tcurves)))
+            nv, nf = write_obj(os.path.join(g.out, 'fab_tube.obj'), tcurves, R, sides, 'build_knit.py tube, radius %.6f, %d sides, %d courses' % (R, sides, len(tcurves)), g.obj_normals_max)
             tube = dict(file='fab_tube.obj', radius=fnum(R, 6), sides=sides, samples_per_interval=per, vertices=nv, triangles=nf, frames='rotation-minimising (double reflection, Wang et al. 2008)')
             print('wrote %s/fab_tube.obj (%d vertices, %d triangles)' % (g.out, nv, nf))
 
     bad = sorted(c for c in used if not rep[c]['ok'])
     status = 'PASS' if vmin >= 0.97*2*R else ('WARN (slight interpenetration)' if vmin >= 0.80*2*R else 'FAIL (yarns collide)')
     now = datetime.now()
-    name = g.name or ('%s x%d' % ('/'.join(''.join(map(str, r)) for r in M0), g.tiles))
+    name = g.name or ('%s | %d x %d units' % (('Ne %g | CPI %g | WPI %g' % (g.ne, g.cpi, g.wpi)) if physical else ('W %.3g | C %.3g (R-units)' % (W, C)), g.tiles, g.tiles))
     rid = g.id or (now.strftime('%Y%m%d-%H%M%S') + '-' + hashlib.sha1(json.dumps([M0, g.tiles, W, C, R, g.labels, now.isoformat()]).encode()).hexdigest()[:4])
     units = 'mm' if physical else 'R-units (R = %g, dimensionless)' % R
     structure = dict(units=units, W=fnum(W, 6), C=fnum(C, 6), R=fnum(R, 6), W_over_R=fnum(W/R), C_over_R=fnum(C/R), yarn_diameter=fnum(2*R, 6),
@@ -412,7 +415,7 @@ def main():
                 matrix=M0, tiles=g.tiles, courses=len(rows), stitches_per_course=len(T[0]), W=W, C=C, R=R, labels=g.labels, cells_used=sorted(used),
                 cells_not_converged_used=bad, min_axis_distance=float(vmin), min_axis_distance_over_2R=float(vmin/(2*R)),
                 structure=structure, unit_cells=unit_cells, verification=dict(status=status.split()[0], min_axis_distance=float(vmin), over_2R=float(vmin/(2*R)), sample='3x3 repeat'),
-                tube=tube, files=['fab_axis.csv', 'fab_nodes.csv'] + (['fab_tube.obj'] if tube else []), info=info)
+                tube=tube, files=['fab_axis.csv', 'fab_nodes.csv'] + (['fab_tube.obj', 'fab_tube.bin'] if tube else []), info=info)
     if physical: meta.update(ne=g.ne, cpi=g.cpi, wpi=g.wpi, d=2*R)
     tmp = os.path.join(g.out, 'meta.json.tmp')
     json.dump(meta, open(tmp, 'w'), indent=1); os.replace(tmp, os.path.join(g.out, 'meta.json'))     # written last, atomically
