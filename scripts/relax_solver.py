@@ -33,7 +33,8 @@ from scipy.optimize import minimize
 from scipy.spatial import cKDTree
 jax.config.update('jax_enable_x64', True)
 
-def section(E, R): return E*np.pi*R**2, E*np.pi*R**4/4.0                      # EA, EI
+STRETCH_SCALE = 1.0      # multiplies EA only (axial stiffness) so stretch and bending stiffness can be chosen independently, as Sperl et al. 2022 Sec 6.2 do. 1 = solid rod.
+def section(E, R): return STRETCH_SCALE*E*np.pi*R**2, E*np.pi*R**4/4.0                      # EA, EI
 
 def _energy(x, l0, seg, tri, lbar, kb0, pairs, pmask, EA, EI, kc, R2, cell, tgt, cnt, ks):
     X = x.reshape(-1, 3)

@@ -108,6 +108,11 @@ class SimBody(BaseModel):
     creep_tau_h: float = Field(0.0, ge=0)
     hours: float = Field(0.0, ge=0)
     shell: bool = False
+    shell_kappa: str = Field('guess', pattern='^(guess|tile)$', description='shell curvature: fixed guess (Niu et al.) or from the periodic yarn tile')
+    kappa_scale: float = Field(1.0, ge=-5, le=5, description='calibration factor on the shell curvature (negative flips the fold)')
+    tile_ref: float = Field(0.5, ge=0, le=1, description='tile initial rest-curvature scale (unsourced)')
+    stretch_scale: float = Field(1.0, gt=0, le=1, description='multiplies EA only; below 1 lets rest length migrate more')
+    seed_only: bool = False
     shell_w: float = Field(1.0, ge=0, le=1000, description="hold on the shell fold, x EA/R per vertex (0 = start from the fold only)")
 
 class TileBody(BaseModel):
@@ -137,6 +142,8 @@ def simulate(rid: str, b: SimBody):
         raise HTTPException(422, "creep needs a simulated duration (hours) above 0")
     if b.tension_cN > 0 and (meta.get("structure") or {}).get("units") != "mm":
         raise HTTPException(422, "feeder tension needs a result built in mm; set it to 0 for R-unit results")
+    if b.seed_only and not b.shell:
+        raise HTTPException(422, "shell-only needs the shell option ticked")
     if b.shell and not meta.get("matrix"):
         raise HTTPException(422, "the shell option needs the stitch matrix in meta.json (result built by an older pipeline)")
     kc = b.kc_ratio * b.E * math.pi * R          # kc = ratio * EA / R, with EA = E pi R^2
@@ -146,7 +153,9 @@ def simulate(rid: str, b: SimBody):
            "--k-contact", repr(kc), "--perturb", repr(b.perturb), "--outer", str(b.outer), "--maxiter", str(b.maxiter),
            "--curl", repr(b.curl), "--tension", repr(b.tension_cN), "--creep-tau", repr(b.creep_tau_h), "--hours", repr(b.hours)] + (["--curl-aniso"] if b.curl_aniso else []) + ["--ref-scale", repr(b.ref_scale)]
     if b.shell:
-        cmd += ["--shell", "--shell-w", repr(b.shell_w)]
+        cmd += ["--shell", "--shell-w", repr(b.shell_w), "--shell-kappa", b.shell_kappa, "--kappa-scale", repr(b.kappa_scale), "--tile-ref", repr(b.tile_ref)]
+        if b.seed_only: cmd += ["--seed-only"]
+    cmd += ["--stretch-scale", repr(b.stretch_scale)]
     log = open(d / "job.log", "w")
     (d / "job.json").write_text(json.dumps({"started": time.time()}))          # before the job starts, so it can always read it
     JOBS[rid] = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT, cwd=str(SCRIPTS), start_new_session=True)

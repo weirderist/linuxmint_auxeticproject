@@ -187,6 +187,17 @@ def run_tile(M, W, C, R, E=3700.0, kc_ratio=30.0, ref_scale=1.0, ds_over_R=1.0, 
         out['poisson_x'] = poisson_curve(t, strains, 'x', maxiter, log); save and save(out); out['poisson_y'] = poisson_curve(t, strains, 'y', maxiter, log)
     out['seconds'] = time.time() - t0; return out, t
 
+def stitch_kappas(W, C, R, E, kc_ratio=30.0, ref_scale=0.5, maxiter=2500, rounds=3, cache=None, log=lambda m: print(m, flush=True)):
+    """Natural curvatures (1/length, > 0 toward +z) of a digit-1 stitch, from the periodic tile of an all-digit-1 fabric: returns (kx, ky). A digit-2 stitch gets the negatives
+    (front/back mirror symmetry of the model; checked on a purl tile: kx -0.2242 vs knit +0.2239, ky +0.211 vs -0.213 at ref_scale 0.5). Cached in tile_kappa_cache.json.
+    kappa* scales with ref_scale, which is UNSOURCED: calibrate with the shell curvature scale against a measured fold."""
+    key = '%.5g|%.5g|%.5g|%.6g|%.5g|%.4g|%d|%d' % (W, C, R, E, kc_ratio, ref_scale, maxiter, rounds); cache = cache or os.path.join(os.path.dirname(os.path.abspath(bk.__file__)), 'cell_cache')
+    cp = os.path.join(cache, 'tile_kappa_cache.json'); db = json.load(open(cp)) if os.path.exists(cp) else {}
+    if key in db: log('tile curvature from cache: kx %.4g ky %.4g' % tuple(db[key])); return tuple(db[key])
+    log('tile analysis for the shell curvature (all digit-1 tile, ref_scale %g): a few minutes, cached afterwards' % ref_scale)
+    out, t = run_tile([[1, 1], [1, 1]], W, C, R, E, kc_ratio, ref_scale, 1.0, rounds, 0.0, (), 0.05, maxiter, 0.02, 0, ('rest', 'curl'), cache, True, log=log)
+    kx, ky = [c['kappa_free'] for c in out['curl']]; db[key] = [kx, ky]; os.makedirs(cache, exist_ok=True); json.dump(db, open(cp, 'w'), indent=1); return kx, ky
+
 def main():
     a = argparse.ArgumentParser(); a.add_argument('--folder', help='web UI result folder: matrix, W, C, R are read from its meta.json and the outputs are written into it'); a.add_argument('--max-verts', type=int, default=3000)
     a.add_argument('--matrix', help='rows separated by /, digits 1 and 2, first row = bottom course (one repeat = one tile)')
