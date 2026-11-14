@@ -64,6 +64,25 @@ button:disabled{opacity:.45}
  <p class="note" id="eNote"></p>
  <p class="note">The solver runs only when Simulate is pressed. Contact stiffness is a numerical choice (tested on one fabric); the yarn is treated as a solid elastic rod, so its bending stiffness is an upper estimate for a twisted staple yarn.</p>
 </details>
+<details id="tileBox"><summary>Tile analysis (periodic yarn tile: natural curvature and Poisson's ratio)</summary>
+ <div class="grid">
+  <label><span>Yarn modulus E (MPa, mm results)</span><input id="tE" type="number" step="any" min="0"></label>
+  <label><span>Contact stiffness (x EA/R)</span><input id="tKc" type="number" step="any" min="0"></label>
+  <label><span>Initial rest curvature scale (0 straight, 1 knitted shape)</span><input id="tRef" type="number" step="any" min="0" max="1"></label>
+  <label><span>Rest-shape reset fraction (0 = none, 1 = full; Sperl et al. 7.2)</span><input id="tReset" type="number" step="any" min="0" max="1"></label>
+  <label><span>Reset rounds</span><input id="tRounds" type="number" step="1" min="1" max="12"></label>
+  <label><span>L-BFGS iterations per solve</span><input id="tMax" type="number" step="1" min="50" max="6000"></label>
+  <label><span>Out-of-plane perturbation (x R)</span><input id="tPert" type="number" step="any" min="0" max="0.2"></label>
+  <label><span>Bending angle for stiffness (rad across the tile)</span><input id="tDelta" type="number" step="any" min="0.001" max="0.5"></label>
+  <label><span>Stretch steps (comma separated)</span><input id="tStrain" type="text"></label>
+  <label class="row"><input id="tRest" type="checkbox" checked><span>Rest shape</span></label>
+  <label class="row"><input id="tCurl" type="checkbox" checked><span>Natural curvature</span></label>
+  <label class="row"><input id="tPois" type="checkbox" checked><span>Poisson ratio curve</span></label>
+ </div>
+ <div><button id="bTile" disabled>Run tile analysis</button> <button id="bTileCancel" disabled>Cancel</button></div>
+ <div id="tileState">Select a result.</div><div id="tileBody" style="overflow:auto"></div><pre id="tileLog" class="note" style="white-space:pre-wrap"></pre>
+ <p class="note">One tile = one repeat of the result's stitch matrix. Run only one job at a time. Rest-shape reset follows Sperl et al. (2022) Sec. 7.2; the initial rest curvature scale and reset fraction are modelling choices, not sourced. Large matrices are refused (vertex limit).</p>
+</details>
 <details id="logBox"><summary>Simulation log (every round, saved in meta.json)</summary><div id="logHead" class="note"></div><div id="logBody" style="overflow:auto"></div></details>
 <details id="setBox"><summary>View settings</summary>
  <div class="grid">
@@ -264,7 +283,7 @@ async function show(id, refit) {
   const changed = id !== current; current = id; if (changed) { st = null; timer = null; logRuns = []; logSel = -1; }
   setVariantButtons(); const m = mode, v = variant;
   document.querySelectorAll('.item').forEach(e => e.classList.toggle('sel', e.dataset.id === id));
-  $('#info').textContent = infoText(); setupSim(); pollState(); loadLog();
+  $('#info').textContent = infoText(); setupSim(); setupTile(); pollState(); loadLog();
   try {
     const obj = await entry(id)[m];
     if (current !== id || mode !== m || variant !== v) return;          // user already moved on
@@ -348,6 +367,49 @@ $('#bAxis').onclick = () => { mode = 'axis'; if (current) show(current, false); 
 $('#bBase').onclick = () => { variant = 'baseline'; if (current) show(current, true); };
 $('#bRelax').onclick = () => { variant = 'relaxed'; if (current) show(current, true); };
 $('#bReset').onclick = () => { if (shown) fit(shown); };
+
+// ---- tile panel
+let tileSt = null;
+function setupTile() {
+  const rec = recOf(current); if (!rec || !CFG) return;
+  if ($('#tileBox').dataset.for !== rec.id) { $('#tileBox').dataset.for = rec.id; $('#tE').value = rec.units === 'mm' ? CFG.yarn_E_MPa : 1; $('#tKc').value = CFG.kc_ratio; $('#tRef').value = 0.5; $('#tReset').value = 0; $('#tRounds').value = 3; $('#tMax').value = 1500; $('#tPert').value = 0.02; $('#tDelta').value = 0.05; $('#tStrain').value = '0.05,0.1,0.2'; tileSt = null; }
+  pollTile();
+}
+function tileTable(rows, cols) {
+  const tb = document.createElement('table'); tb.style.cssText = 'font-size:.78rem;border-collapse:collapse;width:100%';
+  const h = document.createElement('tr'); cols.forEach(c => { const th = document.createElement('th'); th.textContent = c[1]; th.style.cssText = 'text-align:right;padding:.1rem .5rem;border-bottom:1px solid #8886'; h.append(th); }); tb.append(h);
+  rows.forEach(r => { const tr = document.createElement('tr'); cols.forEach(c => { const td = document.createElement('td'); const v = r[c[0]]; td.textContent = typeof v === 'number' ? v.toPrecision(4) : (v == null ? '' : v); td.style.cssText = 'text-align:right;padding:.1rem .5rem'; tr.append(td); }); tb.append(tr); });
+  return tb;
+}
+function renderTile() {
+  const s = tileSt, body = $('#tileBody'), el = $('#tileState'); body.textContent = '';
+  const busy = s && s.busy, mine = s && s.running; $('#bTile').disabled = !current || !!busy || !$('#tE').value; $('#bTileCancel').disabled = !mine;
+  if (!s) { el.textContent = current ? '' : 'Select a result.'; return; }
+  const txt = { running: 'running', done: 'finished', interrupted: 'interrupted', failed: 'failed (see log)' };
+  el.textContent = 'Tile analysis: ' + (s.status ? (txt[s.status] || s.status) : (mine ? 'starting (compiling the solver)\u2026' : 'not run')) + (s.elapsed != null ? '  (' + fmtDur(s.elapsed) + ')' : '') + (busy && !mine ? '  \u2014 another job is running' : '');
+  $('#tileLog').textContent = s.running || s.status === 'failed' || s.status === 'interrupted' ? s.log : '';
+  const r = s.result; if (!r) return;
+  const d = document.createElement('div'); d.className = 'note'; d.textContent = 'tile ' + r.Lx.toPrecision(4) + ' x ' + r.Ly.toPrecision(4) + ', ' + r.n_vertices + ' vertices, periodicity residual ' + (r.periodicity_residual / r.R).toPrecision(2) + ' R'; body.append(d);
+  if (r.rest) { const t = document.createElement('div'); t.className = 'note'; t.textContent = 'Rest-shape rounds'; body.append(t); body.append(tileTable(r.rest, [['round', 'round'], ['E', 'energy'], ['sx', 'flat stress x'], ['sy', 'flat stress y'], ['max_dl0_rel', 'max dl0 rel']])); }
+  if (r.curl) { const t = document.createElement('div'); t.className = 'note'; t.textContent = 'Natural curvature (kappa > 0 bends toward +z; mode x = curvature along the course direction, y = along the wale direction). Quadratic value is only valid if the stiffness is positive.'; body.append(t);
+    body.append(tileTable(r.curl.map(c => ({ mode: c.mode, kf: c.kappa_free, kfR: c.kappa_free_times_R, kq: c.kappa_quadratic, k: c.bending_stiffness_per_area, m: c.flat_moment_per_area, Ef: c.E_flat, Efr: c.E_free })), [['mode', 'bend axis'], ['kf', 'kappa* free (1/len)'], ['kfR', 'kappa* x R'], ['kq', 'kappa* quadratic'], ['k', 'stiffness/area'], ['m', 'flat moment/area'], ['Ef', 'E flat'], ['Efr', 'E at kappa*']])); }
+  [['poisson_x', 'Stretch along x (courses)'], ['poisson_y', 'Stretch along y (wales)']].forEach(([k, n]) => { if (r[k]) { const t = document.createElement('div'); t.className = 'note'; t.textContent = n + ': nu = -orthogonal strain / stretch'; body.append(t); body.append(tileTable(r[k], [['strain', 'stretch'], ['eps_perp', 'orthogonal strain'], ['nu', 'nu'], ['E', 'energy']])); } });
+}
+async function pollTile() {
+  if (!current) return; const id = current;
+  try { const r = await fetch('/api/results/' + id + '/tile'); if (!r.ok) return; const s = await r.json(); if (current !== id) return; tileSt = s; renderTile(); } catch (e) {}
+}
+setInterval(() => { if (current && $('#tileBox').open && (!tileSt || tileSt.running || tileSt.busy)) pollTile(); }, 2500);
+$('#tileBox').addEventListener('toggle', () => { if ($('#tileBox').open) setupTile(); });
+$('#tE').oninput = renderTile;
+$('#bTile').onclick = async () => {
+  const doL = [['tRest', 'rest'], ['tCurl', 'curl'], ['tPois', 'poisson']].filter(x => $('#' + x[0]).checked).map(x => x[1]); if (!doL.length) { toast('Tick at least one analysis.'); return; }
+  const body = { E: +$('#tE').value, kc_ratio: +$('#tKc').value, ref_scale: +$('#tRef').value, reset: +$('#tReset').value, rounds: +$('#tRounds').value, maxiter: +$('#tMax').value, perturb: +$('#tPert').value, delta: +$('#tDelta').value, strain: $('#tStrain').value.replace(/\s/g, ''), do: doL.join(',') };
+  $('#bTile').disabled = true;
+  try { const r = await fetch('/api/results/' + current + '/tile', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); if (!r.ok) { const e = await r.json().catch(() => ({})); toast('Could not start: ' + (typeof e.detail === 'string' ? e.detail : JSON.stringify(e.detail || r.status))); } } catch (e) { toast('Could not start: ' + e); }
+  pollTile();
+};
+$('#bTileCancel').onclick = async () => { $('#bTileCancel').disabled = true; await fetch('/api/results/' + current + '/cancel', { method: 'POST' }).catch(() => {}); pollTile(); };
 fetch('/api/config').then(r => r.json()).then(c => { CFG = c; setupSim(); }).catch(() => {});
 const fmtDur = s => { s = Math.max(0, Math.round(s)); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); };
 let timer = null, logRuns = [], logSel = -1;

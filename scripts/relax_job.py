@@ -5,7 +5,7 @@ Units follow the folder: mm if built with --ne --cpi --wpi (E in N/mm^2 = MPa, k
 Writes into the folder: state.json (progress, atomic, every outer iteration), relaxed_axis.csv (course,x,y,z), relaxed_tube.obj. With --shell also shell.npz. Appends one entry per run (with every round) to the 'simulations' list in meta.json.
 Shell option (--shell): first the thin-shell model (shell_sim.py, Niu et al. 2025) is run on the stitch matrix to get the folded shape. The yarn is then moved onto that shape
 (each vertex keeps its offset from the sheet along the sheet normal) and the loops are relaxed with the mean position of every stitch-sized cell held toward the shell shape,
-with stiffness shell-w x EA/R per vertex (0 = start from the fold but do not hold it). Use --ref-scale 1 with it.
+with stiffness shell-w x EA/R per vertex (0 = start from the fold but do not hold it). Use --ref-scale 1 with it. By default the stress-free curvature kb0 is also rotated into the local frame of the shell (--no-shell-frame restores the fixed global-frame kb0).
 """
 import argparse, json, math, os, sys, time
 import numpy as np
@@ -45,6 +45,29 @@ def shell_targets(sh, U, N, P):
     n = bil(N); n /= np.linalg.norm(n, axis=1, keepdims=True) + 1e-30
     return np.c_[P[:, :2], np.zeros(len(P))] + bil(U) + P[:, 2:3]*n
 
+def shell_frames(sh):
+    """Orthonormal frame of the folded sheet at every shell grid vertex: (t1, t2, N) with t1 along the sheet x direction (course direction), N the +z-side normal, t2 = N x t1.
+    Flat sheet gives the identity frame. Same normal construction as shell_field."""
+    Xg = sh['X']; t1 = np.gradient(Xg, axis=1); N = np.cross(np.gradient(Xg, axis=1), np.gradient(Xg, axis=0))
+    N /= np.linalg.norm(N, axis=-1, keepdims=True) + 1e-30; N *= np.where(N[..., 2:3] < 0, -1.0, 1.0)
+    t1 = t1 - np.sum(t1*N, -1, keepdims=True)*N; t1 /= np.linalg.norm(t1, axis=-1, keepdims=True) + 1e-30
+    return t1, np.cross(N, t1), N
+
+def rotate_kb0(sim, sh, P):
+    """Rotate the stress-free curvature vectors kb0 from the flat-sheet frame into the local frame of the folded sheet, as a normal is carried by the surface
+    transform (Sperl, Narain, Wojtan 2021 supplement, S2.1: directors move with the surface deformation J = [F, n]; here the frame is the rotation part of J,
+    which is an adaptation of that rendering step to curvature vectors, not their result). Without it kb0 stays a fixed vector in the global frame, which is only
+    valid for small tilts. P: baseline (flat) positions of all vertices, stacked by yarn. Returns the largest surface tilt in degrees."""
+    t1, t2, N = shell_frames(sh); W, C, sub = sh['W'], sh['C'], sh['sub']; gy, gx, _ = t1.shape
+    u = np.clip(P[:, 0]/(W/sub), 0, gx - 1); v = np.clip(P[:, 1]/(C/sub), 0, gy - 1)
+    i0 = np.minimum(u.astype(int), gx - 2); j0 = np.minimum(v.astype(int), gy - 2); a = (u - i0)[:, None]; b = (v - j0)[:, None]
+    bil = lambda F: F[j0, i0]*(1-a)*(1-b) + F[j0, i0+1]*a*(1-b) + F[j0+1, i0]*(1-a)*b + F[j0+1, i0+1]*a*b
+    e1 = bil(t1); e3 = bil(N); e3 /= np.linalg.norm(e3, axis=1, keepdims=True) + 1e-30
+    e1 -= np.sum(e1*e3, 1, keepdims=True)*e3; e1 /= np.linalg.norm(e1, axis=1, keepdims=True) + 1e-30; e2 = np.cross(e3, e1)
+    off = np.r_[0, np.cumsum([len(y.X) for y in sim.yarns])]; ix = np.concatenate([np.arange(o + 1, o + len(y.X) - 1) for y, o in zip(sim.yarns, off)])    # interior vertices, same order as kb0
+    k = sim.kb0; sim.kb0 = k[:, 0:1]*e1[ix] + k[:, 1:2]*e2[ix] + k[:, 2:3]*e3[ix]
+    return float(np.degrees(np.arccos(np.clip(e3[:, 2], -1, 1))).max())
+
 def shell_cells(P, sh):
     """Stitch-sized cell (W x C, from the baseline x, y) of every vertex: (cell index per vertex, number of cells)."""
     ci = np.clip((P[:, 0]//sh['W']).astype(int), 0, sh['nx'] - 1); cj = np.clip((P[:, 1]//sh['C']).astype(int), 0, sh['ny'] - 1)
@@ -65,6 +88,7 @@ def main():
     a.add_argument('--creep-tau', type=float, default=0.0, help='creep relaxation time in hours (0 = no creep)'); a.add_argument('--hours', type=float, default=0.0, help='simulated duration in hours (with creep)')
     a.add_argument('--shell', action='store_true', help='run the shell model first and relax the loops toward its folded shape')
     a.add_argument('--shell-w', type=float, default=1.0, help='hold strength on each stitch cell, x EA/R per vertex (0 = start from the fold only)')
+    a.add_argument('--no-shell-frame', action='store_true', help='keep kb0 as fixed vectors in the global frame (previous behaviour) instead of rotating it into the local frame of the shell')
     a.add_argument('--shell-sub', type=int, default=2, help='shell mesh cells per stitch side'); a.add_argument('--shell-steps', type=int, default=15); a.add_argument('--shell-iter', type=int, default=400)
     g = a.parse_args()
     meta = json.load(open(os.path.join(g.folder, 'meta.json')))
@@ -90,6 +114,9 @@ def main():
         cell, nc = shell_cells(P0, shell); cnt = np.bincount(cell, minlength=nc).astype(float)
         tgt = np.c_[[np.bincount(cell, weights=T[:, k], minlength=nc) for k in range(3)]].T/cnt[:, None]
         sim.shell = dict(cell=cell, tgt=tgt, cnt=cnt, ks=g.shell_w*EA/sim.R)
+        if not g.no_shell_frame:
+            kn0 = float(np.linalg.norm(sim.kb0)); ang = rotate_kb0(sim, shell, P0)
+            print('shell frame: kb0 rotated into the local frame of the shell (largest surface tilt %.1f deg, |kb0| %.6g -> %.6g)' % (ang, kn0, float(np.linalg.norm(sim.kb0))), flush=True)
         o = 0
         for y in sim.yarns: y.X[:] = T[o:o+len(y.X)]; o += len(y.X)                      # start the loops on the folded shape
         es = sv.energy_parts(sim, g.k_contact, g.E)
@@ -104,7 +131,7 @@ def main():
     def meta_update(fn):
         m = json.load(open(mp)); fn(m); json.dump(m, open(mp + '.tmp', 'w'), indent=1); os.replace(mp + '.tmp', mp)
     run_entry = dict(started=time.strftime('%Y-%m-%dT%H:%M:%S'), status='running', finished=None, seconds=None,
-                     params=dict(E=g.E, mu=g.mu, k_contact=g.k_contact, curl=g.curl, curl_aniso=bool(g.curl_aniso), ref_scale=g.ref_scale, shell=bool(g.shell), shell_w=g.shell_w, tension_cN=g.tension, creep_tau_h=g.creep_tau, hours=g.hours, outer=g.outer, maxiter=g.maxiter, perturb=g.perturb, seed=g.seed),
+                     params=dict(E=g.E, mu=g.mu, k_contact=g.k_contact, curl=g.curl, curl_aniso=bool(g.curl_aniso), ref_scale=g.ref_scale, shell=bool(g.shell), shell_w=g.shell_w, shell_frame=bool(g.shell and not g.no_shell_frame), tension_cN=g.tension, creep_tau_h=g.creep_tau, hours=g.hours, outer=g.outer, maxiter=g.maxiter, perturb=g.perturb, seed=g.seed),
                      start=dict(e0, min_dist_over_2R=d0/(2*sim.R)), rounds=[])
     meta_update(lambda m: m.__setitem__('simulations', (m.get('simulations') or []) + [run_entry]))
     def on_round(k, E, dmax):

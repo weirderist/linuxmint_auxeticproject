@@ -110,6 +110,15 @@ class SimBody(BaseModel):
     shell: bool = False
     shell_w: float = Field(1.0, ge=0, le=1000, description="hold on the shell fold, x EA/R per vertex (0 = start from the fold only)")
 
+class TileBody(BaseModel):
+    E: float = Field(gt=0); kc_ratio: float = Field(30.0, gt=0, le=10000)
+    ref_scale: float = Field(0.5, ge=0, le=1, description="initial rest curvature = ref_scale x baseline loop curvature")
+    reset: float = Field(0.0, ge=0, le=1, description="fraction of the way the rest shape moves to the current state per reset (Sperl et al. 7.2)")
+    rounds: int = Field(3, ge=1, le=12); maxiter: int = Field(1500, ge=50, le=6000)
+    perturb: float = Field(0.02, ge=0, le=0.2); delta: float = Field(0.05, gt=0, le=0.5)
+    strain: str = Field("0.05,0.1,0.2", pattern=r"^[0-9.]+(,[0-9.]+){0,7}$")
+    do: str = Field("rest,curl,poisson", pattern=r"^(rest|curl|poisson)(,(rest|curl|poisson))*$")
+
 def _folder(rid):
     if not ID_RE.match(rid) or not (RESULTS / rid / "meta.json").exists():
         raise HTTPException(404, "unknown result")
@@ -142,6 +151,46 @@ def simulate(rid: str, b: SimBody):
     (d / "job.json").write_text(json.dumps({"started": time.time()}))          # before the job starts, so it can always read it
     JOBS[rid] = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT, cwd=str(SCRIPTS), start_new_session=True)
     return {"started": rid, "k_contact": kc}
+
+def _tile_alive(rid):
+    p = JOBS.get(rid + "#tile")
+    return p is not None and p.poll() is None
+
+@app.post("/api/results/{rid}/tile")
+def tile_start(rid: str, b: TileBody):
+    d = _folder(rid)
+    if _any_running():
+        raise HTTPException(409, "a job is already running")
+    meta = _read_json(d / "meta.json") or {}
+    if not (meta.get("matrix") and meta.get("W") and meta.get("C") and meta.get("R")):
+        raise HTTPException(422, "meta.json has no matrix, W, C and R (result built by an older pipeline)")
+    for f in ("tile_result.json", "tile_axis.csv", "tile_state.npz", "tile.log"):
+        (d / f).unlink(missing_ok=True)
+    cmd = [sys.executable, str(SCRIPTS / "tile_sim.py"), "--folder", str(d), "--E", repr(b.E), "--kc-ratio", repr(b.kc_ratio), "--ref-scale", repr(b.ref_scale),
+           "--reset", repr(b.reset), "--rounds", str(b.rounds), "--maxiter", str(b.maxiter), "--perturb", repr(b.perturb), "--delta", repr(b.delta),
+           "--strain", b.strain, "--do", b.do]
+    log = open(d / "tile.log", "w")
+    (d / "tile_job.json").write_text(json.dumps({"started": time.time()}))
+    JOBS[rid + "#tile"] = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT, cwd=str(SCRIPTS), start_new_session=True)
+    return {"started": rid}
+
+@app.get("/api/results/{rid}/tile")
+def tile_state(rid: str):
+    d = _folder(rid)
+    res = _read_json(d / "tile_result.json")
+    jj = _read_json(d / "tile_job.json") or {}
+    alive = _tile_alive(rid)
+    try:
+        log = "\n".join((d / "tile.log").read_text().splitlines()[-14:])
+    except Exception:
+        log = ""
+    status = (res or {}).get("status")
+    if status == "running" and not alive:
+        status = "interrupted"
+    if res is None and not alive and (d / "tile_job.json").exists():
+        status = "failed"                    # the job ended before writing anything: the log tail says why
+    elapsed = (res or {}).get("seconds") if not alive else ((time.time() - jj["started"]) if jj.get("started") else None)
+    return {"running": alive, "busy": _any_running(), "status": status, "elapsed": elapsed, "log": log, "result": res}
 
 @app.get("/api/results/{rid}/state")
 def state(rid: str):
@@ -198,7 +247,15 @@ def cancel(rid: str):
     d = _folder(rid)
     p = JOBS.get(rid)
     if p is None or p.poll() is not None:
-        raise HTTPException(409, "no running simulation for this result")
+        p = JOBS.get(rid + "#tile")
+        if p is None or p.poll() is not None:
+            raise HTTPException(409, "no running simulation for this result")
+        try:
+            os.killpg(p.pid, signal.SIGTERM); p.wait(timeout=10)
+        except Exception:
+            try: os.killpg(p.pid, signal.SIGKILL)
+            except Exception: pass
+        return {"cancelled": rid}
     try:
         os.killpg(p.pid, signal.SIGTERM)
         p.wait(timeout=10)
