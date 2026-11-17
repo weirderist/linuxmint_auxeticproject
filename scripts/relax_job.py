@@ -32,7 +32,7 @@ def shell_field(sh):
     Xg, W, C, sub = sh['X'], sh['W'], sh['C'], sh['sub']; gy, gx, _ = Xg.shape
     ii, jj = np.meshgrid(np.arange(gx), np.arange(gy)); flat = np.stack([ii*W/sub, jj*C/sub, np.zeros((gy, gx))], -1)
     N = np.cross(np.gradient(Xg, axis=1), np.gradient(Xg, axis=0)); N /= np.linalg.norm(N, axis=-1, keepdims=True) + 1e-30
-    N *= np.where(N[..., 2:3] < 0, -1.0, 1.0)                                  # keep the normal on the +z side (valid until a fold turns over)
+    if N[..., 2].mean() < 0: N = -N                                            # orientation follows the grid (x-derivative cross y-derivative), so it stays continuous even where the sheet rolls past vertical; only the global sign is fixed
     return Xg - flat, N
 
 def shell_targets(sh, U, N, P):
@@ -49,7 +49,8 @@ def shell_frames(sh):
     """Orthonormal frame of the folded sheet at every shell grid vertex: (t1, t2, N) with t1 along the sheet x direction (course direction), N the +z-side normal, t2 = N x t1.
     Flat sheet gives the identity frame. Same normal construction as shell_field."""
     Xg = sh['X']; t1 = np.gradient(Xg, axis=1); N = np.cross(np.gradient(Xg, axis=1), np.gradient(Xg, axis=0))
-    N /= np.linalg.norm(N, axis=-1, keepdims=True) + 1e-30; N *= np.where(N[..., 2:3] < 0, -1.0, 1.0)
+    N /= np.linalg.norm(N, axis=-1, keepdims=True) + 1e-30
+    if N[..., 2].mean() < 0: N = -N                                            # continuous orientation, as in shell_field
     t1 = t1 - np.sum(t1*N, -1, keepdims=True)*N; t1 /= np.linalg.norm(t1, axis=-1, keepdims=True) + 1e-30
     return t1, np.cross(N, t1), N
 
@@ -90,11 +91,14 @@ def main():
     a.add_argument('--shell-w', type=float, default=1.0, help='hold strength on each stitch cell, x EA/R per vertex (0 = start from the fold only)')
     a.add_argument('--shell-kappa', choices=('guess', 'tile'), default='guess', help='shell curvature: the fixed guess of Niu et al. (kx = -k, ky = +k, k = 1.2/C) or the natural curvature computed by tile_sim.py from the yarn energy')
     a.add_argument('--kappa-scale', type=float, default=1.0, help='calibration factor on the shell curvature (negative flips the fold direction); fit it to a measured fold height'); a.add_argument('--tile-ref', type=float, default=0.5, help='rest-curvature scale used inside the tile analysis (unsourced)')
-    a.add_argument('--seed-only', action='store_true', help='stop after placing the yarn on the shell fold: no yarn relaxation (needs --shell), about a minute'); a.add_argument('--stretch-scale', type=float, default=1.0, help='multiplies the axial stiffness EA only (1 = solid rod); lower values let rest length migrate more')
+    a.add_argument('--seed-only', action='store_true', help='quick mode (needs --shell): place the yarn on the shell fold, then 3 short relaxation rounds (150 iterations each) to clear local overlaps; not an equilibrium');
+    a.add_argument('--bend-scale', type=float, default=1.0, help='multiplies the bending stiffness EI only (1 = solid rod; spun yarns are far softer, see relax_solver.BEND_SCALE)'); a.add_argument('--length-ratio', type=float, default=1.0, help='extra rest-length ratio eta (<1: yarn knitted tighter than the built geometry; Ding et al. 2023, A.7), on top of the feeder-tension ratio')
+    a.add_argument('--straight', type=float, default=0.0, help='straightening factor s >= 0: extra bending energy pulling the yarn straight, s x EI/2 |k|^2 on top of the loop-holding term (0 = off). Yarn length is not changed.')
+    a.add_argument('--stretch-scale', type=float, default=1.0, help='multiplies the axial stiffness EA only (1 = solid rod); lower values let rest length migrate more')
     a.add_argument('--no-shell-frame', action='store_true', help='keep kb0 as fixed vectors in the global frame (previous behaviour) instead of rotating it into the local frame of the shell')
     a.add_argument('--shell-sub', type=int, default=2, help='shell mesh cells per stitch side'); a.add_argument('--shell-steps', type=int, default=15); a.add_argument('--shell-iter', type=int, default=400)
     g = a.parse_args()
-    meta = json.load(open(os.path.join(g.folder, 'meta.json'))); sv.STRETCH_SCALE = g.stretch_scale
+    meta = json.load(open(os.path.join(g.folder, 'meta.json'))); sv.STRETCH_SCALE = g.stretch_scale; sv.BEND_SCALE = g.bend_scale
     EA, EI = sv.section(g.E, meta['R'])
     if g.tension and meta.get('structure', {}).get('units') != 'mm': sys.exit('feeder tension needs a result built in mm (--ne --cpi --wpi)')
     if g.curl and 'matrix' not in meta: sys.exit('curl needs the stitch matrix in meta.json (result built by an older pipeline)')
@@ -108,7 +112,7 @@ def main():
         else: kxy = (-SHELL_KAPPA_C/meta['C'], SHELL_KAPPA_C/meta['C'])
         kxy = (g.kappa_scale*kxy[0], g.kappa_scale*kxy[1])
     shell = run_shell(g, meta, kxy) if g.shell else None
-    ratio = 1.0/(1.0 + 0.01*g.tension/EA)                          # rest length = baseline length / (1 + T/EA), T in N (cN x 0.01)
+    ratio = g.length_ratio/(1.0 + 0.01*g.tension/EA)                          # rest length = baseline length / (1 + T/EA), T in N (cN x 0.01)
     p = rs.Params(mu=g.mu, EA=EA, EI=EI, GJ=0.0, k_contact=g.k_contact, outer_max=g.outer, rest_length_ratio=ratio, curl=g.curl, curl_aniso=g.curl_aniso, ref_scale=g.ref_scale, creep_tau=g.creep_tau, hours=g.hours)       # GJ unused: twist not in the energy (see relax_solver)
     a_creep = 1.0 - math.exp(-(g.hours/g.outer)/g.creep_tau) if g.creep_tau else 0.0
     sim = rs.load(g.folder, p)
@@ -118,6 +122,9 @@ def main():
     colf = (lambda y: np.clip(((y.X[:-1, 0] + y.X[1:, 0])/2//stc['W']).astype(int), 0, ncol-1)) if ncol and 'W' in stc else None
     l0_start = [(colf(y), y.l0.copy()) for y in sim.yarns] if colf else None          # stitch column of each segment at the start, and its rest length
     e0 = sv.energy_parts(sim, g.k_contact, g.E); d0 = sv.min_axis_distance(sim)
+    if g.straight > 0:      # EI/2 |k - k0|^2 + s EI/2 |k|^2 = (1+s) EI/2 |k - k0/(1+s)|^2 + const: the same minimiser as a yarn that is (1+s) times stiffer and has 1/(1+s) of the loop curvature
+        sim.kb0 = sv.baseline_curvature(sim, sv.pack(sim)[2])/(1.0 + g.straight); sim.bend_scale = 1.0 + g.straight
+        print('straightening factor %g: stress-free curvature x %.4g, bending stiffness x %.4g (energies below are not comparable with runs at 0)' % (g.straight, 1/(1+g.straight), 1+g.straight), flush=True)
     if shell:
         U, N = shell_field(shell); P0 = np.vstack([y.X for y in sim.yarns]); T = shell_targets(shell, U, N, P0)
         cell, nc = shell_cells(P0, shell); cnt = np.bincount(cell, minlength=nc).astype(float)
@@ -140,7 +147,7 @@ def main():
     def meta_update(fn):
         m = json.load(open(mp)); fn(m); json.dump(m, open(mp + '.tmp', 'w'), indent=1); os.replace(mp + '.tmp', mp)
     run_entry = dict(started=time.strftime('%Y-%m-%dT%H:%M:%S'), status='running', finished=None, seconds=None,
-                     params=dict(E=g.E, mu=g.mu, k_contact=g.k_contact, curl=g.curl, curl_aniso=bool(g.curl_aniso), ref_scale=g.ref_scale, shell=bool(g.shell), shell_w=g.shell_w, shell_frame=bool(g.shell and not g.no_shell_frame), shell_kappa=g.shell_kappa, kappa_scale=g.kappa_scale, kappa_xy=kxy, stretch_scale=g.stretch_scale, tension_cN=g.tension, creep_tau_h=g.creep_tau, hours=g.hours, outer=g.outer, maxiter=g.maxiter, perturb=g.perturb, seed=g.seed),
+                     params=dict(E=g.E, mu=g.mu, k_contact=g.k_contact, curl=g.curl, curl_aniso=bool(g.curl_aniso), ref_scale=g.ref_scale, shell=bool(g.shell), shell_w=g.shell_w, shell_frame=bool(g.shell and not g.no_shell_frame), shell_kappa=g.shell_kappa, kappa_scale=g.kappa_scale, kappa_xy=kxy, stretch_scale=g.stretch_scale, bend_scale=g.bend_scale, straight=g.straight, length_ratio=g.length_ratio, seed_only=bool(g.seed_only), tension_cN=g.tension, creep_tau_h=g.creep_tau, hours=g.hours, outer=g.outer, maxiter=g.maxiter, perturb=g.perturb, seed=g.seed),
                      start=dict(e0, min_dist_over_2R=d0/(2*sim.R)), rounds=[])
     meta_update(lambda m: m.__setitem__('simulations', (m.get('simulations') or []) + [run_entry]))
     def on_round(k, E, dmax):
@@ -154,7 +161,10 @@ def main():
     energy = lambda s: sv.energy_parts(s, g.k_contact, g.E)['total']
     if g.seed_only:
         if not g.shell: sys.exit('--seed-only needs --shell')
-        sim.to(rs.S.RELAXING, 'shell seed only'); sim.to(rs.S.SETTLED, 'shell seed only: yarn not relaxed')
+        g.maxiter = min(g.maxiter, 150); sim.to(rs.S.RELAXING, 'quick mode')
+        for k in range(3):
+            relax(sim); sim.contacts = rs.build_contacts(sim); e_k = energy(sim); sim.energy_log.append(dict(iter=k, E=e_k, max_dl0=0.0)); on_round(k, e_k, 0.0)
+        sim.to(rs.S.SETTLED, 'quick mode: 3 short rounds, not an equilibrium')
     else: rs.run(sim, relax, energy, on_round)
     e1 = sv.energy_parts(sim, g.k_contact, g.E); d1 = sv.min_axis_distance(sim)
     tot_l0 = sum(float(y.l0.sum()) for y in sim.yarns)

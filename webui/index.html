@@ -53,16 +53,20 @@ button:disabled{opacity:.45}
   <label><span>Stored curl (rad per vertex, front +, back &minus;)</span><input id="fCurl" type="number" step="any" min="0" max="0.5"></label>
   <label class="row"><input id="fAniso" type="checkbox"><span>Anticlastic curl (course yarn opposite to wale yarn)</span></label>
   <label><span>Reference curvature scale (0 straight yarn, 1 knitted shape; use 1 with the shell)</span><input id="fRef" type="number" step="any" min="0" max="1"></label>
+  <label><span>Straightening factor (0 = off; pulls the yarn toward straight, length unchanged)</span><input id="fStr" type="number" step="any" min="0" max="100"></label>
   <label><span>Feeder tension (cN, mm results)</span><input id="fTen" type="number" step="any" min="0" max="200"></label>
   <label><span>Creep time constant (hours, 0 = off)</span><input id="fTau" type="number" step="any" min="0"></label>
   <label><span>Simulated duration (hours, with creep)</span><input id="fHours" type="number" step="any" min="0"></label>
   <label class="row"><input id="fShell" type="checkbox"><span>Fold target from the shell model (run first)</span></label>
   <label><span>Hold on the shell fold (x EA/R; 0 = start from the fold only)</span><input id="fShellW" type="number" step="any" min="0" max="1000"></label>
+  <label class="row"><input id="fShellF" type="checkbox"><span>Turn the stress-free curvature with the fold</span></label>
   <label class="row"><input id="fShellTile" type="checkbox"><span>Shell curvature from the yarn tile (first use runs the tile, a few minutes, then cached)</span></label>
   <label><span>Tile rest-curvature scale (0 to 1; unsourced)</span><input id="fTileRef" type="number" step="any" min="0" max="1"></label>
   <label><span>Shell curvature calibration factor (fit to a measured fold; negative flips it)</span><input id="fKScale" type="number" step="any" min="-5" max="5"></label>
   <label><span>Axial stiffness scale (x EA; below 1 lets yarn length migrate more)</span><input id="fStretch" type="number" step="any" min="0.0001" max="1"></label>
-  <label class="row"><input id="fSeedOnly" type="checkbox"><span>Shell fold only: place the yarn on the fold, no relaxation (about a minute)</span></label>
+  <label><span>Bending stiffness scale (x solid rod; spun yarn is far softer: 0.0032 measured on acrylic spun yarn, Ding et al.; unsourced for cotton)</span><input id="fBend" type="number" step="any" min="0.00001" max="1"></label>
+  <label><span>Rest length ratio (1 = as built; below 1 = knitted tighter, Ding et al. A.7)</span><input id="fLenRatio" type="number" step="any" min="0.5" max="1"></label>
+  <label class="row"><input id="fSeedOnly" type="checkbox"><span>Quick mode: shell fold plus 3 short relaxation rounds (about a minute; not an equilibrium)</span></label>
  </div>
  <div><button id="bSim" disabled>Simulate</button> <button id="bCancel" disabled>Cancel</button></div>
  <div id="simState">Select a result.</div><div id="simTimer" class="note"></div><progress id="simProg" value="0" max="1" hidden></progress>
@@ -215,6 +219,7 @@ async function readWithProgress(resp) {
 async function load(id, kind, v) {
   const q = v === 'relaxed' ? '?v=relaxed' : '';
   if (kind === 'axis') { const r = await fetch('/api/results/' + id + '/axis' + q); if (!r.ok) throw new Error('axis file: HTTP ' + r.status); return axisLines(await r.text()); }
+  $('#fps').textContent = 'preparing mesh\u2026';          // a result without a baseline tube is built on the server first; the MB count starts when the download does
   const g = new THREE.BufferGeometry(), rb = await fetch('/api/results/' + id + '/mesh' + q);
   if (rb.ok) {                                              // compact binary mesh: no text parsing, streams with a progress readout
     const buf = await readWithProgress(rb), hd = new DataView(buf);
@@ -314,7 +319,7 @@ function setupSim() {
     $('#fE').value = mm ? CFG.yarn_E_MPa : 1;
     $('#lE').textContent = mm ? 'Yarn modulus E (MPa = N/mm\u00b2)' : 'Yarn modulus E (R-unit result: only the ratio to contact stiffness matters)';
     $('#fCurl').value = 0; $('#fAniso').checked = false; $('#fRef').value = 1; $('#fTen').value = mm ? CFG.tension_cN : 0; $('#fTau').value = 0; $('#fHours').value = 0; $('#fTen').disabled = !mm;
-    $('#fShell').checked = true; $('#fShellW').value = CFG.shell_w; $('#fShellTile').checked = false; $('#fTileRef').value = 0.5; $('#fKScale').value = 1; $('#fStretch').value = 1; $('#fSeedOnly').checked = false;
+    $('#fShell').checked = true; $('#fShellW').value = CFG.shell_w; $('#fShellTile').checked = false; $('#fTileRef').value = 0.5; $('#fKScale').value = 1; $('#fStretch').value = 1; $('#fSeedOnly').checked = false; $('#fStr').value = CFG.straight; $('#fShellF').checked = true; $('#fBend').value = 0.003; $('#fLenRatio').value = 1;
     $('#fKc').value = CFG.kc_ratio; $('#fPert').value = CFG.perturb; $('#fOuter').value = CFG.outer; $('#fMax').value = CFG.maxiter;
     $('#eNote').textContent = mm ? 'Units: mm. E in MPa (N/mm\u00b2), contact stiffness in N/mm, feeder tension in cN.' : 'R-unit result: no physical yarn size, so no physical modulus applies.';
   }
@@ -334,7 +339,7 @@ function updateSimButtons() {
 $('#bSim').onclick = async () => {
   const body = { E: +$('#fE').value, mu: +$('#fMu').value, kc_ratio: +$('#fKc').value, perturb: +$('#fPert').value, outer: +$('#fOuter').value, maxiter: +$('#fMax').value,
     curl: +$('#fCurl').value, curl_aniso: $('#fAniso').checked, ref_scale: +$('#fRef').value, tension_cN: +$('#fTen').value, creep_tau_h: +$('#fTau').value, hours: +$('#fHours').value,
-    shell: $('#fShell').checked, shell_w: +$('#fShellW').value, shell_kappa: $('#fShellTile').checked ? 'tile' : 'guess', tile_ref: +$('#fTileRef').value, kappa_scale: +$('#fKScale').value, stretch_scale: +$('#fStretch').value, seed_only: $('#fSeedOnly').checked };
+    shell: $('#fShell').checked, shell_w: +$('#fShellW').value, shell_kappa: $('#fShellTile').checked ? 'tile' : 'guess', tile_ref: +$('#fTileRef').value, kappa_scale: +$('#fKScale').value, stretch_scale: +$('#fStretch').value, bend_scale: +$('#fBend').value, straight: +$('#fStr').value, shell_frame: $('#fShellF').checked, length_ratio: +$('#fLenRatio').value, seed_only: $('#fSeedOnly').checked };
   $('#bSim').disabled = true;
   try {
     const r = await fetch('/api/results/' + current + '/simulate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });

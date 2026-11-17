@@ -34,7 +34,12 @@ from scipy.spatial import cKDTree
 jax.config.update('jax_enable_x64', True)
 
 STRETCH_SCALE = 1.0      # multiplies EA only (axial stiffness) so stretch and bending stiffness can be chosen independently, as Sperl et al. 2022 Sec 6.2 do. 1 = solid rod.
-def section(E, R): return STRETCH_SCALE*E*np.pi*R**2, E*np.pi*R**4/4.0                      # EA, EI
+BEND_SCALE = 1.0         # multiplies EI only. A spun yarn bends far more easily than a solid rod of its tensile modulus: measured bending/tensile stiffness ratio 0.249/79 = 0.0032 for a 16/2 acrylic spun yarn (Ding et al., arXiv 2307.12360), and Sperl et al. 2022 fit k_b over 1e-3..10 x the solid-rod value. Not measured for cotton Ne 10.
+def section(E, R): return STRETCH_SCALE*E*np.pi*R**2, BEND_SCALE*E*np.pi*R**4/4.0                      # EA, EI
+
+def bend_stiffness(sim, E):
+    """EA and EI of the yarn. EI is also multiplied by sim.bend_scale (1 unless the straightening factor is on: see relax_job --straight)."""
+    EA, EI = section(E, sim.R); return EA, EI*getattr(sim, 'bend_scale', 1.0)
 
 def _energy(x, l0, seg, tri, lbar, kb0, pairs, pmask, EA, EI, kc, R2, cell, tgt, cnt, ks):
     X = x.reshape(-1, 3)
@@ -104,7 +109,7 @@ def shell_deviation(sim):
     return dict(rms=float(np.sqrt((d**2).mean())), max=float(d.max()))
 
 def energy_parts(sim, kc, E):
-    EA, EI = section(E, sim.R); off, seg, tri, l0, lbar = pack(sim); pairs, pm, _ = near_pairs(sim, off)
+    EA, EI = bend_stiffness(sim, E); off, seg, tri, l0, lbar = pack(sim); pairs, pm, _ = near_pairs(sim, off)
     x = np.vstack([y.X for y in sim.yarns]).ravel(); kb0 = baseline_curvature(sim, tri); sa, s0 = shell_args(sim), shell_args(sim, False)
     tot = float(_energy(x, l0, seg, tri, lbar, kb0, pairs, pm, EA, EI, kc, 2*sim.R, *sa))
     st = float(_energy(x, l0, seg, tri, lbar, kb0, pairs, pm, EA, 0.0, 0.0, 0.0, *s0)); bd = float(_energy(x, l0, seg, tri, lbar, kb0, pairs, pm, 0.0, EI, 0.0, 0.0, *s0))
@@ -113,7 +118,7 @@ def energy_parts(sim, kc, E):
 
 def relax(sim, E, kc, maxiter=300, rounds=4, verbose=False):
     """Minimise positions at fixed rest lengths. Contact pairs are rebuilt between rounds (positions move)."""
-    EA, EI = section(E, sim.R)
+    EA, EI = bend_stiffness(sim, E)
     for r in range(rounds):
         off, seg, tri, l0, lbar = pack(sim); pairs, pm, npair = near_pairs(sim, off); kb0 = baseline_curvature(sim, tri); sa = shell_args(sim)
         x0 = np.vstack([y.X for y in sim.yarns]).ravel()

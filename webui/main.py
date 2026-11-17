@@ -25,6 +25,7 @@ CONFIG = {
     "tension_source": "Input yarn tensions of 10, 20 and 30 cN were used for cotton, polyester and polyamide threads on a circular knitting machine with passive "
                       "yarn feeding (Control of the stability circular knitting process with passive yarn feeding, Mechanika, Kaunas University of Technology). "
                       "Experimental settings in that study, not a certified standard; the lowest is offered as the default.",
+    "straight": 0.0,                         # straightening factor, 0 = off. No sourced value: a modelling factor.
     "kc_ratio": 30.0,                        # contact stiffness as a multiple of EA/R. Numerical choice, tested on one fabric only.
     "perturb": 0.02, "outer": 40, "maxiter": 300,
     "shell_w": 1.0,                          # hold on the shell fold, x EA/R per vertex. Numerical choice, not tested on the real solver.
@@ -85,8 +86,29 @@ def _file(rid, pattern, media, variant="baseline"):
         raise HTTPException(404)
     return FileResponse(hits[0], media_type=media)
 
+def _ensure_baseline_tube(d):
+    """Results built with build_knit --no-tube have no baseline tube mesh. Build it once from fab_axis.csv (same tube writer as the pipeline, 8 sides) and cache it as fab_tube.obj."""
+    if any(h for h in list(d.glob("*_tube.obj")) + list(d.glob("*_tube.bin")) if not h.name.startswith("relaxed_")):
+        return
+    meta, ax = _read_json(d / "meta.json") or {}, d / "fab_axis.csv"
+    if not meta.get("R") or not ax.exists():
+        raise HTTPException(404, "no baseline mesh and no fab_axis.csv to build one from")
+    import numpy as np
+    if str(SCRIPTS) not in sys.path:
+        sys.path.insert(0, str(SCRIPTS))
+    from build_knit import write_obj
+    A = np.loadtxt(ax, delimiter=",", skiprows=1)
+    lines = [A[A[:, 0] == c][:, 1:] for c in np.unique(A[:, 0])]
+    tmp = d / "fab_tmp.obj"
+    write_obj(str(tmp), lines, meta["R"], 8, "baseline tube of %s" % d.name)
+    if tmp.with_suffix(".bin").exists():
+        os.replace(tmp.with_suffix(".bin"), d / "fab_tube.bin")      # the writer also emits the binary mesh: keep it, no second conversion
+    os.replace(tmp, d / "fab_tube.obj")
+
 @app.get("/api/results/{rid}/tube")
 def tube(rid: str, v: str = "baseline"):
+    if ID_RE.match(rid) and v == "baseline" and (RESULTS / rid).is_dir():
+        _ensure_baseline_tube(RESULTS / rid)
     return _file(rid, "*_tube.obj", "text/plain", v)
 
 @app.get("/api/results/{rid}/axis")
@@ -113,6 +135,10 @@ class SimBody(BaseModel):
     tile_ref: float = Field(0.5, ge=0, le=1, description='tile initial rest-curvature scale (unsourced)')
     stretch_scale: float = Field(1.0, gt=0, le=1, description='multiplies EA only; below 1 lets rest length migrate more')
     seed_only: bool = False
+    straight: float = Field(0.0, ge=0, le=100, description='straightening factor: extra pull toward a straight yarn, length unchanged (0 = off)')
+    shell_frame: bool = True
+    bend_scale: float = Field(1.0, gt=0, le=1, description='multiplies the bending stiffness EI only (spun yarn is far softer than a solid rod)')
+    length_ratio: float = Field(1.0, ge=0.5, le=1.0, description='rest length ratio eta (<1: yarn knitted tighter than the built geometry)')
     shell_w: float = Field(1.0, ge=0, le=1000, description="hold on the shell fold, x EA/R per vertex (0 = start from the fold only)")
 
 class TileBody(BaseModel):
@@ -155,7 +181,8 @@ def simulate(rid: str, b: SimBody):
     if b.shell:
         cmd += ["--shell", "--shell-w", repr(b.shell_w), "--shell-kappa", b.shell_kappa, "--kappa-scale", repr(b.kappa_scale), "--tile-ref", repr(b.tile_ref)]
         if b.seed_only: cmd += ["--seed-only"]
-    cmd += ["--stretch-scale", repr(b.stretch_scale)]
+        if not b.shell_frame: cmd += ["--no-shell-frame"]
+    cmd += ["--stretch-scale", repr(b.stretch_scale), "--bend-scale", repr(b.bend_scale), "--straight", repr(b.straight), "--length-ratio", repr(b.length_ratio)]
     log = open(d / "job.log", "w")
     (d / "job.json").write_text(json.dumps({"started": time.time()}))          # before the job starts, so it can always read it
     JOBS[rid] = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT, cwd=str(SCRIPTS), start_new_session=True)
@@ -244,6 +271,8 @@ def mesh(rid: str, v: str = "baseline"):
     if not ID_RE.match(rid) or v not in ("baseline", "relaxed"):
         raise HTTPException(404)
     d = RESULTS / rid; rel = (v == "relaxed")
+    if not rel and d.is_dir():
+        _ensure_baseline_tube(d)
     cand = sorted(h for h in d.glob("*_tube.bin") if h.name.startswith("relaxed_") == rel)
     if not cand:
         objs = sorted(h for h in d.glob("*_tube.obj") if h.name.startswith("relaxed_") == rel)
