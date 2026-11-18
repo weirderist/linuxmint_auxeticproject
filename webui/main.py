@@ -1,6 +1,7 @@
-import json, math, os, re, signal, subprocess, sys, time
+import base64, json, math, os, re, signal, subprocess, sys, threading, time
+from datetime import datetime
 from pathlib import Path
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.middleware.gzip import GZipMiddleware
 from pydantic import BaseModel, Field
@@ -13,6 +14,8 @@ RESULTS.mkdir(parents=True, exist_ok=True)
 SCRIPTS = HERE.parent / "scripts"
 ID_RE = re.compile(r"^[0-9A-Za-z_-]{1,64}$")
 RUNNING = ("released", "relaxing")
+CKPT_FILES = ("checkpoint.npz", "checkpoint.json")
+PRESET_FILE = HERE / "presets.json"
 JOBS = {}                                    # result id -> subprocess.Popen (one at a time)
 
 # Sourced inputs offered to the form. Everything else the solver needs (mu) is entered by the user.
@@ -155,6 +158,23 @@ def _folder(rid):
         raise HTTPException(404, "unknown result")
     return RESULTS / rid
 
+def _sim_cmd(d, b, R):
+    kc = b.kc_ratio * b.E * math.pi * R          # kc = ratio * EA / R, with EA = E pi R^2
+    cmd = [sys.executable, str(SCRIPTS / "relax_job.py"), "--folder", str(d), "--E", repr(b.E), "--mu", repr(b.mu),
+           "--k-contact", repr(kc), "--perturb", repr(b.perturb), "--outer", str(b.outer), "--maxiter", str(b.maxiter),
+           "--curl", repr(b.curl), "--tension", repr(b.tension_cN), "--creep-tau", repr(b.creep_tau_h), "--hours", repr(b.hours)] + (["--curl-aniso"] if b.curl_aniso else []) + ["--ref-scale", repr(b.ref_scale)]
+    if b.shell:
+        cmd += ["--shell", "--shell-w", repr(b.shell_w), "--shell-kappa", b.shell_kappa, "--kappa-scale", repr(b.kappa_scale), "--tile-ref", repr(b.tile_ref)]
+        if b.seed_only: cmd += ["--seed-only"]
+        if not b.shell_frame: cmd += ["--no-shell-frame"]
+    cmd += ["--stretch-scale", repr(b.stretch_scale), "--bend-scale", repr(b.bend_scale), "--straight", repr(b.straight), "--length-ratio", repr(b.length_ratio)]
+    return cmd, kc
+
+def _launch(rid, d, cmd, resume=False):
+    log = open(d / "job.log", "a" if resume else "w")
+    (d / "job.json").write_text(json.dumps({"started": time.time()}))          # before the job starts, so it can always read it
+    JOBS[rid] = subprocess.Popen(cmd + (["--resume"] if resume else []), stdout=log, stderr=subprocess.STDOUT, cwd=str(SCRIPTS), start_new_session=True)
+
 @app.post("/api/results/{rid}/simulate")
 def simulate(rid: str, b: SimBody):
     d = _folder(rid)
@@ -172,21 +192,41 @@ def simulate(rid: str, b: SimBody):
         raise HTTPException(422, "shell-only needs the shell option ticked")
     if b.shell and not meta.get("matrix"):
         raise HTTPException(422, "the shell option needs the stitch matrix in meta.json (result built by an older pipeline)")
-    kc = b.kc_ratio * b.E * math.pi * R          # kc = ratio * EA / R, with EA = E pi R^2
-    for f in ("relaxed_axis.csv", "relaxed_tube.obj", "relaxed_tube.bin", "state.json", "job.json", "shell.npz"):
+    cmd, kc = _sim_cmd(d, b, R)
+    for f in ("relaxed_axis.csv", "relaxed_tube.obj", "relaxed_tube.bin", "state.json", "job.json", "shell.npz") + CKPT_FILES:
         (d / f).unlink(missing_ok=True)          # never leave a previous run's files next to a new one
-    cmd = [sys.executable, str(SCRIPTS / "relax_job.py"), "--folder", str(d), "--E", repr(b.E), "--mu", repr(b.mu),
-           "--k-contact", repr(kc), "--perturb", repr(b.perturb), "--outer", str(b.outer), "--maxiter", str(b.maxiter),
-           "--curl", repr(b.curl), "--tension", repr(b.tension_cN), "--creep-tau", repr(b.creep_tau_h), "--hours", repr(b.hours)] + (["--curl-aniso"] if b.curl_aniso else []) + ["--ref-scale", repr(b.ref_scale)]
-    if b.shell:
-        cmd += ["--shell", "--shell-w", repr(b.shell_w), "--shell-kappa", b.shell_kappa, "--kappa-scale", repr(b.kappa_scale), "--tile-ref", repr(b.tile_ref)]
-        if b.seed_only: cmd += ["--seed-only"]
-        if not b.shell_frame: cmd += ["--no-shell-frame"]
-    cmd += ["--stretch-scale", repr(b.stretch_scale), "--bend-scale", repr(b.bend_scale), "--straight", repr(b.straight), "--length-ratio", repr(b.length_ratio)]
-    log = open(d / "job.log", "w")
-    (d / "job.json").write_text(json.dumps({"started": time.time()}))          # before the job starts, so it can always read it
-    JOBS[rid] = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT, cwd=str(SCRIPTS), start_new_session=True)
+    (d / "job_request.json").write_text(json.dumps(b.model_dump()))      # lets a power cut be resumed with exactly these settings
+    _preset_write("_last", b.model_dump())
+    _launch(rid, d, cmd)
     return {"started": rid, "k_contact": kc}
+
+def _resumable(d):
+    s = _read_json(d / "state.json") or {}
+    return (s.get("state") in RUNNING and not _alive(d.name) and (d / "checkpoint.npz").exists() and (d / "job_request.json").exists())
+
+def _resume(rid):
+    d = _folder(rid); meta = _read_json(d / "meta.json") or {}
+    b = SimBody(**(_read_json(d / "job_request.json") or {}))
+    cmd, _ = _sim_cmd(d, b, meta["R"]); _launch(rid, d, cmd, resume=True)
+
+@app.post("/api/results/{rid}/resume")
+def resume(rid: str):
+    d = _folder(rid)
+    if _any_running():
+        raise HTTPException(409, "a simulation is already running")
+    if not _resumable(d):
+        raise HTTPException(409, "nothing to resume: no checkpoint for an interrupted run")
+    _resume(rid)
+    return {"resumed": rid}
+
+@app.on_event("startup")
+def auto_resume():
+    """After a power cut or reboot: continue the most recent interrupted run from its checkpoint (AUX_AUTORESUME=0 turns this off)."""
+    if os.environ.get("AUX_AUTORESUME", "1") == "0":
+        return
+    for d in sorted((p for p in RESULTS.iterdir() if p.is_dir() and not p.name.startswith(".")), key=lambda p: p.name, reverse=True):
+        if _resumable(d):
+            _resume(d.name); break
 
 def _tile_alive(rid):
     p = JOBS.get(rid + "#tile")
@@ -247,7 +287,8 @@ def state(rid: str):
     return {"elapsed": elapsed, "seconds": seconds, "state": sim["state"] if sim else "none", "running": _alive(rid), "busy": _any_running(),
             "iter": (el[-1]["iter"] + 1) if el else 0, "outer": outer, "last": el[-1] if el else None,
             "summary": s.get("summary"), "has_relaxed": bool(sim and sim["has_relaxed"]),
-            "relaxed_at": sim["relaxed_at"] if sim else 0, "log": log}
+            "relaxed_at": sim["relaxed_at"] if sim else 0, "log": log,
+            "checkpoint": _read_json(d / "checkpoint.json"), "resumable": _resumable(d)}
 
 @app.get("/api/results/{rid}/log")
 def sim_log(rid: str):
@@ -305,6 +346,155 @@ def cancel(rid: str):
     s.setdefault("history", []).append({"state": "cancelled", "t": time.strftime("%Y-%m-%dT%H:%M:%S"), "note": "cancelled from the UI"})
     tmp = d / "state.json.tmp"; tmp.write_text(json.dumps(s, indent=1)); os.replace(tmp, d / "state.json")
     return {"cancelled": rid}
+
+# ---------------------------------------------------------------- presets (saved settings)
+def _presets():
+    return _read_json(PRESET_FILE) or {}
+
+def _preset_write(name, data):
+    P = _presets(); P[name] = data
+    tmp = PRESET_FILE.with_suffix(".tmp"); tmp.write_text(json.dumps(P, indent=1)); os.replace(tmp, PRESET_FILE)
+
+PRESET_RE = re.compile(r"^[\w .()+-]{1,60}$")
+
+@app.get("/api/presets")
+def presets_list():
+    return _presets()                         # "_last" = settings of the most recent Simulate press
+
+@app.put("/api/presets/{name}")
+def presets_save(name: str, b: SimBody):
+    if not PRESET_RE.match(name) or name.startswith("_"):
+        raise HTTPException(422, "preset name: letters, digits, space . ( ) + - _ , max 60, not starting with _")
+    _preset_write(name, b.model_dump()); return {"saved": name}
+
+@app.delete("/api/presets/{name}")
+def presets_delete(name: str):
+    P = _presets()
+    if name not in P or name.startswith("_"):
+        raise HTTPException(404)
+    del P[name]; tmp = PRESET_FILE.with_suffix(".tmp"); tmp.write_text(json.dumps(P, indent=1)); os.replace(tmp, PRESET_FILE); return {"deleted": name}
+
+# ---------------------------------------------------------------- naming
+class RenameBody(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+
+@app.post("/api/results/{rid}/rename")
+def rename(rid: str, b: RenameBody):
+    d = _folder(rid)
+    if _alive(rid):
+        raise HTTPException(409, "cannot rename while its simulation is running")
+    mp = d / "meta.json"; m = _read_json(mp) or {}
+    m["name"] = b.name.strip(); tmp = d / "meta.json.tmp"; tmp.write_text(json.dumps(m, indent=1)); os.replace(tmp, mp)
+    return {"id": rid, "name": m["name"]}
+
+# ---------------------------------------------------------------- new fabric: photo -> matrix, build
+RED_BGR = (87.0, 87.0, 255.0); GREEN_BGR = (87.0, 217.0, 126.0)      # measured reference colours of the grid editor export (from crop_classify.py)
+
+def _decode(data):
+    import numpy as np
+    try:
+        import cv2
+        img = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR)
+        if img is not None: return img.astype(float)
+    except ImportError:
+        pass
+    try:
+        from PIL import Image; import io
+        return np.asarray(Image.open(io.BytesIO(data)).convert("RGB"), dtype=float)[:, :, ::-1]      # to BGR
+    except Exception:
+        return None
+
+@app.post("/api/classify")
+async def classify(request: Request, rows: int, cols: int):
+    """Body = raw image bytes. Same method as crop_classify.py: coloured-cell bounding box (saturation > 30), equal cells, mean colour of the inner 70% of each cell,
+    nearest of the two reference colours (1 = red = front, 2 = green = back). Returns the matrix, the grid box and how sure each cell is."""
+    import numpy as np
+    if not (1 <= rows <= 200 and 1 <= cols <= 200):
+        raise HTTPException(422, "rows and columns must be 1 to 200")
+    data = await request.body()
+    if len(data) > 25_000_000: raise HTTPException(413, "image too large (25 MB max)")
+    img = _decode(data)
+    if img is None: raise HTTPException(422, "could not read the image")
+    mx, mn = img.max(2), img.min(2); sat = np.where(mx > 0, (mx - mn) / np.maximum(mx, 1e-9) * 255.0, 0.0)
+    ys, xs = np.where(sat > 30)
+    if ys.size == 0: raise HTTPException(422, "no coloured grid found in the image")
+    x0, x1, y0, y1 = int(xs.min()), int(xs.max()), int(ys.min()), int(ys.max())
+    ch, cw = (y1 - y0) / rows, (x1 - x0) / cols
+    if ch <= 1 or cw <= 1: raise HTTPException(422, "image too small for that many rows and columns")
+    red, green = np.array(RED_BGR), np.array(GREEN_BGR); M, conf = [], []
+    for r in range(rows):
+        row, crow = [], []
+        for c in range(cols):
+            ya, yb = int(y0 + r*ch + 0.15*ch), int(y0 + (r+1)*ch - 0.15*ch); xa, xb = int(x0 + c*cw + 0.15*cw), int(x0 + (c+1)*cw - 0.15*cw)
+            cell = img[max(0, ya):max(ya+1, yb), max(0, xa):max(xa+1, xb)]
+            m = cell.reshape(-1, 3).mean(0); dr, dg = np.linalg.norm(m - red), np.linalg.norm(m - green)
+            row.append(1 if dr < dg else 2); crow.append(round(float(abs(dr - dg) / max(dr + dg, 1e-9)), 3))      # 0 = ambiguous, 1 = clear
+        M.append(row); conf.append(crow)
+    low = [[r, c] for r in range(rows) for c in range(cols) if conf[r][c] < 0.25]
+    return {"rows": rows, "cols": cols, "matrix": M, "confidence": conf, "low_confidence": low, "box": [x0, y0, x1, y1], "size": [int(img.shape[1]), int(img.shape[0])]}
+
+class BuildBody(BaseModel):
+    name: str = Field(min_length=1, max_length=80, description="model name, chosen by the user")
+    matrix: str = Field(pattern=r"^[12 ]+(/[12 ]+)*$", description="rows separated by /, digits 1 front, 2 back; first row = bottom course")
+    tiles: int = Field(4, ge=1, le=40)
+    ne: float = Field(10.0, gt=0, le=200); cpi: float = Field(gt=0, le=200); wpi: float = Field(gt=0, le=200)
+
+BUILD = {"proc": None, "id": None, "name": None, "tmp": None, "done": None, "error": ""}
+
+def _unique_id():
+    base = datetime.now().strftime("%Y%m%d-%H%M%S"); rid, n = base, 1
+    while (RESULTS / rid).exists() or (RESULTS / (".build-" + rid)).exists():
+        n += 1; rid = "%s-%d" % (base, n)
+    return rid
+
+def _build_watch(p, tmp, rid):
+    p.wait()
+    if p.returncode == 0 and (tmp / "meta.json").exists():
+        os.rename(tmp, RESULTS / rid); BUILD["done"] = True      # atomic: the list never shows a half-built result
+    else:
+        BUILD["done"] = False; BUILD["error"] = "build failed (exit %s); see the log below" % p.returncode
+
+@app.post("/api/build")
+def build(b: BuildBody):
+    if BUILD["proc"] is not None and BUILD["proc"].poll() is None:
+        raise HTTPException(409, "a build is already running")
+    rows = [r.replace(" ", "") for r in b.matrix.split("/")]
+    if len({len(r) for r in rows}) != 1 or not rows[0]:
+        raise HTTPException(422, "the matrix rows must all have the same length")
+    rid = _unique_id(); tmp = RESULTS / (".build-" + rid)
+    cmd = [sys.executable, str(SCRIPTS / "build_knit.py"), "--matrix", "/".join(" ".join(r) for r in rows), "--tiles", str(b.tiles), "--ne", repr(b.ne), "--cpi", repr(b.cpi), "--wpi", repr(b.wpi),
+           "--out", str(tmp), "--no-tube", "--name", b.name.strip(), "--id", rid]       # id = creation date and time; the folder carries the same id; the name is the user's
+    tmp.mkdir(parents=True, exist_ok=True)
+    log = open(tmp / "build.log", "w")
+    p = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT, cwd=str(SCRIPTS), start_new_session=True)
+    BUILD.update(proc=p, id=rid, name=b.name.strip(), tmp=tmp, done=None, error="")
+    threading.Thread(target=_build_watch, args=(p, tmp, rid), daemon=True).start()
+    return {"id": rid}
+
+@app.get("/api/build/status")
+def build_status():
+    p = BUILD["proc"]
+    if p is None: return {"running": False, "id": None}
+    d = RESULTS / BUILD["id"] if BUILD["done"] else BUILD["tmp"]
+    try: log = "\n".join((d / "build.log").read_text().splitlines()[-8:])
+    except Exception: log = ""
+    return {"running": p.poll() is None, "id": BUILD["id"], "name": BUILD["name"], "done": BUILD["done"], "error": BUILD["error"], "log": log}
+
+# ---------------------------------------------------------------- server status strip
+@app.get("/api/status")
+def sys_status():
+    out = {"load": os.getloadavg()[0] if hasattr(os, "getloadavg") else None, "sim_running": _any_running(), "classify": True}
+    try:
+        import psutil
+        v = psutil.virtual_memory(); du = psutil.disk_usage("/")
+        out.update(cpu=psutil.cpu_percent(interval=None), ram_pct=v.percent, disk_free_gb=round(du.free / 2**30, 1), uptime_h=round((time.time() - psutil.boot_time()) / 3600, 1))
+        t = psutil.sensors_temperatures() if hasattr(psutil, "sensors_temperatures") else {}
+        for k in ("coretemp", "k10temp"):
+            if t.get(k): out["temp_c"] = round(t[k][0].current, 1); break
+    except Exception:
+        pass
+    return out
+
 
 @app.get("/", response_class=HTMLResponse)
 def index():

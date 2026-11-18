@@ -35,13 +35,39 @@ button:disabled{opacity:.45}
 #toast[hidden]{display:none}
 #toast button{margin:.5rem .5rem 0 0}
 @media (max-width:700px){main{flex-direction:column}#list{width:100%;max-height:30%;border-right:0;border-bottom:1px solid #8884}}
+#nGrid{display:grid;gap:2px;margin:.4rem 0;width:max-content;max-width:100%;overflow:auto}
+.cell{width:1.4rem;height:1.4rem;cursor:pointer;border-radius:2px}.c1{background:#e8575b}.c2{background:#57c27e}.cell.low{outline:2px solid #e0b000}
+#nPrev{max-width:520px;margin:.4rem 0}#nPrev canvas{max-width:100%;border:1px solid #8886}
+#nMat{width:min(28rem,100%);font-family:monospace}#sys{margin-left:1rem;font-size:.78rem;opacity:.8}
+.pill{padding:.05rem .4rem;border-radius:9px;background:#e0b00033;margin-left:.4rem}
 </style></head><body>
-<header><h1>Auxetic sim UI</h1><span id="fps"></span>
+<header><h1>Auxetic sim UI</h1><span id="fps"></span><span id="sys"></span>
 <span class="seg"><button id="bBase" class="on">Baseline</button><button id="bRelax" disabled>Relaxed</button></span>
 <span class="seg"><button id="bTube" class="on">Tube</button><button id="bAxis">Axis</button></span>
 <button id="bReset">Reset view</button></header>
 <main><div id="list"></div><div id="right"><div id="view"></div>
 <div id="tools">
+<details id="newBox"><summary>New fabric (photo or typed pattern &rarr; matrix &rarr; build)</summary>
+ <div class="note">Draw the pattern as you see it, top course first. Every cell is a stitch: 1 = knit (front, red), 2 = purl (back, green). Click a cell to switch it. The model gets an ID from its creation date and time; the name is yours.</div>
+ <div class="grid">
+  <label><span>Model name (required)</span><input id="nName" maxlength="80" placeholder="e.g. jersey control"></label>
+  <label><span>Pattern photo (optional)</span><input id="nFile" type="file" accept="image/*"></label>
+  <label><span>Rows in the photo</span><input id="nRows" type="number" min="1" max="200" value="8"></label>
+  <label><span>Columns in the photo</span><input id="nCols" type="number" min="1" max="200" value="8"></label>
+ </div>
+ <div><button id="nRead" disabled>Read photo</button> <span id="nReadNote" class="note"></span></div>
+ <div id="nPrev"></div>
+ <textarea id="nMat" rows="5" spellcheck="false" placeholder="one row per line, digits 1 and 2, e.g.&#10;1 2 1 1&#10;2 2 1 2"></textarea>
+ <div id="nGrid"></div><div id="nDims" class="note"></div>
+ <div class="grid">
+  <label><span>Yarn count Ne</span><input id="nNe" type="number" step="any" min="1" value="10"></label>
+  <label><span>Courses per inch (CPI)</span><input id="nCpi" type="number" step="any" min="1" value="14"></label>
+  <label><span>Wales per inch (WPI)</span><input id="nWpi" type="number" step="any" min="1" value="18"></label>
+  <label><span>Repeats of the pattern (tiles, each way)</span><input id="nTiles" type="number" min="1" max="40" value="4"></label>
+  <label class="row"><input id="nTop" type="checkbox" checked><span>Pattern is drawn top course first (stored with row 1 = bottom course)</span></label>
+ </div>
+ <div><button id="nBuild">Build</button> <span id="nState" class="note"></span></div><pre id="nLog" class="note"></pre>
+</details>
 <details id="simBox" open><summary>Simulate (relaxation and yarn length migration)</summary>
  <div class="grid">
   <label><span id="lE">Yarn modulus E</span><input id="fE" type="number" step="any" min="0"></label>
@@ -68,7 +94,10 @@ button:disabled{opacity:.45}
   <label><span>Rest length ratio (1 = as built; below 1 = knitted tighter, Ding et al. A.7)</span><input id="fLenRatio" type="number" step="any" min="0.5" max="1"></label>
   <label class="row"><input id="fSeedOnly" type="checkbox"><span>Quick mode: shell fold plus 3 short relaxation rounds (about a minute; not an equilibrium)</span></label>
  </div>
- <div><button id="bSim" disabled>Simulate</button> <button id="bCancel" disabled>Cancel</button></div>
+ <div class="grid"><label><span>Saved settings</span><select id="pSel"></select></label><label><span>Save the settings above as</span><input id="pName" maxlength="60" placeholder="name"></label></div>
+ <div><button id="pLoad">Load</button> <button id="pSave">Save</button> <button id="pDel">Delete</button></div>
+ <div class="note">The settings of every Simulate press are remembered automatically ("Last used") and fill the panel when you open a result.</div>
+ <div><button id="bSim" disabled>Simulate</button> <button id="bCancel" disabled>Cancel</button> <button id="bResume" hidden>Resume from checkpoint</button> <button id="bRename" disabled>Rename result</button></div>
  <div id="simState">Select a result.</div><div id="simTimer" class="note"></div><progress id="simProg" value="0" max="1" hidden></progress>
  <p class="note" id="eNote"></p>
  <p class="note">The solver runs only when Simulate is pressed. Contact stiffness is a numerical choice (tested on one fabric); the yarn is treated as a solid elastic rod, so its bending stiffness is an upper estimate for a twisted staple yarn.</p>
@@ -261,7 +290,7 @@ function renderList() {
     const d = document.createElement('div'); d.className = 'item' + (r.id === current ? ' sel' : ''); d.dataset.id = r.id;
     const a = document.createElement('div'); a.textContent = r.name || fmt(r);
     if (r.sim && r.sim.state) { const b = document.createElement('span'); b.className = 'badge'; b.textContent = r.sim.state; a.append(b); }
-    const s = document.createElement('small'); s.textContent = (r.matrix_text ? r.matrix_text + ' | ' : '') + fmt(r); d.title = r.id;
+    const s = document.createElement('small'); s.textContent = r.id + ' | ' + (r.matrix_text ? r.matrix_text + ' | ' : '') + fmt(r); d.title = r.id;
     d.append(a, s); d.onclick = () => show(r.id, true); el.append(d);
   }
 }
@@ -321,6 +350,7 @@ function setupSim() {
     $('#fCurl').value = 0; $('#fAniso').checked = false; $('#fRef').value = 1; $('#fTen').value = mm ? CFG.tension_cN : 0; $('#fTau').value = 0; $('#fHours').value = 0; $('#fTen').disabled = !mm;
     $('#fShell').checked = true; $('#fShellW').value = CFG.shell_w; $('#fShellTile').checked = false; $('#fTileRef').value = 0.5; $('#fKScale').value = 1; $('#fStretch').value = 1; $('#fSeedOnly').checked = false; $('#fStr').value = CFG.straight; $('#fShellF').checked = true; $('#fBend').value = 0.003; $('#fLenRatio').value = 1;
     $('#fKc').value = CFG.kc_ratio; $('#fPert').value = CFG.perturb; $('#fOuter').value = CFG.outer; $('#fMax').value = CFG.maxiter;
+    applyBody(PRES._last, mm);
     $('#eNote').textContent = mm ? 'Units: mm. E in MPa (N/mm\u00b2), contact stiffness in N/mm, feeder tension in cN.' : 'R-unit result: no physical yarn size, so no physical modulus applies.';
   }
   updateSimButtons();
@@ -328,18 +358,86 @@ function setupSim() {
 function updateSimButtons() {
   const busy = st && st.busy, mine = st && st.running;
   const ok = current && $('#fMu').value !== '' && $('#fE').value !== '';
-  $('#bSim').disabled = !ok || !!busy; $('#bCancel').disabled = !mine;
+  $('#bSim').disabled = !ok || !!busy; $('#bCancel').disabled = !mine; $('#bRename').disabled = !current || !!mine;
   const el = $('#simState'), pr = $('#simProg');
   if (!st) { el.textContent = current ? '' : 'Select a result.'; pr.hidden = true; return; }
   const txt = { none: mine ? 'starting (compiling the solver)\u2026' : 'not simulated', released: 'starting\u2026', relaxing: 'relaxing', settled: 'settled', failed: 'finished without settling (iteration limit)', cancelled: 'cancelled', interrupted: 'interrupted (the job stopped without finishing)', loaded: 'loaded' };
   el.textContent = 'Simulation: ' + (txt[st.state] || st.state) + (st.running && st.outer ? '  (outer iteration ' + st.iter + '/' + st.outer + ')' : '') + (busy && !mine ? '  \u2014 another result is being simulated' : '');
+  $('#bResume').hidden = !(st.resumable && !busy); if (st.checkpoint && !st.running && st.state !== 'settled') el.textContent += '  \u2014 checkpoint at outer iteration ' + st.checkpoint.next_outer_iteration + '/' + st.checkpoint.outer;
+  $('#bRename').disabled = !current || !!mine;
   pr.hidden = !(st.running && st.outer); if (!pr.hidden) { pr.max = st.outer; pr.value = st.iter; }
 }
+const FLD = { E: ['#fE', 'n'], mu: ['#fMu', 'n'], kc_ratio: ['#fKc', 'n'], perturb: ['#fPert', 'n'], outer: ['#fOuter', 'n'], maxiter: ['#fMax', 'n'], curl: ['#fCurl', 'n'], curl_aniso: ['#fAniso', 'b'], ref_scale: ['#fRef', 'n'],
+  tension_cN: ['#fTen', 'n'], creep_tau_h: ['#fTau', 'n'], hours: ['#fHours', 'n'], shell: ['#fShell', 'b'], shell_w: ['#fShellW', 'n'], shell_kappa: ['#fShellTile', 'k'], tile_ref: ['#fTileRef', 'n'],
+  kappa_scale: ['#fKScale', 'n'], stretch_scale: ['#fStretch', 'n'], bend_scale: ['#fBend', 'n'], straight: ['#fStr', 'n'], shell_frame: ['#fShellF', 'b'], length_ratio: ['#fLenRatio', 'n'], seed_only: ['#fSeedOnly', 'b'] };
+function getBody() { const o = {}; for (const [k, [id, t]] of Object.entries(FLD)) o[k] = t === 'n' ? +$(id).value : t === 'b' ? $(id).checked : ($(id).checked ? 'tile' : 'guess'); return o; }
+function applyBody(b, mm) {
+  if (!b) return;
+  for (const [k, [id, t]] of Object.entries(FLD)) { if (!(k in b) || (!mm && (k === 'E' || k === 'tension_cN'))) continue; if (t === 'n') $(id).value = b[k]; else if (t === 'b') $(id).checked = !!b[k]; else $(id).checked = b[k] === 'tile'; }
+  updateSimButtons();
+}
+// ---- saved settings
+let PRES = {};
+async function loadPresets(sel) {
+  try { PRES = await (await fetch('/api/presets')).json(); } catch (e) { PRES = {}; }
+  const el = $('#pSel'); el.textContent = '';
+  const add = (v, t) => { const o = document.createElement('option'); o.value = v; o.textContent = t; el.append(o); };
+  if (PRES._last) add('_last', 'Last used'); Object.keys(PRES).filter(k => k[0] !== '_').sort().forEach(k => add(k, k));
+  if (sel) el.value = sel;
+}
+async function presetErr(r) { if (!r.ok) { const e = await r.json().catch(() => ({})); toast(typeof e.detail === 'string' ? e.detail : JSON.stringify(e.detail || r.status)); return true; } return false; }
+$('#pLoad').onclick = () => { const k = $('#pSel').value; if (k && PRES[k]) { const rec = recOf(current); applyBody(PRES[k], rec && rec.units === 'mm'); $('#pName').value = k[0] === '_' ? '' : k; } };
+$('#pSave').onclick = async () => { const n = $('#pName').value.trim(); if (!n) return toast('Type a name for these settings first.'); if (!$('#fMu').value || !$('#fE').value) return toast('Fill E and the friction coefficient before saving.');
+  const r = await fetch('/api/presets/' + encodeURIComponent(n), { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(getBody()) }); if (await presetErr(r)) return; await loadPresets(n); toast('Saved settings "' + n + '".'); };
+$('#pDel').onclick = async () => { const k = $('#pSel').value; if (!k || k[0] === '_') return; const r = await fetch('/api/presets/' + encodeURIComponent(k), { method: 'DELETE' }); if (await presetErr(r)) return; await loadPresets(); };
+$('#bResume').onclick = async () => { $('#bResume').disabled = true; const r = await fetch('/api/results/' + current + '/resume', { method: 'POST' }); await presetErr(r); $('#bResume').disabled = false; prevState = 'relaxing'; pollState(); };
+$('#bRename').onclick = async () => { const rec = recOf(current); const n = prompt('Name for this result', (rec && rec.name) || ''); if (!n || !n.trim()) return;
+  const r = await fetch('/api/results/' + current + '/rename', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: n.trim() }) }); if (await presetErr(r)) return; poll(); };
+// ---- new fabric
+let nLow = new Set();
+function parseMat() { return $('#nMat').value.split('\n').map(l => l.replace(/[^12]/g, '')).filter(l => l).map(l => [...l].map(Number)); }
+function renderGrid() {
+  const M = parseMat(), g = $('#nGrid'); g.textContent = ''; const C = M.length ? M[0].length : 1; g.style.gridTemplateColumns = 'repeat(' + C + ',1.4rem)';
+  M.forEach((row, r) => row.forEach((v, c) => { const b = document.createElement('div'); b.className = 'cell c' + v + (nLow.has(r + ',' + c) ? ' low' : ''); b.title = 'row ' + (r + 1) + ', column ' + (c + 1) + (nLow.has(r + ',' + c) ? ' (the reader was unsure: check it)' : '');
+    b.onclick = () => { M[r][c] = 3 - v; nLow.delete(r + ',' + c); $('#nMat').value = M.map(x => x.join(' ')).join('\n'); renderGrid(); }; g.append(b); }));
+  const ok = M.length && M.every(r => r.length === C); $('#nDims').textContent = M.length ? M.length + ' rows x ' + C + ' columns' + (ok ? '' : '  \u2014 rows differ in length, fix before building') + (nLow.size ? '  \u2014 ' + nLow.size + ' uncertain cell(s) outlined in yellow' : '') : '';
+  return ok;
+}
+$('#nMat').oninput = () => { nLow = new Set(); renderGrid(); };
+$('#nFile').onchange = () => { $('#nRead').disabled = !$('#nFile').files.length; $('#nPrev').textContent = ''; if ($('#nFile').files.length) { const img = new Image(); img.onload = () => { const c = document.createElement('canvas'), k = Math.min(1, 520 / img.width); c.width = img.width * k; c.height = img.height * k; c.getContext('2d').drawImage(img, 0, 0, c.width, c.height); $('#nPrev').append(c); }; img.src = URL.createObjectURL($('#nFile').files[0]); } };
+$('#nRead').onclick = async () => {
+  const f = $('#nFile').files[0]; if (!f) return; $('#nRead').disabled = true; $('#nReadNote').textContent = 'reading\u2026';
+  try {
+    const r = await fetch('/api/classify?rows=' + +$('#nRows').value + '&cols=' + +$('#nCols').value, { method: 'POST', body: f });
+    if (!r.ok) { const e = await r.json().catch(() => ({})); $('#nReadNote').textContent = ''; toast('Could not read the photo: ' + (e.detail || r.status)); return; }
+    const j = await r.json(); $('#nMat').value = j.matrix.map(x => x.join(' ')).join('\n'); nLow = new Set(j.low_confidence.map(p => p.join(','))); renderGrid();
+    const c = $('#nPrev canvas'); if (c) { const x = c.getContext('2d'), k = c.width / j.size[0], [x0, y0, x1, y1] = j.box, cw = (x1 - x0) / j.cols * k, ch = (y1 - y0) / j.rows * k; x.strokeStyle = '#0a0'; x.lineWidth = 1;
+      for (let i = 0; i < j.rows; i++) for (let q = 0; q < j.cols; q++) { x.strokeStyle = nLow.has(i + ',' + q) ? '#e0b000' : '#2a2'; x.strokeRect(x0 * k + q * cw, y0 * k + i * ch, cw, ch); } }
+    $('#nReadNote').textContent = 'Done. Compare the green boxes with the photo, then fix any wrong cell by clicking it.';
+  } catch (e) { toast('Could not read the photo: ' + e); } finally { $('#nRead').disabled = false; }
+};
+$('#nBuild').onclick = async () => {
+  const name = $('#nName').value.trim(), M = parseMat(); if (!name) return toast('Give the model a name first.'); if (!M.length || !renderGrid()) return toast('The matrix is empty or its rows differ in length.');
+  const rows = $('#nTop').checked ? M.slice().reverse() : M;
+  const body = { name, matrix: rows.map(r => r.join(' ')).join('/'), tiles: +$('#nTiles').value, ne: +$('#nNe').value, cpi: +$('#nCpi').value, wpi: +$('#nWpi').value };
+  $('#nBuild').disabled = true;
+  const r = await fetch('/api/build', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  if (!r.ok) { const e = await r.json().catch(() => ({})); $('#nBuild').disabled = false; return toast('Could not build: ' + (typeof e.detail === 'string' ? e.detail : JSON.stringify(e.detail || r.status))); }
+  pollBuild();
+};
+async function pollBuild() {
+  let b; try { b = await (await fetch('/api/build/status')).json(); } catch (e) { return; }
+  if (!b.id) return; $('#nLog').textContent = b.log || '';
+  if (b.running) { $('#nState').textContent = 'building ' + b.name + ' (' + b.id + ')\u2026 the first build of new dimensions takes a few minutes'; $('#nBuild').disabled = true; return setTimeout(pollBuild, 2500); }
+  $('#nBuild').disabled = false; if (b.done === null) return;
+  if (b.done) { $('#nState').textContent = 'built ' + b.id; buildSeen = b.id; await poll(); toast('Built "' + b.name + '" (' + b.id + ').', 'Open', () => show(b.id, true)); } else { $('#nState').textContent = b.error; }
+}
+let buildSeen = null;
+// ---- server status strip
+async function pollSys() { try { const s = await (await fetch('/api/status')).json(); const p = []; if (s.cpu != null) p.push('CPU ' + Math.round(s.cpu) + '%'); if (s.ram_pct != null) p.push('RAM ' + Math.round(s.ram_pct) + '%'); if (s.temp_c != null) p.push(s.temp_c + '\u00b0C'); if (s.disk_free_gb != null) p.push(s.disk_free_gb + ' GB free'); $('#sys').textContent = 'Server: ' + p.join(' \u00b7 '); } catch (e) { $('#sys').textContent = 'Server: not reachable'; } }
 ['#fMu', '#fE'].forEach(i => $(i).oninput = updateSimButtons);
 $('#bSim').onclick = async () => {
-  const body = { E: +$('#fE').value, mu: +$('#fMu').value, kc_ratio: +$('#fKc').value, perturb: +$('#fPert').value, outer: +$('#fOuter').value, maxiter: +$('#fMax').value,
-    curl: +$('#fCurl').value, curl_aniso: $('#fAniso').checked, ref_scale: +$('#fRef').value, tension_cN: +$('#fTen').value, creep_tau_h: +$('#fTau').value, hours: +$('#fHours').value,
-    shell: $('#fShell').checked, shell_w: +$('#fShellW').value, shell_kappa: $('#fShellTile').checked ? 'tile' : 'guess', tile_ref: +$('#fTileRef').value, kappa_scale: +$('#fKScale').value, stretch_scale: +$('#fStretch').value, bend_scale: +$('#fBend').value, straight: +$('#fStr').value, shell_frame: $('#fShellF').checked, length_ratio: +$('#fLenRatio').value, seed_only: $('#fSeedOnly').checked };
+  const body = getBody();
   $('#bSim').disabled = true;
   try {
     const r = await fetch('/api/results/' + current + '/simulate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
@@ -446,5 +544,6 @@ function renderLog() {
   for (const rd of (run.rounds || [])) { const r2 = document.createElement('tr'); cols.forEach(c => { const td = document.createElement('td'); td.textContent = fm(rd[c[0]], c[2]); td.style.cssText = 'text-align:right;padding:.05rem .5rem'; r2.append(td); }); tb.append(r2); }
   body.append(tb);
 }
+loadPresets(); pollBuild(); pollSys(); setInterval(pollSys, 10000); renderGrid();
 setInterval(poll, 5000); setInterval(pollState, 2000); setInterval(tickTimer, 500); poll();
 </script></body></html>

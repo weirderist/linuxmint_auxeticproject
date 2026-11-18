@@ -146,10 +146,10 @@ def release(sim):
     for y in sim.yarns: y.pinned[:] = False                                   # rigid locks dropped
     sim.contacts = build_contacts(sim); sim.to(S.RELEASED, '%d contacts' % len(sim.contacts))
 
-def run(sim, relax_fn, energy_fn, on_round=None):
+def run(sim, relax_fn, energy_fn, on_round=None, k0=0):
     """relax_fn(sim) -> None minimises positions at fixed l0 (e.g. L-BFGS-B on the DER + contact energy); energy_fn(sim) -> float."""
     p = sim.params; sim.to(S.RELAXING, 'outer loop start'); E_prev = None
-    for k in range(p.outer_max):
+    for k in range(k0, p.outer_max):
         relax_fn(sim); sim.contacts = build_contacts(sim); dmax = migrate(sim); E = energy_fn(sim); sim.energy_log.append(dict(iter=k, E=E, max_dl0=dmax)); on_round and on_round(k, E, dmax)
         if not np.isfinite(E): return sim.to(S.FAILED, 'non-finite energy')
         if not p.creep_tau and dmax < p.tol_len and E_prev is not None and abs(E - E_prev) < p.tol_energy*max(1.0, abs(E)): return sim.to(S.SETTLED, 'iter %d' % k)

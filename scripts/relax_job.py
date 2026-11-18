@@ -97,6 +97,7 @@ def main():
     a.add_argument('--stretch-scale', type=float, default=1.0, help='multiplies the axial stiffness EA only (1 = solid rod); lower values let rest length migrate more')
     a.add_argument('--no-shell-frame', action='store_true', help='keep kb0 as fixed vectors in the global frame (previous behaviour) instead of rotating it into the local frame of the shell')
     a.add_argument('--shell-sub', type=int, default=2, help='shell mesh cells per stitch side'); a.add_argument('--shell-steps', type=int, default=15); a.add_argument('--shell-iter', type=int, default=400)
+    a.add_argument('--resume', action='store_true', help='continue from checkpoint.npz in the folder (written after every outer iteration; survives a power cut)')
     g = a.parse_args()
     meta = json.load(open(os.path.join(g.folder, 'meta.json'))); sv.STRETCH_SCALE = g.stretch_scale; sv.BEND_SCALE = g.bend_scale
     EA, EI = sv.section(g.E, meta['R'])
@@ -106,12 +107,17 @@ def main():
     if g.shell and 'matrix' not in meta: sys.exit('the shell option needs the stitch matrix in meta.json (result built by an older pipeline)')
     if g.shell and g.ref_scale == 0: print('warning: --shell with --ref-scale 0 (straight-yarn reference): the loops will open against the shell hold; use --ref-scale 1', flush=True)
     kxy = None
-    if g.shell:
+    ck_path = os.path.join(g.folder, 'checkpoint.npz'); resuming = bool(g.resume and os.path.exists(ck_path) and not g.seed_only)
+    if g.resume and not resuming: sys.exit('--resume: no checkpoint.npz in %s' % g.folder)
+    shp = os.path.join(g.folder, 'shell.npz'); reuse_shell = bool(g.shell and resuming and os.path.exists(shp))
+    if g.shell and not reuse_shell:
         if g.shell_kappa == 'tile':
             import tile_sim as ts; sv.STRETCH_SCALE = 1.0; kxy = ts.stitch_kappas(meta['W'], meta['C'], meta['R'], g.E, g.k_contact/(g.E*math.pi*meta['R']), g.tile_ref); sv.STRETCH_SCALE = g.stretch_scale
         else: kxy = (-SHELL_KAPPA_C/meta['C'], SHELL_KAPPA_C/meta['C'])
         kxy = (g.kappa_scale*kxy[0], g.kappa_scale*kxy[1])
-    shell = run_shell(g, meta, kxy) if g.shell else None
+    if reuse_shell:
+        z = np.load(shp); shell = dict(X=z['X'], W=float(z['W']), C=float(z['C']), sub=int(z['sub']), nx=int(z['nx']), ny=int(z['ny'])); print('resume: shell fold reloaded from shell.npz', flush=True)
+    else: shell = run_shell(g, meta, kxy) if g.shell else None
     ratio = g.length_ratio/(1.0 + 0.01*g.tension/EA)                          # rest length = baseline length / (1 + T/EA), T in N (cN x 0.01)
     p = rs.Params(mu=g.mu, EA=EA, EI=EI, GJ=0.0, k_contact=g.k_contact, outer_max=g.outer, rest_length_ratio=ratio, curl=g.curl, curl_aniso=g.curl_aniso, ref_scale=g.ref_scale, creep_tau=g.creep_tau, hours=g.hours)       # GJ unused: twist not in the energy (see relax_solver)
     a_creep = 1.0 - math.exp(-(g.hours/g.outer)/g.creep_tau) if g.creep_tau else 0.0
@@ -139,6 +145,12 @@ def main():
         print('shell seed: %d stitch cells, hold %g x EA/R; energy on the folded shape %.6g (stretch %.4g bend %.4g contact %.4g shell %.4g)' % (nc, g.shell_w, es['total'], es['stretch'], es['bend'], es['contact'], es['shell']), flush=True)
     rng = np.random.default_rng(g.seed)
     for y in sim.yarns: y.X[:, 2] += g.perturb*sim.R*rng.standard_normal(len(y.X))
+    k0 = 0
+    if resuming:
+        ck = np.load(ck_path, allow_pickle=False); k0 = int(ck['k'])
+        for i, y in enumerate(sim.yarns): y.X[:] = ck['X%d' % i]; y.l0[:] = ck['l%d' % i]
+        sim.kb0 = ck['kb0'].copy(); sim.energy_log = json.loads(str(ck['elog']))
+        print('resume: checkpoint loaded, continuing at outer iteration %d of %d' % (k0 + 1, g.outer), flush=True)
     print('curl %g, feeder tension %g cN (strain %.3g), creep tau %g h over %g h' % (g.curl, g.tension, 0.01*g.tension/EA, g.creep_tau, g.hours), flush=True)
     print('start: E %.6g (stretch %.4g bend %.4g contact %.4g), min axis distance %.4f = %.1f%% of 2R' % (e0['total'], e0['stretch'], e0['bend'], e0['contact'], d0, 100*d0/(2*sim.R)), flush=True)
     mp = os.path.join(g.folder, 'meta.json')
@@ -148,12 +160,18 @@ def main():
         m = json.load(open(mp)); fn(m); json.dump(m, open(mp + '.tmp', 'w'), indent=1); os.replace(mp + '.tmp', mp)
     run_entry = dict(started=time.strftime('%Y-%m-%dT%H:%M:%S'), status='running', finished=None, seconds=None,
                      params=dict(E=g.E, mu=g.mu, k_contact=g.k_contact, curl=g.curl, curl_aniso=bool(g.curl_aniso), ref_scale=g.ref_scale, shell=bool(g.shell), shell_w=g.shell_w, shell_frame=bool(g.shell and not g.no_shell_frame), shell_kappa=g.shell_kappa, kappa_scale=g.kappa_scale, kappa_xy=kxy, stretch_scale=g.stretch_scale, bend_scale=g.bend_scale, straight=g.straight, length_ratio=g.length_ratio, seed_only=bool(g.seed_only), tension_cN=g.tension, creep_tau_h=g.creep_tau, hours=g.hours, outer=g.outer, maxiter=g.maxiter, perturb=g.perturb, seed=g.seed),
-                     start=dict(e0, min_dist_over_2R=d0/(2*sim.R)), rounds=[])
+                     start=dict(e0, min_dist_over_2R=d0/(2*sim.R)), rounds=[], resumed_at_outer=(k0 if resuming else None))
     meta_update(lambda m: m.__setitem__('simulations', (m.get('simulations') or []) + [run_entry]))
+    def save_checkpoint(knext):
+        """Atomic: positions, rest lengths, reference curvature and energy log after outer iteration knext-1. A power cut loses at most one outer iteration."""
+        d = {'X%d' % i: y.X for i, y in enumerate(sim.yarns)}; d.update({'l%d' % i: y.l0 for i, y in enumerate(sim.yarns)})
+        tmp = os.path.join(g.folder, 'checkpoint.tmp.npz'); np.savez(tmp, k=knext, kb0=sim.kb0, elog=json.dumps(sim.energy_log), **d); os.replace(tmp, ck_path)
+        json.dump(dict(next_outer_iteration=knext, outer=g.outer, saved=time.strftime('%Y-%m-%dT%H:%M:%S')), open(os.path.join(g.folder, 'checkpoint.json.tmp'), 'w')); os.replace(os.path.join(g.folder, 'checkpoint.json.tmp'), os.path.join(g.folder, 'checkpoint.json'))
     def on_round(k, E, dmax):
         pr = sv.energy_parts(sim, g.k_contact, g.E)
         rec = dict(round=k+1, t=round(time.time()-t_start, 2), E=pr['total'], stretch=pr['stretch'], bend=pr['bend'], contact=pr['contact'], shell=pr['shell'], max_dl0=dmax, min_dist_over_2R=sv.min_axis_distance(sim)/(2*sim.R))
         meta_update(lambda m: m['simulations'][-1]['rounds'].append(rec))
+        if not g.seed_only: save_checkpoint(k + 1)
     t0 = time.time()
     def relax(s):
         sv.relax(s, g.E, g.k_contact, maxiter=g.maxiter, verbose=True)
@@ -165,7 +183,7 @@ def main():
         for k in range(3):
             relax(sim); sim.contacts = rs.build_contacts(sim); e_k = energy(sim); sim.energy_log.append(dict(iter=k, E=e_k, max_dl0=0.0)); on_round(k, e_k, 0.0)
         sim.to(rs.S.SETTLED, 'quick mode: 3 short rounds, not an equilibrium')
-    else: rs.run(sim, relax, energy, on_round)
+    else: rs.run(sim, relax, energy, on_round, k0=k0)
     e1 = sv.energy_parts(sim, g.k_contact, g.E); d1 = sv.min_axis_distance(sim)
     tot_l0 = sum(float(y.l0.sum()) for y in sim.yarns)
     print('end (%s, %.0f s): E %.6g (stretch %.4g bend %.4g contact %.4g), min axis distance %.4f = %.1f%% of 2R, total rest length %.6g' % (sim.state.value, time.time()-t0, e1['total'], e1['stretch'], e1['bend'], e1['contact'], d1, 100*d1/(2*sim.R), tot_l0))
@@ -183,6 +201,9 @@ def main():
     d = json.load(open(os.path.join(g.folder, 'state.json'))); d['summary'] = dict(start=e0, end=e1, min_dist_over_2R_start=d0/(2*sim.R), min_dist_over_2R_end=d1/(2*sim.R), wale_length_change=wale)
     if dv: d['summary']['shell'] = dict(w=g.shell_w, rms_dev_over_R=dv['rms']/sim.R, max_dev_over_R=dv['max']/sim.R)
     json.dump(d, open(os.path.join(g.folder, 'state.json.tmp'), 'w'), indent=1); os.replace(os.path.join(g.folder, 'state.json.tmp'), os.path.join(g.folder, 'state.json'))
+    for f in ('checkpoint.npz', 'checkpoint.json'):
+        try: os.remove(os.path.join(g.folder, f))
+        except OSError: pass
     sys.exit(0 if sim.state == rs.S.SETTLED else 2)
 
 if __name__ == '__main__':
