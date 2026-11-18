@@ -6,6 +6,9 @@ Writes into the folder: state.json (progress, atomic, every outer iteration), re
 Shell option (--shell): first the thin-shell model (shell_sim.py, Niu et al. 2025) is run on the stitch matrix to get the folded shape. The yarn is then moved onto that shape
 (each vertex keeps its offset from the sheet along the sheet normal) and the loops are relaxed with the mean position of every stitch-sized cell held toward the shell shape,
 with stiffness shell-w x EA/R per vertex (0 = start from the fold but do not hold it). Use --ref-scale 1 with it. By default the stress-free curvature kb0 is also rotated into the local frame of the shell (--no-shell-frame restores the fixed global-frame kb0).
+Without the shell (loops that fold on their own): --ramp K grows the stress-free state from the built loop shape to the target in K quasi-static stages (--ramp-iter L-BFGS iterations each),
+--seed-stitch a tilts front loops by +a R and back loops by -a R out of the plane before the random perturbation, --stall-tol t ends the outer loop when energy, rest lengths and positions have stopped changing
+(reported as 'settled', with the reason in the state history; not strict convergence). The end summary now also gives the size change of the relaxed fabric and the rest length per stitch.
 """
 import argparse, json, math, os, sys, time
 import numpy as np
@@ -75,6 +78,30 @@ def shell_cells(P, sh):
     uniq, cell = np.unique(cj*sh['nx'] + ci, return_inverse=True)
     return cell, len(uniq)
 
+def extent(sim):
+    """Size of the yarn axes' bounding box (x, y, z) in fabric units."""
+    P = np.vstack([y.X for y in sim.yarns]); return P.max(0) - P.min(0)
+
+def run_ramp(sim, g, kb_base, ratio):
+    """Quasi-static growth of the stress-free state, for runs WITHOUT the shell. Stage k of K moves the reference curvature from the built loop shape (zero bending energy,
+    nothing moves) toward its target and the rest lengths from the built lengths toward the target ratio, f = k/K of the way, and relaxes the positions after each stage.
+    The idea is the growth method of Niu, Dion, Kamien (PNAS 2025), which ramps the preferred curvature in steps from the previous solution, and the bounded stepwise
+    rest-shape updates of Sperl et al. (2022, Sec. 7.2); applying it to the yarn loops is this project's choice, not a published yarn-level result. Rest lengths are not
+    transferred between segments during the ramp (slip starts in the outer loop). Returns one record per stage."""
+    kb_T = sim.kb0.copy(); l0_T = [y.l0.copy() for y in sim.yarns]; rec = []
+    if np.abs(kb_T - kb_base).max() < 1e-12 and abs(ratio - 1.0) < 1e-12:
+        print('ramp skipped: the target stress-free state equals the built one (reference scale 1, no curl, rest length ratio 1), so there is nothing to grow', flush=True); return rec
+    t = time.time()
+    for k in range(1, g.ramp + 1):
+        f = k/g.ramp
+        sim.kb0 = (1.0 - f)*kb_base + f*kb_T
+        for y, l in zip(sim.yarns, l0_T): y.l0[:] = l if k == g.ramp else l/ratio*(1.0 - f*(1.0 - ratio))
+        sv.relax(sim, g.E, g.k_contact, maxiter=g.ramp_iter)
+        e = sv.energy_parts(sim, g.k_contact, g.E); z = float(np.ptp(np.vstack([y.X for y in sim.yarns])[:, 2])/sim.R)
+        rec.append(dict(stage=k, f=f, E=e['total'], stretch=e['stretch'], bend=e['bend'], contact=e['contact'], z_range_over_R=z, seconds=round(time.time() - t, 1)))
+        print('ramp %d/%d (f %.2f): E %.6g (stretch %.4g bend %.4g contact %.4g; not comparable between stages), z-range %.2f R, %.0f s' % (k, g.ramp, f, e['total'], e['stretch'], e['bend'], e['contact'], z, time.time() - t), flush=True)
+    return rec
+
 def main():
     a = argparse.ArgumentParser()
     a.add_argument('--folder', required=True); a.add_argument('--E', type=float, required=True, help='effective yarn modulus')
@@ -96,6 +123,10 @@ def main():
     a.add_argument('--straight', type=float, default=0.0, help='straightening factor s >= 0: extra bending energy pulling the yarn straight, s x EI/2 |k|^2 on top of the loop-holding term (0 = off). Yarn length is not changed.')
     a.add_argument('--stretch-scale', type=float, default=1.0, help='multiplies the axial stiffness EA only (1 = solid rod); lower values let rest length migrate more')
     a.add_argument('--no-shell-frame', action='store_true', help='keep kb0 as fixed vectors in the global frame (previous behaviour) instead of rotating it into the local frame of the shell')
+    a.add_argument('--ramp', type=int, default=0, help='no shell: grow the stress-free state (reference curvature and rest length ratio) from the built loop shape to the target in this many quasi-static stages (0 = off)')
+    a.add_argument('--ramp-iter', type=int, default=200, help='L-BFGS iterations per ramp stage'); a.add_argument('--seed-stitch', type=float, default=0.0, help='no shell: out-of-plane seed, front loops +a R and back loops -a R (0 = off; negative flips)')
+    a.add_argument('--stall-tol', type=float, default=0.0, help='early stop: relative energy change per outer round below this (with no rest-length change and little movement) for --stall-rounds rounds ends the run as settled (0 = off)')
+    a.add_argument('--stall-rounds', type=int, default=3); a.add_argument('--stall-move', type=float, default=0.01, help='largest vertex move per outer round allowed for the early stop, x R')
     a.add_argument('--shell-sub', type=int, default=2, help='shell mesh cells per stitch side'); a.add_argument('--shell-steps', type=int, default=15); a.add_argument('--shell-iter', type=int, default=400)
     a.add_argument('--resume', action='store_true', help='continue from checkpoint.npz in the folder (written after every outer iteration; survives a power cut)')
     g = a.parse_args()
@@ -106,6 +137,9 @@ def main():
     if g.creep_tau and g.hours <= 0: sys.exit('creep needs --hours > 0')
     if g.shell and 'matrix' not in meta: sys.exit('the shell option needs the stitch matrix in meta.json (result built by an older pipeline)')
     if g.shell and g.ref_scale == 0: print('warning: --shell with --ref-scale 0 (straight-yarn reference): the loops will open against the shell hold; use --ref-scale 1', flush=True)
+    if g.ramp and g.shell: sys.exit('--ramp is for runs without the shell')
+    if g.seed_stitch and g.shell: sys.exit('--seed-stitch is for runs without the shell')
+    if g.seed_stitch and 'matrix' not in meta: sys.exit('the stitch seed needs the stitch matrix in meta.json (result built by an older pipeline)')
     kxy = None
     ck_path = os.path.join(g.folder, 'checkpoint.npz'); resuming = bool(g.resume and os.path.exists(ck_path) and not g.seed_only)
     if g.resume and not resuming: sys.exit('--resume: no checkpoint.npz in %s' % g.folder)
@@ -119,15 +153,16 @@ def main():
         z = np.load(shp); shell = dict(X=z['X'], W=float(z['W']), C=float(z['C']), sub=int(z['sub']), nx=int(z['nx']), ny=int(z['ny'])); print('resume: shell fold reloaded from shell.npz', flush=True)
     else: shell = run_shell(g, meta, kxy) if g.shell else None
     ratio = g.length_ratio/(1.0 + 0.01*g.tension/EA)                          # rest length = baseline length / (1 + T/EA), T in N (cN x 0.01)
-    p = rs.Params(mu=g.mu, EA=EA, EI=EI, GJ=0.0, k_contact=g.k_contact, outer_max=g.outer, rest_length_ratio=ratio, curl=g.curl, curl_aniso=g.curl_aniso, ref_scale=g.ref_scale, creep_tau=g.creep_tau, hours=g.hours)       # GJ unused: twist not in the energy (see relax_solver)
+    p = rs.Params(mu=g.mu, EA=EA, EI=EI, GJ=0.0, k_contact=g.k_contact, outer_max=g.outer, rest_length_ratio=ratio, curl=g.curl, curl_aniso=g.curl_aniso, ref_scale=g.ref_scale, creep_tau=g.creep_tau, hours=g.hours, stall_tol=g.stall_tol, stall_rounds=g.stall_rounds, stall_move=g.stall_move)       # GJ unused: twist not in the energy (see relax_solver)
     a_creep = 1.0 - math.exp(-(g.hours/g.outer)/g.creep_tau) if g.creep_tau else 0.0
     sim = rs.load(g.folder, p)
-    if g.curl and sim.yarns[0].s is None: sys.exit('curl needs the stitch types: meta.json must hold the matrix, tiles and structure W and C')
+    if (g.curl or g.seed_stitch) and sim.yarns[0].s is None: sys.exit('curl and the stitch seed need the stitch types: meta.json must hold the matrix, tiles and structure W and C')
     rs.release(sim)
     stc = meta.get('structure', {}); ncol = len(meta['matrix'][0])*meta['tiles'] if 'matrix' in meta and 'tiles' in meta else 0
     colf = (lambda y: np.clip(((y.X[:-1, 0] + y.X[1:, 0])/2//stc['W']).astype(int), 0, ncol-1)) if ncol and 'W' in stc else None
     l0_start = [(colf(y), y.l0.copy()) for y in sim.yarns] if colf else None          # stitch column of each segment at the start, and its rest length
     e0 = sv.energy_parts(sim, g.k_contact, g.E); d0 = sv.min_axis_distance(sim)
+    kb_base = sv._kb_np(sim, sv.pack(sim)[2])[0].copy() if g.ramp else None; ext0 = extent(sim); ramp_rec = []          # built loop curvature (the ramp starts here) and built size (for the size change at the end)
     if g.straight > 0:      # EI/2 |k - k0|^2 + s EI/2 |k|^2 = (1+s) EI/2 |k - k0/(1+s)|^2 + const: the same minimiser as a yarn that is (1+s) times stiffer and has 1/(1+s) of the loop curvature
         sim.kb0 = sv.baseline_curvature(sim, sv.pack(sim)[2])/(1.0 + g.straight); sim.bend_scale = 1.0 + g.straight
         print('straightening factor %g: stress-free curvature x %.4g, bending stiffness x %.4g (energies below are not comparable with runs at 0)' % (g.straight, 1/(1+g.straight), 1+g.straight), flush=True)
@@ -143,6 +178,8 @@ def main():
         for y in sim.yarns: y.X[:] = T[o:o+len(y.X)]; o += len(y.X)                      # start the loops on the folded shape
         es = sv.energy_parts(sim, g.k_contact, g.E)
         print('shell seed: %d stitch cells, hold %g x EA/R; energy on the folded shape %.6g (stretch %.4g bend %.4g contact %.4g shell %.4g)' % (nc, g.shell_w, es['total'], es['stretch'], es['bend'], es['contact'], es['shell']), flush=True)
+    if g.seed_stitch:
+        for y in sim.yarns: y.X[:, 2] += g.seed_stitch*sim.R*y.s                  # front (digit 1) loops toward +z, back (digit 2) toward -z: the sign of the knit/purl imbalance, instead of random noise alone
     rng = np.random.default_rng(g.seed)
     for y in sim.yarns: y.X[:, 2] += g.perturb*sim.R*rng.standard_normal(len(y.X))
     k0 = 0
@@ -159,7 +196,7 @@ def main():
     def meta_update(fn):
         m = json.load(open(mp)); fn(m); json.dump(m, open(mp + '.tmp', 'w'), indent=1); os.replace(mp + '.tmp', mp)
     run_entry = dict(started=time.strftime('%Y-%m-%dT%H:%M:%S'), status='running', finished=None, seconds=None,
-                     params=dict(E=g.E, mu=g.mu, k_contact=g.k_contact, curl=g.curl, curl_aniso=bool(g.curl_aniso), ref_scale=g.ref_scale, shell=bool(g.shell), shell_w=g.shell_w, shell_frame=bool(g.shell and not g.no_shell_frame), shell_kappa=g.shell_kappa, kappa_scale=g.kappa_scale, kappa_xy=kxy, stretch_scale=g.stretch_scale, bend_scale=g.bend_scale, straight=g.straight, length_ratio=g.length_ratio, seed_only=bool(g.seed_only), tension_cN=g.tension, creep_tau_h=g.creep_tau, hours=g.hours, outer=g.outer, maxiter=g.maxiter, perturb=g.perturb, seed=g.seed),
+                     params=dict(E=g.E, mu=g.mu, k_contact=g.k_contact, curl=g.curl, curl_aniso=bool(g.curl_aniso), ref_scale=g.ref_scale, shell=bool(g.shell), shell_w=g.shell_w, shell_frame=bool(g.shell and not g.no_shell_frame), shell_kappa=g.shell_kappa, kappa_scale=g.kappa_scale, kappa_xy=kxy, stretch_scale=g.stretch_scale, bend_scale=g.bend_scale, straight=g.straight, length_ratio=g.length_ratio, seed_only=bool(g.seed_only), ramp=g.ramp, ramp_iter=g.ramp_iter, seed_stitch=g.seed_stitch, stall_tol=g.stall_tol, stall_rounds=g.stall_rounds, stall_move=g.stall_move, tension_cN=g.tension, creep_tau_h=g.creep_tau, hours=g.hours, outer=g.outer, maxiter=g.maxiter, perturb=g.perturb, seed=g.seed),
                      start=dict(e0, min_dist_over_2R=d0/(2*sim.R)), rounds=[], resumed_at_outer=(k0 if resuming else None))
     meta_update(lambda m: m.__setitem__('simulations', (m.get('simulations') or []) + [run_entry]))
     def save_checkpoint(knext):
@@ -172,6 +209,9 @@ def main():
         rec = dict(round=k+1, t=round(time.time()-t_start, 2), E=pr['total'], stretch=pr['stretch'], bend=pr['bend'], contact=pr['contact'], shell=pr['shell'], max_dl0=dmax, min_dist_over_2R=sv.min_axis_distance(sim)/(2*sim.R))
         meta_update(lambda m: m['simulations'][-1]['rounds'].append(rec))
         if not g.seed_only: save_checkpoint(k + 1)
+    if g.ramp and not resuming:
+        ramp_rec = run_ramp(sim, g, kb_base, ratio)
+        if ramp_rec: meta_update(lambda m: m['simulations'][-1].update(ramp=ramp_rec)); save_checkpoint(0)          # a power cut after the ramp resumes at the first outer round with the grown state
     t0 = time.time()
     def relax(s):
         sv.relax(s, g.E, g.k_contact, maxiter=g.maxiter, verbose=True)
@@ -187,6 +227,9 @@ def main():
     e1 = sv.energy_parts(sim, g.k_contact, g.E); d1 = sv.min_axis_distance(sim)
     tot_l0 = sum(float(y.l0.sum()) for y in sim.yarns)
     print('end (%s, %.0f s): E %.6g (stretch %.4g bend %.4g contact %.4g), min axis distance %.4f = %.1f%% of 2R, total rest length %.6g' % (sim.state.value, time.time()-t0, e1['total'], e1['stretch'], e1['bend'], e1['contact'], d1, 100*d1/(2*sim.R), tot_l0))
+    ext1 = extent(sim); nst = len(meta['matrix'])*len(meta['matrix'][0])*meta['tiles']**2 if meta.get('matrix') and meta.get('tiles') else None
+    dims = dict(shrink_x=float(ext1[0]/ext0[0] - 1), shrink_y=float(ext1[1]/ext0[1] - 1), z_range_over_R_start=float(ext0[2]/sim.R), z_range_over_R_end=float(ext1[2]/sim.R), rest_length_per_stitch=(tot_l0/nst if nst else None))
+    print('relaxed size against the built size: x %+.1f%%, y %+.1f%% (folding also shrinks these); thickness (z range) %.2f R -> %.2f R; rest length per stitch %s' % (100*dims['shrink_x'], 100*dims['shrink_y'], dims['z_range_over_R_start'], dims['z_range_over_R_end'], '%.5g' % dims['rest_length_per_stitch'] if nst else 'n/a'), flush=True)
     dv = sv.shell_deviation(sim)
     if dv: print('shell hold: shell energy %.4g; cell means are %.3g (rms) and %.3g (max) from the shell shape = %.2f and %.2f yarn radii' % (e1['shell'], dv['rms'], dv['max'], dv['rms']/sim.R, dv['max']/sim.R))
     meta_update(lambda m: m['simulations'][-1].update(status=sim.state.value, finished=time.strftime('%Y-%m-%dT%H:%M:%S'), seconds=round(time.time()-t_start, 1), end=dict(e1, min_dist_over_2R=d1/(2*sim.R))))
@@ -200,6 +243,8 @@ def main():
     write_obj(os.path.join(g.folder, 'relaxed_tube.obj'), [y.X for y in sim.yarns], sim.R, g.sides, 'relaxed state of %s' % os.path.basename(os.path.abspath(g.folder)))
     d = json.load(open(os.path.join(g.folder, 'state.json'))); d['summary'] = dict(start=e0, end=e1, min_dist_over_2R_start=d0/(2*sim.R), min_dist_over_2R_end=d1/(2*sim.R), wale_length_change=wale)
     if dv: d['summary']['shell'] = dict(w=g.shell_w, rms_dev_over_R=dv['rms']/sim.R, max_dev_over_R=dv['max']/sim.R)
+    d['summary']['dims'] = dims; d['summary']['settled_by'] = (sim.history[-1].get('note', '') if sim.state == rs.S.SETTLED else '')
+    if ramp_rec: d['summary']['ramp'] = ramp_rec
     json.dump(d, open(os.path.join(g.folder, 'state.json.tmp'), 'w'), indent=1); os.replace(os.path.join(g.folder, 'state.json.tmp'), os.path.join(g.folder, 'state.json'))
     for f in ('checkpoint.npz', 'checkpoint.json'):
         try: os.remove(os.path.join(g.folder, f))

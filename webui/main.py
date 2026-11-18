@@ -29,6 +29,9 @@ CONFIG = {
                       "yarn feeding (Control of the stability circular knitting process with passive yarn feeding, Mechanika, Kaunas University of Technology). "
                       "Experimental settings in that study, not a certified standard; the lowest is offered as the default.",
     "straight": 0.0,                         # straightening factor, 0 = off. No sourced value: a modelling factor.
+    "ramp": 0, "ramp_iter": 200,             # growth stages for runs without the shell (0 = off), L-BFGS iterations per stage. Numerical choices, not sourced.
+    "seed_stitch": 0.0,                      # out-of-plane seed by stitch type, x R (0 = off). A modelling choice.
+    "stall_tol": 1e-6,                       # early stop on a stalled outer loop (0 = off). Numerical choice; a run stopped this way is reported as settled with the reason in state.json.
     "kc_ratio": 30.0,                        # contact stiffness as a multiple of EA/R. Numerical choice, tested on one fabric only.
     "perturb": 0.02, "outer": 40, "maxiter": 300,
     "shell_w": 1.0,                          # hold on the shell fold, x EA/R per vertex. Numerical choice, not tested on the real solver.
@@ -143,6 +146,10 @@ class SimBody(BaseModel):
     bend_scale: float = Field(1.0, gt=0, le=1, description='multiplies the bending stiffness EI only (spun yarn is far softer than a solid rod)')
     length_ratio: float = Field(1.0, ge=0.5, le=1.0, description='rest length ratio eta (<1: yarn knitted tighter than the built geometry)')
     shell_w: float = Field(1.0, ge=0, le=1000, description="hold on the shell fold, x EA/R per vertex (0 = start from the fold only)")
+    ramp: int = Field(0, ge=0, le=40, description="no shell: grow the stress-free state from the built loop shape to the target in this many stages (0 = off)")
+    ramp_iter: int = Field(200, ge=10, le=3000, description="L-BFGS iterations per growth stage")
+    seed_stitch: float = Field(0.0, ge=-1, le=1, description="no shell: out-of-plane seed, front loops +a R, back loops -a R (0 = off)")
+    stall_tol: float = Field(0.0, ge=0, le=0.01, description="early stop: relative energy change per outer round below this for 3 rounds (0 = off)")
 
 class TileBody(BaseModel):
     E: float = Field(gt=0); kc_ratio: float = Field(30.0, gt=0, le=10000)
@@ -167,7 +174,8 @@ def _sim_cmd(d, b, R):
         cmd += ["--shell", "--shell-w", repr(b.shell_w), "--shell-kappa", b.shell_kappa, "--kappa-scale", repr(b.kappa_scale), "--tile-ref", repr(b.tile_ref)]
         if b.seed_only: cmd += ["--seed-only"]
         if not b.shell_frame: cmd += ["--no-shell-frame"]
-    cmd += ["--stretch-scale", repr(b.stretch_scale), "--bend-scale", repr(b.bend_scale), "--straight", repr(b.straight), "--length-ratio", repr(b.length_ratio)]
+    cmd += ["--stretch-scale", repr(b.stretch_scale), "--bend-scale", repr(b.bend_scale), "--straight", repr(b.straight), "--length-ratio", repr(b.length_ratio),
+            "--ramp", str(b.ramp), "--ramp-iter", str(b.ramp_iter), "--seed-stitch", repr(b.seed_stitch), "--stall-tol", repr(b.stall_tol)]
     return cmd, kc
 
 def _launch(rid, d, cmd, resume=False):
@@ -192,6 +200,10 @@ def simulate(rid: str, b: SimBody):
         raise HTTPException(422, "shell-only needs the shell option ticked")
     if b.shell and not meta.get("matrix"):
         raise HTTPException(422, "the shell option needs the stitch matrix in meta.json (result built by an older pipeline)")
+    if b.ramp and b.shell:
+        raise HTTPException(422, "growth stages are for runs without the shell: untick the shell or set the stages to 0")
+    if b.seed_stitch and (b.shell or not meta.get("matrix")):
+        raise HTTPException(422, "the stitch seed needs the stitch matrix and is for runs without the shell")
     cmd, kc = _sim_cmd(d, b, R)
     for f in ("relaxed_axis.csv", "relaxed_tube.obj", "relaxed_tube.bin", "state.json", "job.json", "shell.npz") + CKPT_FILES:
         (d / f).unlink(missing_ok=True)          # never leave a previous run's files next to a new one

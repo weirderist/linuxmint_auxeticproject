@@ -78,7 +78,7 @@ button:disabled{opacity:.45}
   <label><span>L-BFGS iterations per round</span><input id="fMax" type="number" step="1" min="10" max="3000"></label>
   <label><span>Stored curl (rad per vertex, front +, back &minus;)</span><input id="fCurl" type="number" step="any" min="0" max="0.5"></label>
   <label class="row"><input id="fAniso" type="checkbox"><span>Anticlastic curl (course yarn opposite to wale yarn)</span></label>
-  <label><span>Reference curvature scale (0 straight yarn, 1 knitted shape; use 1 with the shell)</span><input id="fRef" type="number" step="any" min="0" max="1"></label>
+  <label><span>Reference curvature scale (0 straight yarn, 1 knitted shape; use 1 with the shell. Without the shell, 1 leaves nothing to drive a fold: a value below 1 is the partial-memory case, cf. Choi and Lo 2006)</span><input id="fRef" type="number" step="any" min="0" max="1"></label>
   <label><span>Straightening factor (0 = off; pulls the yarn toward straight, length unchanged)</span><input id="fStr" type="number" step="any" min="0" max="100"></label>
   <label><span>Feeder tension (cN, mm results)</span><input id="fTen" type="number" step="any" min="0" max="200"></label>
   <label><span>Creep time constant (hours, 0 = off)</span><input id="fTau" type="number" step="any" min="0"></label>
@@ -90,8 +90,12 @@ button:disabled{opacity:.45}
   <label><span>Tile rest-curvature scale (0 to 1; unsourced)</span><input id="fTileRef" type="number" step="any" min="0" max="1"></label>
   <label><span>Shell curvature calibration factor (fit to a measured fold; negative flips it)</span><input id="fKScale" type="number" step="any" min="-5" max="5"></label>
   <label><span>Axial stiffness scale (x EA; below 1 lets yarn length migrate more)</span><input id="fStretch" type="number" step="any" min="0.0001" max="1"></label>
-  <label><span>Bending stiffness scale (x solid rod; spun yarn is far softer: 0.0032 measured on acrylic spun yarn, Ding et al.; unsourced for cotton)</span><input id="fBend" type="number" step="any" min="0.00001" max="1"></label>
-  <label><span>Rest length ratio (1 = as built; below 1 = knitted tighter, Ding et al. A.7)</span><input id="fLenRatio" type="number" step="any" min="0.5" max="1"></label>
+  <label><span>Bending stiffness scale (x solid rod; spun yarn is far softer: 0.0032 measured on acrylic spun yarn, Ding et al.; unsourced for cotton. Measure yours on a bending frame or KES-FB2; the frame reads about 1.6x KES, Alshukur and Macintyre 2020)</span><input id="fBend" type="number" step="any" min="0.00001" max="1"></label>
+  <label><span>Rest length ratio (1 = as built; below 1 = knitted tighter, Ding et al. A.7; tighter loops fold and curl more in the experiments of Amanatides et al. 2022 and Basiri et al. 2010)</span><input id="fLenRatio" type="number" step="any" min="0.5" max="1"></label>
+  <label><span>Growth stages (no shell; 0 = off). Moves the reference curvature and rest length from the built loop shape to the values above in this many steps</span><input id="fRamp" type="number" step="1" min="0" max="40"></label>
+  <label><span>L-BFGS iterations per growth stage</span><input id="fRampIt" type="number" step="1" min="10" max="3000"></label>
+  <label><span>Stitch seed (x R; no shell; 0 = off). Front loops up, back loops down, before the random perturbation; negative flips</span><input id="fSeedSt" type="number" step="any" min="-1" max="1"></label>
+  <label><span>Stop when stalled (relative energy change per round; 0 = off). Reported as settled with the reason</span><input id="fStall" type="number" step="any" min="0" max="0.01"></label>
   <label class="row"><input id="fSeedOnly" type="checkbox"><span>Quick mode: shell fold plus 3 short relaxation rounds (about a minute; not an equilibrium)</span></label>
  </div>
  <div class="grid"><label><span>Saved settings</span><select id="pSel"></select></label><label><span>Save the settings above as</span><input id="pName" maxlength="60" placeholder="name"></label></div>
@@ -306,6 +310,8 @@ function infoText() {
       t += '\nenergy end   ' + b.total.toPrecision(5) + ' (stretch ' + b.stretch.toPrecision(3) + ', bend ' + b.bend.toPrecision(3) + ', contact ' + b.contact.toPrecision(3) + ')';
       t += '\nmin axis distance ' + (100 * st.summary.min_dist_over_2R_start).toFixed(1) + '% -> ' + (100 * st.summary.min_dist_over_2R_end).toFixed(1) + '% of 2R';
       if (st.summary.shell) t += '\nshell hold ' + st.summary.shell.w + ' x EA/R: cell means end ' + st.summary.shell.rms_dev_over_R.toFixed(2) + ' (rms) and ' + st.summary.shell.max_dev_over_R.toFixed(2) + ' (max) yarn radii from the shell shape';
+      if (st.summary.dims) t += '\nrelaxed size against the built size: x ' + (100 * st.summary.dims.shrink_x).toFixed(1) + '%, y ' + (100 * st.summary.dims.shrink_y).toFixed(1) + '% (folding also shrinks these); thickness ' + st.summary.dims.z_range_over_R_start.toFixed(2) + ' R -> ' + st.summary.dims.z_range_over_R_end.toFixed(2) + ' R' + (st.summary.dims.rest_length_per_stitch != null ? '; rest length per stitch ' + st.summary.dims.rest_length_per_stitch.toPrecision(5) : '');
+      if (st.state === 'settled' && st.summary.settled_by && st.summary.settled_by.startsWith('stalled')) t += '\nstopped early: ' + st.summary.settled_by;
       if (st.state === 'failed') t += '\nthe iteration limit was reached before the energy and rest lengths settled; the relaxed shape is the last iterate';
     }
   }
@@ -348,7 +354,7 @@ function setupSim() {
     $('#fE').value = mm ? CFG.yarn_E_MPa : 1;
     $('#lE').textContent = mm ? 'Yarn modulus E (MPa = N/mm\u00b2)' : 'Yarn modulus E (R-unit result: only the ratio to contact stiffness matters)';
     $('#fCurl').value = 0; $('#fAniso').checked = false; $('#fRef').value = 1; $('#fTen').value = mm ? CFG.tension_cN : 0; $('#fTau').value = 0; $('#fHours').value = 0; $('#fTen').disabled = !mm;
-    $('#fShell').checked = true; $('#fShellW').value = CFG.shell_w; $('#fShellTile').checked = false; $('#fTileRef').value = 0.5; $('#fKScale').value = 1; $('#fStretch').value = 1; $('#fSeedOnly').checked = false; $('#fStr').value = CFG.straight; $('#fShellF').checked = true; $('#fBend').value = 0.003; $('#fLenRatio').value = 1;
+    $('#fShell').checked = true; $('#fShellW').value = CFG.shell_w; $('#fShellTile').checked = false; $('#fTileRef').value = 0.5; $('#fKScale').value = 1; $('#fStretch').value = 1; $('#fSeedOnly').checked = false; $('#fStr').value = CFG.straight; $('#fShellF').checked = true; $('#fBend').value = 0.003; $('#fLenRatio').value = 1; $('#fRamp').value = CFG.ramp || 0; $('#fRampIt').value = CFG.ramp_iter || 200; $('#fSeedSt').value = CFG.seed_stitch || 0; $('#fStall').value = CFG.stall_tol || 0;
     $('#fKc').value = CFG.kc_ratio; $('#fPert').value = CFG.perturb; $('#fOuter').value = CFG.outer; $('#fMax').value = CFG.maxiter;
     applyBody(PRES._last, mm);
     $('#eNote').textContent = mm ? 'Units: mm. E in MPa (N/mm\u00b2), contact stiffness in N/mm, feeder tension in cN.' : 'R-unit result: no physical yarn size, so no physical modulus applies.';
@@ -369,7 +375,8 @@ function updateSimButtons() {
 }
 const FLD = { E: ['#fE', 'n'], mu: ['#fMu', 'n'], kc_ratio: ['#fKc', 'n'], perturb: ['#fPert', 'n'], outer: ['#fOuter', 'n'], maxiter: ['#fMax', 'n'], curl: ['#fCurl', 'n'], curl_aniso: ['#fAniso', 'b'], ref_scale: ['#fRef', 'n'],
   tension_cN: ['#fTen', 'n'], creep_tau_h: ['#fTau', 'n'], hours: ['#fHours', 'n'], shell: ['#fShell', 'b'], shell_w: ['#fShellW', 'n'], shell_kappa: ['#fShellTile', 'k'], tile_ref: ['#fTileRef', 'n'],
-  kappa_scale: ['#fKScale', 'n'], stretch_scale: ['#fStretch', 'n'], bend_scale: ['#fBend', 'n'], straight: ['#fStr', 'n'], shell_frame: ['#fShellF', 'b'], length_ratio: ['#fLenRatio', 'n'], seed_only: ['#fSeedOnly', 'b'] };
+  kappa_scale: ['#fKScale', 'n'], stretch_scale: ['#fStretch', 'n'], bend_scale: ['#fBend', 'n'], straight: ['#fStr', 'n'], shell_frame: ['#fShellF', 'b'], length_ratio: ['#fLenRatio', 'n'], seed_only: ['#fSeedOnly', 'b'],
+  ramp: ['#fRamp', 'n'], ramp_iter: ['#fRampIt', 'n'], seed_stitch: ['#fSeedSt', 'n'], stall_tol: ['#fStall', 'n'] };
 function getBody() { const o = {}; for (const [k, [id, t]] of Object.entries(FLD)) o[k] = t === 'n' ? +$(id).value : t === 'b' ? $(id).checked : ($(id).checked ? 'tile' : 'guess'); return o; }
 function applyBody(b, mm) {
   if (!b) return;
@@ -543,6 +550,13 @@ function renderLog() {
   const fm = (v, d) => v == null ? '' : (d === -2 ? (+v).toExponential(2) : d === 0 ? String(v) : d === 1 ? (+v).toFixed(1) : (+v).toPrecision(d));
   for (const rd of (run.rounds || [])) { const r2 = document.createElement('tr'); cols.forEach(c => { const td = document.createElement('td'); td.textContent = fm(rd[c[0]], c[2]); td.style.cssText = 'text-align:right;padding:.05rem .5rem'; r2.append(td); }); tb.append(r2); }
   body.append(tb);
+  if (run.ramp && run.ramp.length) {          // growth stages that ran before the outer loop
+    const t2 = document.createElement('div'); t2.className = 'note'; t2.textContent = 'Growth stages before the outer loop (each is measured against a changing reference, so energies are not comparable between stages)';
+    const tb2 = document.createElement('table'); tb2.style.cssText = tb.style.cssText; const c2 = [['stage', 'stage', 0], ['f', 'f', 3], ['E', 'energy', 5], ['stretch', 'stretch', 3], ['bend', 'bend', 5], ['contact', 'contact', 3], ['z_range_over_R', 'z range (R)', 3], ['seconds', 't (s)', 1]];
+    const h2 = document.createElement('tr'); c2.forEach(c => { const th = document.createElement('th'); th.textContent = c[1]; th.style.cssText = 'text-align:right;padding:.1rem .5rem;border-bottom:1px solid #8886'; h2.append(th); }); tb2.append(h2);
+    run.ramp.forEach(rd => { const r3 = document.createElement('tr'); c2.forEach(c => { const td = document.createElement('td'); td.textContent = fm(rd[c[0]], c[2]); td.style.cssText = 'text-align:right;padding:.05rem .5rem'; r3.append(td); }); tb2.append(r3); });
+    body.append(t2, tb2);
+  }
 }
 loadPresets(); pollBuild(); pollSys(); setInterval(pollSys, 10000); renderGrid();
 setInterval(poll, 5000); setInterval(pollState, 2000); setInterval(tickTimer, 500); poll();

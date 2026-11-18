@@ -1,0 +1,27 @@
+{
+ "_last": {
+  "E": 3700.0,
+  "mu": 0.49,
+  "kc_ratio": 30.0,
+  "perturb": 0.2,
+  "outer": 20,
+  "maxiter": 200,
+  "curl": 0.35,
+  "curl_aniso": true,
+  "ref_scale": 1.0,
+  "tension_cN": 15.0,
+  "creep_tau_h": 3.0,
+  "hours": 6.0,
+  "shell": true,
+  "shell_kappa": "tile",
+  "kappa_scale": 1.0,
+  "tile_ref": 0.5,
+  "stretch_scale": 0.3,
+  "seed_only": false,
+  "straight": 0.0,
+  "shell_frame": true,
+  "bend_scale": 0.003,
+  "length_ratio": 0.98,
+  "shell_w": 0.001
+ }
+}

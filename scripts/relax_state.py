@@ -39,6 +39,7 @@ class Params:
     hours: float = 0.0                 # simulated duration (hours); only used with creep
     slip_step_max: float = 0.2         # max fraction of a segment's rest length moved per outer iteration (numerical control)
     outer_max: int = 200; tol_len: float = 1e-6; tol_energy: float = 1e-8
+    stall_tol: float = 0.0; stall_rounds: int = 3; stall_move: float = 0.01   # early stop, 0 = off: relative energy change < stall_tol, rest-length change < tol_len and largest vertex move < stall_move x R, for stall_rounds rounds in a row. Numerical choice, not sourced.
     def missing(self): return [k for k in ('mu', 'EA', 'EI', 'GJ', 'k_contact') if getattr(self, k) is None]
 
 @dataclass
@@ -148,11 +149,15 @@ def release(sim):
 
 def run(sim, relax_fn, energy_fn, on_round=None, k0=0):
     """relax_fn(sim) -> None minimises positions at fixed l0 (e.g. L-BFGS-B on the DER + contact energy); energy_fn(sim) -> float."""
-    p = sim.params; sim.to(S.RELAXING, 'outer loop start'); E_prev = None
+    p = sim.params; sim.to(S.RELAXING, 'outer loop start'); E_prev = None; X_prev = None; calm = 0
     for k in range(k0, p.outer_max):
-        relax_fn(sim); sim.contacts = build_contacts(sim); dmax = migrate(sim); E = energy_fn(sim); sim.energy_log.append(dict(iter=k, E=E, max_dl0=dmax)); on_round and on_round(k, E, dmax)
+        relax_fn(sim); X_now = np.vstack([y.X for y in sim.yarns])            # positions only change inside relax_fn
+        dx = float(np.abs(X_now - X_prev).max()) if X_prev is not None and X_prev.shape == X_now.shape else None; X_prev = X_now
+        sim.contacts = build_contacts(sim); dmax = migrate(sim); E = energy_fn(sim); sim.energy_log.append(dict(iter=k, E=E, max_dl0=dmax, max_dx=dx)); on_round and on_round(k, E, dmax)
         if not np.isfinite(E): return sim.to(S.FAILED, 'non-finite energy')
         if not p.creep_tau and dmax < p.tol_len and E_prev is not None and abs(E - E_prev) < p.tol_energy*max(1.0, abs(E)): return sim.to(S.SETTLED, 'iter %d' % k)
+        calm = calm + 1 if (p.stall_tol > 0 and E_prev is not None and dx is not None and abs(E - E_prev) < p.stall_tol*max(abs(E), 1e-30) and dmax < p.tol_len and dx < p.stall_move*sim.R) else 0
+        if not p.creep_tau and calm >= p.stall_rounds: return sim.to(S.SETTLED, 'stalled at iter %d (not strict convergence): energy change < %g, rest-length change < %g, movement < %g R, for %d rounds' % (k, p.stall_tol, p.tol_len, p.stall_move, calm))
         E_prev = E; sim.to(S.RELAXING, 'iter %d E %.6g dl0 %.3g' % (k, E, dmax))
     if p.creep_tau: return sim.to(S.SETTLED, 'time horizon %g h reached' % p.hours)      # with creep the run is a fixed time, not a convergence test
     sim.to(S.FAILED, 'outer_max reached without settling')
