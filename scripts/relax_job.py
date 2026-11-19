@@ -93,6 +93,38 @@ def extent(sim):
     """Size of the yarn axes' bounding box (x, y, z) in fabric units."""
     P = np.vstack([y.X for y in sim.yarns]); return P.max(0) - P.min(0)
 
+def fit_curvature(sim):
+    """Least-squares quadratic fit z(x, y) of all yarn vertices: (kx, ky) = 2 x the x^2 and y^2 coefficients, 1/(fabric unit). Same as fold_metric.py."""
+    P = np.vstack([y.X for y in sim.yarns]); x = P[:, 0] - P[:, 0].mean(); y = P[:, 1] - P[:, 1].mean()
+    c = np.linalg.lstsq(np.c_[x*x, y*y, x*y, x, y, np.ones_like(x)], P[:, 2], rcond=None)[0]; return 2*c[0], 2*c[1]
+
+def fold_search(sim, g):
+    """No shell: look for a folded state of the yarn energy by trying large-scale bends. The flat fabric is not a minimum of the yarn energy for every input (measured: with straight stress-free yarn on
+    plain stockinette the relaxed energy falls steadily as the sheet is bent, courses toward +z and wales toward -z), but the slope is far too weak for the optimiser to find from flat. Each trial
+    bends the current relaxed fabric by a step in one of four directions (kx +/-, ky +/-), relaxes it for fold_iter iterations and keeps it only if its energy is lower than that of a CONTROL: the same
+    fabric relaxed for the same number of iterations without bending (otherwise any trial would win just by getting more relaxation). The last successful
+    direction is tried first and the step grows by 1.5 after a success; after a round with no success it halves; the search ends at fold_search accepted steps or when the step is below 1/16 of the
+    first. What it keeps is chosen by the yarn energy alone; nothing is prescribed. Energies of trials are compared after the same short relaxation, so tiny gains are within noise (accepted only if
+    more than 1e-4 relative). The result is a lower-energy state reachable by large-scale bending, not a proof that it is the global minimum."""
+    ext = extent(sim); delta = g.fold_delta or 0.25/max(ext[0], ext[1]); step = delta; energy = lambda: sv.energy_parts(sim, g.k_contact, g.E)['total']
+    snap = lambda: [y.X.copy() for y in sim.yarns]
+    def put(X):
+        for y, x in zip(sim.yarns, X): y.X = x.copy()
+    sv.relax(sim, g.E, g.k_contact, maxiter=g.fold_iter, rounds=1); base = snap(); E0 = energy(); k0 = fit_curvature(sim); last = None; steps = []; dirs = [(1, 0), (-1, 0), (0, 1), (0, -1)]
+    print('fold search: start E %.6g, curvature kx %+.4g ky %+.4g, first step %.3g' % (E0, k0[0], k0[1], delta), flush=True)
+    for it in range(g.fold_search):
+        done = False; put(base); sv.relax(sim, g.E, g.k_contact, maxiter=g.fold_iter, rounds=1); E0 = energy(); ctrl = snap()      # control: no bend, same iterations
+        for d in ([last] if last else []) + [q for q in dirs if q != last]:
+            put(base); warp_sheet(sim, d[0]*step, d[1]*step); sv.relax(sim, g.E, g.k_contact, maxiter=g.fold_iter, rounds=1); E = energy()
+            if E < E0 - 1e-4*abs(E0):
+                base = snap(); kc = fit_curvature(sim); steps.append(dict(step=it + 1, dir=list(d), size=step, E_before=E0, E=E, kx=float(kc[0]), ky=float(kc[1]))); E0 = E; last = d; done = True
+                print('  fold step %d: bend (%+d, %+d) x %.3g -> E %.6g, curvature kx %+.4g ky %+.4g' % (it + 1, d[0], d[1], steps[-1]['size'], E, kc[0], kc[1]), flush=True); step *= 1.5; break
+        if not done:
+            base = ctrl; step *= 0.5; last = None; print('  no bend beats the control (E %.6g): step halved to %.3g' % (E0, step), flush=True)
+            if step < delta/16: break
+    put(base); kc = fit_curvature(sim); print('fold search: %d accepted steps, E %.6g, curvature kx %+.4g ky %+.4g /unit' % (len(steps), E0, kc[0], kc[1]), flush=True)
+    return dict(delta=delta, fold_iter=g.fold_iter, steps=steps, E_start=steps[0]['E_before'] if steps else E0, E_end=E0, kx=float(kc[0]), ky=float(kc[1]))
+
 def run_ramp(sim, g, kb_base, ratio):
     """Quasi-static growth of the stress-free state, for runs WITHOUT the shell. Stage k of K moves the reference curvature from the built loop shape (zero bending energy,
     nothing moves) toward its target and the rest lengths from the built lengths toward the target ratio, f = k/K of the way, and relaxes the positions after each stage.
@@ -157,6 +189,9 @@ def main():
     a.add_argument('--ei', type=float, default=0.0, help='measured bending stiffness EI in N mm^2 (numerically equal to cN cm^2; 0 = solid rod from --E). mm results only')
     a.add_argument('--stretch-law', default='', help="measured stretch curve 'strain:cN,strain:cN,...' (e.g. 0.01:80,0.03:200,0.06:330); replaces Hooke, EA = first-point slope. mm results only")
     a.add_argument('--macro', action='store_true', help='no shell: let the optimiser move the three soft large-scale bending modes (course curvature, wale curvature, twist) as variables of their own, besides the vertices; same energy, same minimum, only reachable')
+    a.add_argument('--fold-search', type=int, default=0, help='no shell: up to this many accepted large-scale bending steps searched by the yarn energy (0 = off). See fold_search in this file')
+    a.add_argument('--fold-iter', type=int, default=200, help='iterations of the relaxation after each trial bend')
+    a.add_argument('--fold-delta', type=float, default=0.0, help='first bend step in 1/mm (0 = 0.25 / sheet size)')
     a.add_argument('--warp-kx', type=float, default=0.0, help='no shell: start from the sheet bent into a cylinder, curvature along the courses (1/mm, + toward +z); a start, not held')
     a.add_argument('--warp-ky', type=float, default=0.0, help='no shell: same along the wales')
     a.add_argument('--stall-tol', type=float, default=0.0, help='early stop: relative energy change per outer round below this (with no rest-length change and little movement) for --stall-rounds rounds ends the run as settled (0 = off)')
@@ -164,9 +199,15 @@ def main():
     a.add_argument('--shell-sub', type=int, default=2, help='shell mesh cells per stitch side'); a.add_argument('--shell-steps', type=int, default=15); a.add_argument('--shell-iter', type=int, default=400)
     a.add_argument('--resume', action='store_true', help='continue from checkpoint.npz in the folder (written after every outer iteration; survives a power cut)')
     g = a.parse_args()
+    def set_stage(name):
+        """job_stage.json tells the UI which part of the job is running (prepare, tile, shell, ramp, fold, relax). Atomic; removed at the end."""
+        try:
+            sp = os.path.join(g.folder, 'job_stage.json'); json.dump(dict(stage=name, t=time.time()), open(sp + '.tmp', 'w')); os.replace(sp + '.tmp', sp)
+        except OSError: pass
+    set_stage('prepare')
     meta = json.load(open(os.path.join(g.folder, 'meta.json')))
     if (g.ea or g.ei or g.stretch_law) and meta.get('structure', {}).get('units') != 'mm': sys.exit('--ea, --ei and --stretch-law are in N and mm: they need a result built in mm (--ne --cpi --wpi)')
-    if g.macro and g.shell: sys.exit('--macro is for runs without the shell')
+    if (g.macro or g.fold_search) and g.shell: sys.exit('--macro and --fold-search are for runs without the shell')
     sv.MACRO = bool(g.macro)
     try: EA, EI = yarn_inputs(g, meta['R'])
     except ValueError as err: sys.exit(str(err))
@@ -185,12 +226,15 @@ def main():
     shp = os.path.join(g.folder, 'shell.npz'); reuse_shell = bool(g.shell and resuming and os.path.exists(shp))
     if g.shell and not reuse_shell:
         if g.shell_kappa == 'tile':
-            import tile_sim as ts; sv.STRETCH_SCALE = 1.0; kxy = ts.stitch_kappas(meta['W'], meta['C'], meta['R'], g.E, g.k_contact/(g.E*math.pi*meta['R']), g.tile_ref); sv.STRETCH_SCALE = g.stretch_scale
+            set_stage('tile'); import tile_sim as ts; sv.STRETCH_SCALE = 1.0; kxy = ts.stitch_kappas(meta['W'], meta['C'], meta['R'], g.E, g.k_contact/(g.E*math.pi*meta['R']), g.tile_ref); sv.STRETCH_SCALE = g.stretch_scale
         else: kxy = (-SHELL_KAPPA_C/meta['C'], SHELL_KAPPA_C/meta['C'])
         kxy = (g.kappa_scale*kxy[0], g.kappa_scale*kxy[1])
     if reuse_shell:
         z = np.load(shp); shell = dict(X=z['X'], W=float(z['W']), C=float(z['C']), sub=int(z['sub']), nx=int(z['nx']), ny=int(z['ny'])); print('resume: shell fold reloaded from shell.npz', flush=True)
-    else: shell = run_shell(g, meta, kxy) if g.shell else None
+    else:
+        if g.shell: set_stage('shell')
+        shell = run_shell(g, meta, kxy) if g.shell else None
+    set_stage('prepare')
     ten_strain = rs.strain_at(0.01*g.tension/EA)                              # strain under the feeder tension: T/EA for Hooke, from the measured curve with --stretch-law
     ratio = g.length_ratio/(1.0 + ten_strain)                                 # rest length = baseline length / (1 + strain), T in N (cN x 0.01)
     p = rs.Params(mu=g.mu, EA=EA, EI=EI, GJ=0.0, k_contact=g.k_contact, outer_max=g.outer, rest_length_ratio=ratio, curl=g.curl, curl_aniso=g.curl_aniso, ref_scale=g.ref_scale, creep_tau=g.creep_tau, hours=g.hours, stall_tol=g.stall_tol, stall_rounds=g.stall_rounds, stall_move=g.stall_move)       # GJ unused: twist not in the energy (see relax_solver)
@@ -239,7 +283,7 @@ def main():
     def meta_update(fn):
         m = json.load(open(mp)); fn(m); json.dump(m, open(mp + '.tmp', 'w'), indent=1); os.replace(mp + '.tmp', mp)
     run_entry = dict(started=time.strftime('%Y-%m-%dT%H:%M:%S'), status='running', finished=None, seconds=None,
-                     params=dict(E=g.E, mu=g.mu, k_contact=g.k_contact, curl=g.curl, curl_aniso=bool(g.curl_aniso), ref_scale=g.ref_scale, shell=bool(g.shell), shell_w=g.shell_w, shell_frame=bool(g.shell and not g.no_shell_frame), shell_kappa=g.shell_kappa, kappa_scale=g.kappa_scale, kappa_xy=kxy, stretch_scale=g.stretch_scale, bend_scale=g.bend_scale, straight=g.straight, length_ratio=g.length_ratio, seed_only=bool(g.seed_only), ramp=g.ramp, ramp_iter=g.ramp_iter, seed_stitch=g.seed_stitch, ea=g.ea, ei=g.ei, stretch_law=g.stretch_law, macro=bool(g.macro), stall_tol=g.stall_tol, stall_rounds=g.stall_rounds, stall_move=g.stall_move, tension_cN=g.tension, creep_tau_h=g.creep_tau, hours=g.hours, outer=g.outer, maxiter=g.maxiter, perturb=g.perturb, seed=g.seed),
+                     params=dict(E=g.E, mu=g.mu, k_contact=g.k_contact, curl=g.curl, curl_aniso=bool(g.curl_aniso), ref_scale=g.ref_scale, shell=bool(g.shell), shell_w=g.shell_w, shell_frame=bool(g.shell and not g.no_shell_frame), shell_kappa=g.shell_kappa, kappa_scale=g.kappa_scale, kappa_xy=kxy, stretch_scale=g.stretch_scale, bend_scale=g.bend_scale, straight=g.straight, length_ratio=g.length_ratio, seed_only=bool(g.seed_only), ramp=g.ramp, ramp_iter=g.ramp_iter, seed_stitch=g.seed_stitch, ea=g.ea, ei=g.ei, stretch_law=g.stretch_law, macro=bool(g.macro), fold_search=g.fold_search, fold_iter=g.fold_iter, fold_delta=g.fold_delta, stall_tol=g.stall_tol, stall_rounds=g.stall_rounds, stall_move=g.stall_move, tension_cN=g.tension, creep_tau_h=g.creep_tau, hours=g.hours, outer=g.outer, maxiter=g.maxiter, perturb=g.perturb, seed=g.seed),
                      start=dict(e0, min_dist_over_2R=d0/(2*sim.R)), rounds=[], resumed_at_outer=(k0 if resuming else None))
     meta_update(lambda m: m.__setitem__('simulations', (m.get('simulations') or []) + [run_entry]))
     def save_checkpoint(knext):
@@ -253,8 +297,11 @@ def main():
         meta_update(lambda m: m['simulations'][-1]['rounds'].append(rec))
         if not g.seed_only: save_checkpoint(k + 1)
     if g.ramp and not resuming:
-        ramp_rec = run_ramp(sim, g, kb_base, ratio)
+        set_stage('ramp'); ramp_rec = run_ramp(sim, g, kb_base, ratio)
         if ramp_rec: meta_update(lambda m: m['simulations'][-1].update(ramp=ramp_rec)); save_checkpoint(0)          # a power cut after the ramp resumes at the first outer round with the grown state
+    fold_rec = None
+    if g.fold_search and not resuming:
+        set_stage('fold'); fold_rec = fold_search(sim, g); meta_update(lambda m: m['simulations'][-1].update(fold_search=fold_rec)); save_checkpoint(0)
     t0 = time.time()
     def relax(s):
         sv.relax(s, g.E, g.k_contact, maxiter=g.maxiter, verbose=True)
@@ -266,7 +313,7 @@ def main():
         for k in range(3):
             relax(sim); sim.contacts = rs.build_contacts(sim); e_k = energy(sim); sim.energy_log.append(dict(iter=k, E=e_k, max_dl0=0.0)); on_round(k, e_k, 0.0)
         sim.to(rs.S.SETTLED, 'quick mode: 3 short rounds, not an equilibrium')
-    else: rs.run(sim, relax, energy, on_round, k0=k0)
+    else: set_stage('relax'); rs.run(sim, relax, energy, on_round, k0=k0)
     e1 = sv.energy_parts(sim, g.k_contact, g.E); d1 = sv.min_axis_distance(sim)
     tot_l0 = sum(float(y.l0.sum()) for y in sim.yarns)
     print('end (%s, %.0f s): E %.6g (stretch %.4g bend %.4g contact %.4g), min axis distance %.4f = %.1f%% of 2R, total rest length %.6g' % (sim.state.value, time.time()-t0, e1['total'], e1['stretch'], e1['bend'], e1['contact'], d1, 100*d1/(2*sim.R), tot_l0))
@@ -288,8 +335,9 @@ def main():
     if dv: d['summary']['shell'] = dict(w=g.shell_w, rms_dev_over_R=dv['rms']/sim.R, max_dev_over_R=dv['max']/sim.R)
     d['summary']['dims'] = dims; d['summary']['settled_by'] = (sim.history[-1].get('note', '') if sim.state == rs.S.SETTLED else '')
     if ramp_rec: d['summary']['ramp'] = ramp_rec
+    if fold_rec: d['summary']['fold_search'] = fold_rec
     json.dump(d, open(os.path.join(g.folder, 'state.json.tmp'), 'w'), indent=1); os.replace(os.path.join(g.folder, 'state.json.tmp'), os.path.join(g.folder, 'state.json'))
-    for f in ('checkpoint.npz', 'checkpoint.json'):
+    for f in ('checkpoint.npz', 'checkpoint.json', 'job_stage.json'):
         try: os.remove(os.path.join(g.folder, f))
         except OSError: pass
     sys.exit(0 if sim.state == rs.S.SETTLED else 2)

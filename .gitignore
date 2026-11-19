@@ -70,3 +70,4 @@ test_output/
 scripts/cell_cache/
 scripts/run_knit/
 webui/presets.json
+install.cmd

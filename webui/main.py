@@ -2,7 +2,7 @@ import base64, json, math, os, re, signal, subprocess, sys, threading, time
 from datetime import datetime
 from pathlib import Path
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from fastapi.middleware.gzip import GZipMiddleware
 from pydantic import BaseModel, Field
 
@@ -13,7 +13,8 @@ RESULTS = HERE / "results"
 RESULTS.mkdir(parents=True, exist_ok=True)
 SCRIPTS = HERE.parent / "scripts"
 ID_RE = re.compile(r"^[0-9A-Za-z_-]{1,64}$")
-RUNNING = ("released", "relaxing")
+RUNNING = ("loaded", "armed", "released", "relaxing")      # every state a live job can be in; "loaded" and "armed" last only while the tile / shell stages run
+STAGE_FILE = "job_stage.json"
 CKPT_FILES = ("checkpoint.npz", "checkpoint.json")
 PRESET_FILE = HERE / "presets.json"
 JOBS = {}                                    # result id -> subprocess.Popen (one at a time)
@@ -57,9 +58,9 @@ def _sim_summary(d):
     st = s.get("state")
     if st in RUNNING and not _alive(d.name):
         st = "interrupted"                   # the job process is gone but never reached a final state
-    t = d / "relaxed_tube.obj"
-    return {"state": st, "has_relaxed": t.exists() and (d / "relaxed_axis.csv").exists(),
-            "relaxed_at": int(t.stat().st_mtime) if t.exists() else 0}
+    t = next((p for p in (d / "relaxed_tube.bin", d / "relaxed_tube.obj") if p.exists()), None)      # the .bin is the one the viewer reads; the text OBJ is optional
+    return {"state": st, "has_relaxed": t is not None and (d / "relaxed_axis.csv").exists(),
+            "relaxed_at": int(t.stat().st_mtime) if t is not None else 0}
 
 def _matrix_text(m):
     M = m.get("matrix")
@@ -87,7 +88,7 @@ def list_results():
 def _file(rid, pattern, media, variant="baseline"):
     if not ID_RE.match(rid) or variant not in ("baseline", "relaxed"):
         raise HTTPException(404)
-    hits = sorted(h for h in (RESULTS / rid).glob(pattern) if h.name.startswith("relaxed_") == (variant == "relaxed"))
+    hits = sorted(h for h in (RESULTS / rid).glob(pattern) if h.name.startswith("relaxed_") == (variant == "relaxed") and ".view." not in h.name)
     if not hits:
         raise HTTPException(404)
     return FileResponse(hits[0], media_type=media)
@@ -107,19 +108,61 @@ def _ensure_baseline_tube(d):
     lines = [A[A[:, 0] == c][:, 1:] for c in np.unique(A[:, 0])]
     tmp = d / "fab_tmp.obj"
     write_obj(str(tmp), lines, meta["R"], 8, "baseline tube of %s" % d.name)
-    if tmp.with_suffix(".bin").exists():
-        os.replace(tmp.with_suffix(".bin"), d / "fab_tube.bin")      # the writer also emits the binary mesh: keep it, no second conversion
-    os.replace(tmp, d / "fab_tube.obj")
+    os.replace(tmp.with_suffix(".bin"), d / "fab_tube.bin")            # the binary mesh is what the viewer reads
+    if tmp.exists():
+        os.replace(tmp, d / "fab_tube.obj")                            # the text OBJ exists only for small meshes
+
+def _bin_to_obj_lines(binp):
+    """Stream a KMSH binary mesh as OBJ text, 100000 vertices at a time (large meshes never sit in memory as text)."""
+    import numpy as np
+    with open(binp, "rb") as f:
+        head = f.read(16); nv, nf = (int(x) for x in np.frombuffer(head[8:16], "<u4"))
+        V = np.fromfile(f, "<f4", nv * 3).reshape(-1, 3); F = np.fromfile(f, "<u4", nf * 3).reshape(-1, 3) + 1
+    yield "# %s (from the binary mesh)\n" % binp.name
+    for a in range(0, nv, 100000):
+        yield "".join("v %.5f %.5f %.5f\n" % tuple(r) for r in V[a:a + 100000])
+    for a in range(0, nf, 100000):
+        yield "".join("f %d %d %d\n" % tuple(r) for r in F[a:a + 100000])
 
 @app.get("/api/results/{rid}/tube")
 def tube(rid: str, v: str = "baseline"):
-    if ID_RE.match(rid) and v == "baseline" and (RESULTS / rid).is_dir():
-        _ensure_baseline_tube(RESULTS / rid)
-    return _file(rid, "*_tube.obj", "text/plain", v)
+    """OBJ text of the tube. Large meshes have no stored OBJ; it is streamed from the .bin on request (the web viewer itself uses /mesh)."""
+    if not ID_RE.match(rid) or v not in ("baseline", "relaxed"):
+        raise HTTPException(404)
+    d = RESULTS / rid
+    if v == "baseline" and d.is_dir():
+        _ensure_baseline_tube(d)
+    rel = (v == "relaxed")
+    objs = sorted(h for h in d.glob("*_tube.obj") if h.name.startswith("relaxed_") == rel)
+    if objs:
+        return FileResponse(objs[0], media_type="text/plain")
+    bins = sorted(h for h in d.glob("*_tube.bin") if h.name.startswith("relaxed_") == rel)
+    if not bins:
+        raise HTTPException(404)
+    return StreamingResponse(_bin_to_obj_lines(bins[0]), media_type="text/plain")
 
 @app.get("/api/results/{rid}/axis")
-def axis(rid: str, v: str = "baseline"):
-    return _file(rid, "*_axis.csv", "text/plain", v)
+def axis(rid: str, v: str = "baseline", view: int = 0):
+    """Axis CSV. view=1: a thinned copy for drawing (cached as <name>.view.csv): the files are sampled about 0.2 R apart, which a line drawing does not need."""
+    if not view:
+        return _file(rid, "*_axis.csv", "text/plain", v)
+    if not ID_RE.match(rid) or v not in ("baseline", "relaxed"):
+        raise HTTPException(404)
+    d = RESULTS / rid
+    hits = sorted(h for h in d.glob("*_axis.csv") if h.name.startswith("relaxed_") == (v == "relaxed") and not h.name.endswith(".view.csv"))
+    if not hits:
+        raise HTTPException(404)
+    src = hits[0]; out = src.with_name(src.stem + ".view.csv")
+    if not out.exists() or out.stat().st_mtime < src.stat().st_mtime:
+        import numpy as np
+        if str(SCRIPTS) not in sys.path:
+            sys.path.insert(0, str(SCRIPTS))
+        from build_knit import decimate_curve
+        R = (_read_json(d / "meta.json") or {}).get("R") or 1.0
+        A = np.loadtxt(src, delimiter=",", skiprows=1)
+        rows = [np.c_[np.full(len(c), k), c] for k in np.unique(A[:, 0]) for c in [decimate_curve(A[A[:, 0] == k][:, 1:], R, 1.0, 8.0)]]
+        tmp = out.with_suffix(".tmp"); np.savetxt(tmp, np.vstack(rows), delimiter=",", header="course,x,y,z", comments="", fmt=["%d", "%.5f", "%.5f", "%.5f"]); os.replace(tmp, out)
+    return FileResponse(out, media_type="text/plain")
 
 # ---------------------------------------------------------------- simulation
 class SimBody(BaseModel):
@@ -149,6 +192,9 @@ class SimBody(BaseModel):
     ramp: int = Field(0, ge=0, le=40, description="no shell: grow the stress-free state from the built loop shape to the target in this many stages (0 = off)")
     ramp_iter: int = Field(200, ge=10, le=3000, description="L-BFGS iterations per growth stage")
     seed_stitch: float = Field(0.0, ge=-1, le=1, description="no shell: out-of-plane seed, front loops +a R, back loops -a R (0 = off)")
+    fold_search: int = Field(0, ge=0, le=200, description="no shell: accepted large-scale bending steps searched by the yarn energy (0 = off)")
+    fold_iter: int = Field(200, ge=10, le=5000, description="relaxation iterations after each trial bend")
+    fold_delta: float = Field(0.0, ge=0, le=1, description="first bend step in 1/mm (0 = 0.25 / sheet size)")
     macro: bool = Field(False, description="no shell: the optimiser also moves the three large-scale bending modes (same energy, same minimum)")
     warp_kx: float = Field(0.0, ge=-1, le=1, description="no shell: start from the sheet bent along the courses, curvature in 1/mm (0 = flat start)")
     warp_ky: float = Field(0.0, ge=-1, le=1, description="no shell: same along the wales")
@@ -190,6 +236,7 @@ def _sim_cmd(d, b, R):
     cmd += ["--stretch-scale", repr(b.stretch_scale), "--bend-scale", repr(b.bend_scale), "--straight", repr(b.straight), "--length-ratio", repr(b.length_ratio),
             "--ramp", str(b.ramp), "--ramp-iter", str(b.ramp_iter), "--seed-stitch", repr(b.seed_stitch), "--stall-tol", repr(b.stall_tol)]
     if b.macro: cmd += ["--macro"]
+    if b.fold_search: cmd += ["--fold-search", str(b.fold_search), "--fold-iter", str(b.fold_iter), "--fold-delta", repr(b.fold_delta)]
     if b.warp_kx: cmd += ["--warp-kx", repr(b.warp_kx)]
     if b.warp_ky: cmd += ["--warp-ky", repr(b.warp_ky)]
     if b.ea: cmd += ["--ea", repr(b.ea)]
@@ -219,7 +266,7 @@ def simulate(rid: str, b: SimBody):
         raise HTTPException(422, "shell-only needs the shell option ticked")
     if b.shell and not meta.get("matrix"):
         raise HTTPException(422, "the shell option needs the stitch matrix in meta.json (result built by an older pipeline)")
-    if (b.macro or b.warp_kx or b.warp_ky) and b.shell:
+    if (b.macro or b.fold_search or b.warp_kx or b.warp_ky) and b.shell:
         raise HTTPException(422, "the macro modes and the bent start are for runs without the shell: untick the shell")
     if b.ramp and b.shell:
         raise HTTPException(422, "growth stages are for runs without the shell: untick the shell or set the stages to 0")
@@ -237,7 +284,7 @@ def simulate(rid: str, b: SimBody):
         try: _law_points(b.stretch_law)
         except (ValueError, ZeroDivisionError) as e: raise HTTPException(422, "stretch curve: %s (format strain:cN,strain:cN with both rising)" % e)
     cmd, kc = _sim_cmd(d, b, R)
-    for f in ("relaxed_axis.csv", "relaxed_tube.obj", "relaxed_tube.bin", "state.json", "job.json", "shell.npz") + CKPT_FILES:
+    for f in ("relaxed_axis.csv", "relaxed_axis.view.csv", "relaxed_tube.obj", "relaxed_tube.bin", "state.json", "job.json", STAGE_FILE, "shell.npz") + CKPT_FILES:
         (d / f).unlink(missing_ok=True)          # never leave a previous run's files next to a new one
     (d / "job_request.json").write_text(json.dumps(b.model_dump()))      # lets a power cut be resumed with exactly these settings
     _preset_write("_last", b.model_dump())
@@ -332,11 +379,17 @@ def state(rid: str):
             "iter": (el[-1]["iter"] + 1) if el else 0, "outer": outer, "last": el[-1] if el else None,
             "summary": s.get("summary"), "has_relaxed": bool(sim and sim["has_relaxed"]),
             "relaxed_at": sim["relaxed_at"] if sim else 0, "log": log,
-            "checkpoint": _read_json(d / "checkpoint.json"), "resumable": _resumable(d)}
+            "checkpoint": _read_json(d / "checkpoint.json"), "resumable": _resumable(d),
+            "stage": (_read_json(d / STAGE_FILE) or {}).get("stage") if _alive(rid) else None}
 
 @app.get("/api/results/{rid}/log")
 def sim_log(rid: str):
-    return (_read_json(_folder(rid) / "meta.json") or {}).get("simulations") or []
+    """All runs of this result, oldest first. A run still marked running whose job is gone (power cut, killed) is reported as interrupted."""
+    d = _folder(rid); sims = (_read_json(d / "meta.json") or {}).get("simulations") or []
+    for i, r in enumerate(sims):
+        if r.get("status") not in ("settled", "failed", "cancelled", "interrupted") and not (i == len(sims) - 1 and _alive(rid)):
+            r["status"] = "interrupted"
+    return sims
 
 def _obj_to_bin(obj, binp):
     """Legacy results only: convert fab_tube.obj to the compact binary mesh once and cache it."""
@@ -385,6 +438,10 @@ def cancel(rid: str):
     except Exception:
         try: os.killpg(p.pid, signal.SIGKILL)
         except Exception: pass
+    mp = d / "meta.json"; m = _read_json(mp) or {}
+    if m.get("simulations") and m["simulations"][-1].get("status") not in ("settled", "failed", "cancelled"):
+        m["simulations"][-1].update(status="cancelled", finished=time.strftime("%Y-%m-%dT%H:%M:%S")); tmpm = d / "meta.json.tmp"; tmpm.write_text(json.dumps(m, indent=1)); os.replace(tmpm, mp)
+    (d / STAGE_FILE).unlink(missing_ok=True)
     s = _read_json(d / "state.json") or {}
     s["state"] = "cancelled"
     s.setdefault("history", []).append({"state": "cancelled", "t": time.strftime("%Y-%m-%dT%H:%M:%S"), "note": "cancelled from the UI"})
