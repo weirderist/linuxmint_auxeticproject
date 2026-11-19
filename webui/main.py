@@ -1,4 +1,4 @@
-import base64, json, math, os, re, signal, subprocess, sys, threading, time
+import base64, json, math, os, re, shutil, signal, subprocess, sys, threading, time
 from datetime import datetime
 from pathlib import Path
 from fastapi import FastAPI, HTTPException, Request
@@ -288,6 +288,8 @@ def simulate(rid: str, b: SimBody):
         (d / f).unlink(missing_ok=True)          # never leave a previous run's files next to a new one
     (d / "job_request.json").write_text(json.dumps(b.model_dump()))      # lets a power cut be resumed with exactly these settings
     _preset_write("_last", b.model_dump())
+    sl = d / "settings_log.json"; hist = _read_json(sl) or []          # every setting of every Simulate press, shown in the UI log
+    hist.append({"t": time.strftime("%Y-%m-%dT%H:%M:%S"), "settings": b.model_dump()}); sl.write_text(json.dumps(hist, indent=1))
     _launch(rid, d, cmd)
     return {"started": rid, "k_contact": kc}
 
@@ -389,6 +391,10 @@ def sim_log(rid: str):
     for i, r in enumerate(sims):
         if r.get("status") not in ("settled", "failed", "cancelled", "interrupted") and not (i == len(sims) - 1 and _alive(rid)):
             r["status"] = "interrupted"
+    hist = _read_json(d / "settings_log.json") or []
+    for r in sims:
+        prev = [h for h in hist if h["t"] <= (r.get("started") or "")]          # the latest Simulate press at or before this run started
+        if prev: r["ui_settings"] = prev[-1]["settings"]
     return sims
 
 def _obj_to_bin(obj, binp):
@@ -447,6 +453,15 @@ def cancel(rid: str):
     s.setdefault("history", []).append({"state": "cancelled", "t": time.strftime("%Y-%m-%dT%H:%M:%S"), "note": "cancelled from the UI"})
     tmp = d / "state.json.tmp"; tmp.write_text(json.dumps(s, indent=1)); os.replace(tmp, d / "state.json")
     return {"cancelled": rid}
+
+@app.delete("/api/results/{rid}")
+def delete_result(rid: str):
+    d = _folder(rid)
+    if _alive(rid) or _tile_alive(rid):
+        raise HTTPException(409, "cannot delete while a job is running on this result")
+    shutil.rmtree(d)
+    JOBS.pop(rid, None); JOBS.pop(rid + "#tile", None)
+    return {"deleted": rid}
 
 # ---------------------------------------------------------------- presets (saved settings)
 def _presets():
