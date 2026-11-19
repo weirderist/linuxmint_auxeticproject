@@ -204,14 +204,15 @@ bind('#sAuto', 'auto'); bind('#sInvert', 'invert'); bind('#sColor', 'color');
 $('#sReset').onclick = () => { S = { ...DEF }; applySettings(true); };
 
 // Draw only when something changed (orbit, resize, new object), not 60 times a second while idle.
-let needDraw = false, lastDraw = 0;
+let needDraw = false, lastDraw = 0, statusFor = null;      // statusFor: cache key (id|variant|stamp) of the view the user is waiting on; null = none, #fps then shows the frame rate
+function setStatus(tag, text) { if (statusFor && tag.startsWith(statusFor + '|')) $('#fps').textContent = text; }      // only loads of the view being waited on may write; background and stale loads stay silent
 function invalidate() { if (!needDraw) { needDraw = true; requestAnimationFrame(draw); } }
 function draw() {
   needDraw = false;
   const t = performance.now();
   renderer.render(scene, camera);
   const gap = t - lastDraw; lastDraw = t;
-  if (gap < 300) $('#fps').textContent = Math.round(1000 / gap) + ' fps';
+  if (gap < 300 && !statusFor) $('#fps').textContent = Math.round(1000 / gap) + ' fps';
 }
 controls.addEventListener('change', invalidate);
 function resize() {
@@ -261,18 +262,18 @@ const ckey = id => id + '|' + variant + '|' + stamp(recOf(id));
 
 // Each result view is downloaded and built once; switching Tube/Axis or going back to a result reuses it.
 const cache = new Map();                       // key -> { tube: Promise<Object3D>, axis: Promise<Object3D> }
-async function readWithProgress(resp) {
+async function readWithProgress(resp, tag) {
   const total = +resp.headers.get('Content-Length') || 0, rd = resp.body.getReader(); let got = 0, out = total ? new Uint8Array(total) : null; const chunks = [];
   for (;;) {
     const { done, value } = await rd.read(); if (done) break;
     if (out && got + value.length <= out.length) out.set(value, got); else { if (out) { chunks.push(out.subarray(0, got)); out = null; } chunks.push(value); }      // known size: one buffer, no copy of the whole file at the end
-    got += value.length; $('#fps').textContent = 'loading ' + (got / 1048576).toFixed(0) + (total ? '/' + (total / 1048576).toFixed(0) : '') + ' MB';
+    got += value.length; setStatus(tag, 'loading ' + (got / 1048576).toFixed(0) + (total ? '/' + (total / 1048576).toFixed(0) : '') + ' MB');
   }
   if (out) return got === out.length ? out.buffer : out.buffer.slice(0, got);
   const all = new Uint8Array(got); let o = 0; for (const c of chunks) { all.set(c, o); o += c.length; } return all.buffer;
 }
 const tick = () => new Promise(r => setTimeout(r, 0));
-async function vertexNormals(pos, idx, nv) {        // area-weighted face normals summed per vertex (what computeVertexNormals does), in slices so the page stays responsive at 2 million vertices
+async function vertexNormals(pos, idx, nv, tag) {        // area-weighted face normals summed per vertex (what computeVertexNormals does), in slices so the page stays responsive at 2 million vertices
   const n = new Float32Array(nv * 3), nt = idx.length / 3, CH = 150000;
   for (let t0 = 0; t0 < nt; t0 += CH) {
     const t1 = Math.min(nt, t0 + CH);
@@ -282,27 +283,28 @@ async function vertexNormals(pos, idx, nv) {        // area-weighted face normal
       const nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
       n[a] += nx; n[a + 1] += ny; n[a + 2] += nz; n[b] += nx; n[b + 1] += ny; n[b + 2] += nz; n[c] += nx; n[c + 1] += ny; n[c + 2] += nz;
     }
-    $('#fps').textContent = 'shading ' + Math.round(100 * t1 / nt) + '%'; await tick();
+    setStatus(tag, 'shading ' + Math.round(100 * t1 / nt) + '%'); await tick();
   }
   for (let i = 0; i < nv * 3; i += 3) { const l = Math.hypot(n[i], n[i + 1], n[i + 2]) || 1; n[i] /= l; n[i + 1] /= l; n[i + 2] /= l; }
   return n;
 }
-async function load(id, kind, v) {
+async function load(id, kind, v, tag) {
   const q = v === 'relaxed' ? '&v=relaxed' : '';
-  if (kind === 'axis') { const r = await fetch('/api/results/' + id + '/axis?view=1' + q); if (!r.ok) throw new Error('axis file: HTTP ' + r.status); return axisLines(await r.text()); }       // view=1: thinned copy for drawing
-  $('#fps').textContent = 'preparing mesh\u2026';          // a result without a baseline tube is built on the server first; the MB count starts when the download does
+  if (kind === 'axis') { setStatus(tag, 'loading axis…'); const r = await fetch('/api/results/' + id + '/axis?view=1' + q); if (!r.ok) throw new Error('axis file: HTTP ' + r.status); return axisLines(await r.text()); }       // view=1: thinned copy for drawing
+  setStatus(tag, 'preparing mesh\u2026');          // a result without a baseline tube is built on the server first; the MB count starts when the download does
   const g = new THREE.BufferGeometry(), rb = await fetch('/api/results/' + id + '/mesh' + q.replace('&', '?'));
   if (rb.ok) {                                              // compact binary mesh: no text parsing, streams with a progress readout
-    const buf = await readWithProgress(rb), hd = new DataView(buf);
+    const buf = await readWithProgress(rb, tag), hd = new DataView(buf);
     if (hd.getUint32(0, false) !== 0x4b4d5348) throw new Error('mesh: bad header');
     const nv = hd.getUint32(8, true), nf = hd.getUint32(12, true);
     if (buf.byteLength < 16 + nv * 12 + nf * 12) throw new Error('mesh: file is shorter than its header says (download cut?)');
     const pos = new Float32Array(buf, 16, nv * 3), idx = new Uint32Array(buf, 16 + nv * 12, nf * 3);
     g.setAttribute('position', new THREE.BufferAttribute(pos, 3)); g.setIndex(new THREE.BufferAttribute(idx, 1));
-    g.setAttribute('normal', new THREE.BufferAttribute(await vertexNormals(pos, idx, nv), 3));
+    g.setAttribute('normal', new THREE.BufferAttribute(await vertexNormals(pos, idx, nv, tag), 3));
   } else {                                                  // older server without /mesh: text OBJ
     const r = await fetch('/api/results/' + id + '/tube' + q.replace('&', '?')); if (!r.ok) throw new Error('tube file: HTTP ' + r.status);
-    const { v: vv, f } = parseOBJ(await r.text()); g.setAttribute('position', new THREE.BufferAttribute(vv, 3)); g.setIndex(new THREE.BufferAttribute(f, 1)); g.setAttribute('normal', new THREE.BufferAttribute(await vertexNormals(vv, f, vv.length / 3), 3));
+    const txt = new TextDecoder().decode(await readWithProgress(r, tag)); setStatus(tag, 'parsing OBJ…'); await tick();       // same MB readout as the binary path
+    const { v: vv, f } = parseOBJ(txt); g.setAttribute('position', new THREE.BufferAttribute(vv, 3)); g.setIndex(new THREE.BufferAttribute(f, 1)); g.setAttribute('normal', new THREE.BufferAttribute(await vertexNormals(vv, f, vv.length / 3, tag), 3));
   }
   if (!tubeMat) tubeMat = new THREE.MeshLambertMaterial({ color: S.color, side: THREE.DoubleSide });
   return new THREE.Mesh(g, tubeMat);          // one shared material so the colour setting applies to every tube
@@ -322,8 +324,8 @@ function entry(id) {
   const k = ckey(id); let e = cache.get(k);
   if (!e) {
     const first = mode, second = mode === 'tube' ? 'axis' : 'tube', v = variant;
-    e = { verts: 0 }; e[first] = load(id, first, v);
-    e[second] = e[first].catch(() => 0).then(() => load(id, second, v));   // the other view loads in the background
+    e = { verts: 0 }; e[first] = load(id, first, v, k + '|' + first);
+    e[second] = e[first].catch(() => 0).then(() => load(id, second, v, k + '|' + second));   // the other view loads in the background
     for (const w of [first, second]) e[w].then(o => { e.verts += vertsOf(o); trimCache(); }).catch(() => {});
     cache.set(k, e); trimCache();
   }
@@ -382,17 +384,17 @@ function setVariantButtons() {
 }
 async function show(id, refit) {
   const changed = id !== current; current = id; if (changed) { st = null; timer = null; prevRun = null; logRuns = []; logSel = -1; logSig = ''; }
-  setVariantButtons(); const m = mode, v = variant;
+  setVariantButtons(); const m = mode, v = variant, tag = ckey(id); statusFor = tag;
   document.querySelectorAll('.item').forEach(e => e.classList.toggle('sel', e.dataset.id === id));
   $('#info').textContent = infoText(); setupSim(); setupTile(); pollState(); loadLog();
   try {
     const obj = await entry(id)[m];
     if (current !== id || mode !== m || variant !== v) return;          // user already moved on
     if (shown) scene.remove(shown);
-    shown = obj; scene.add(obj); const nvx = vertsOf(obj); $('#fps').textContent = ''; $('#vinfo').textContent = nvx ? (nvx >= 1e5 ? (nvx / 1e6).toFixed(2) + ' M' : nvx) + ' vertices' : '';
+    shown = obj; scene.add(obj); const nvx = vertsOf(obj); if (statusFor === tag) { statusFor = null; $('#fps').textContent = ''; } $('#vinfo').textContent = nvx ? (nvx >= 1e5 ? (nvx / 1e6).toFixed(2) + ' M' : nvx) + ' vertices' : '';
     if (refit) fit(obj);
     invalidate();
-  } catch (e) { cache.delete(ckey(id)); $('#info').textContent += '\nCould not load: ' + e; }
+  } catch (e) { if (statusFor === tag) { statusFor = null; $('#fps').textContent = ''; } cache.delete(ckey(id)); $('#info').textContent += '\nCould not load: ' + e; }
 }
 function toast(text, label, fn) {
   const t = $('#toast'); const host = document.querySelector('dialog[open]') || document.body; if (t.parentNode !== host) host.append(t); t.hidden = false; t.textContent = '';
