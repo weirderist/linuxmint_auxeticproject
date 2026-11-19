@@ -538,7 +538,8 @@ let prevRun = null;
 async function pollState() {
   if (!current) return; const id = current;
   try {
-    const r = await fetch('/api/results/' + id + '/state'); if (!r.ok) return;
+    const r = await fetch('/api/results/' + id + '/state');
+    if (!r.ok) { if (current === id) { timer = null; tickTimer(); $('#simProg').hidden = true; $('#simState').textContent = 'Simulation: status unavailable (server error ' + r.status + ')'; } return; }      // never leave the last running readout and timer on screen
     const s = await r.json(); if (current !== id) return;
     const was = prevRun; st = s; prevRun = s.running; markSrv(true); timer = { base: s.elapsed, at: performance.now(), running: s.running }; tickTimer(); if (s.running || $('#logBox').open) loadLog();
     $('#info').textContent = infoText(); updateSimButtons();

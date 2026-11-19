@@ -47,7 +47,7 @@ def _any_running():
 
 def _read_json(path):
     try:
-        return json.loads(path.read_text())
+        return json.loads(path.read_text(), parse_constant=lambda c: None)      # Infinity / NaN (e.g. min axis distance of a loop with no neighbours) -> null; JSON responses reject them and /state returned 500
     except Exception:
         return None
 
