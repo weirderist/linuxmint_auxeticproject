@@ -35,7 +35,13 @@ jax.config.update('jax_enable_x64', True)
 
 STRETCH_SCALE = 1.0      # multiplies EA only (axial stiffness) so stretch and bending stiffness can be chosen independently, as Sperl et al. 2022 Sec 6.2 do. 1 = solid rod.
 BEND_SCALE = 1.0         # multiplies EI only. A spun yarn bends far more easily than a solid rod of its tensile modulus: measured bending/tensile stiffness ratio 0.249/79 = 0.0032 for a 16/2 acrylic spun yarn (Ding et al., arXiv 2307.12360), and Sperl et al. 2022 fit k_b over 1e-3..10 x the solid-rod value. Not measured for cotton Ne 10.
-def section(E, R): return STRETCH_SCALE*E*np.pi*R**2, BEND_SCALE*E*np.pi*R**4/4.0                      # EA, EI
+EA_FIXED = None          # measured axial stiffness (N), set by relax_job --ea or from the first point of --stretch-law. None = solid rod of modulus E times STRETCH_SCALE.
+EI_FIXED = None          # measured bending stiffness (N mm^2), set by relax_job --ei. None = solid rod of modulus E times BEND_SCALE.
+LAW = None               # measured stretch law (dict from relax_state.build_law) or None for Hooke. Read when the energy is traced: call set_law() after changing it.
+def section(E, R):
+    EA = EA_FIXED if EA_FIXED is not None else STRETCH_SCALE*E*np.pi*R**2
+    EI = EI_FIXED if EI_FIXED is not None else BEND_SCALE*E*np.pi*R**4/4.0
+    return EA, EI                                                                                          # EA, EI
 
 def bend_stiffness(sim, E):
     """EA and EI of the yarn. EI is also multiplied by sim.bend_scale (1 unless the straightening factor is on: see relax_job --straight)."""
@@ -44,7 +50,11 @@ def bend_stiffness(sim, E):
 def _energy(x, l0, seg, tri, lbar, kb0, pairs, pmask, EA, EI, kc, R2, cell, tgt, cnt, ks):
     X = x.reshape(-1, 3)
     e = X[seg[:, 1]] - X[seg[:, 0]]; l = jnp.sqrt(jnp.sum(e*e, 1) + 1e-30)
-    Es = 0.5*EA*jnp.sum((l - l0)**2/l0)
+    if LAW is None: Es = 0.5*EA*jnp.sum((l - l0)**2/l0)
+    else:       # measured piecewise-linear law: force = EA x tau(strain), energy = EA l0 W(strain), W the integral of tau. A linear law (tau = strain, W = strain^2/2) is exactly the line above.
+        K, T, S, W = (jnp.asarray(LAW[k]) for k in ('K', 'T', 'S', 'W')); eps = (l - l0)/l0
+        k = jnp.clip(jnp.searchsorted(K, eps, side='right') - 1, 0, K.shape[0] - 1); d = eps - K[k]
+        Es = EA*jnp.sum(l0*(W[k] + T[k]*d + 0.5*S[k]*d*d))
     e1 = X[tri[:, 1]] - X[tri[:, 0]]; e2 = X[tri[:, 2]] - X[tri[:, 1]]
     n1 = jnp.sqrt(jnp.sum(e1*e1, 1) + 1e-30); n2 = jnp.sqrt(jnp.sum(e2*e2, 1) + 1e-30)
     kb = 2.0*jnp.cross(e1, e2)/(n1*n2 + jnp.sum(e1*e2, 1) + 1e-12)[:, None]
@@ -55,6 +65,25 @@ def _energy(x, l0, seg, tri, lbar, kb0, pairs, pmask, EA, EI, kc, R2, cell, tgt,
     Esh = 0.5*ks*jnp.sum(cnt*jnp.sum((mean - tgt)**2, 1))                                  # hold on the shell fold (ks = 0 when no shell)
     return Es + Eb + Ec + Esh
 _vg = jax.jit(jax.value_and_grad(_energy))
+MACRO = False   # relax_job --macro: give the optimiser the three soft large-scale bending modes as variables of their own (see _warp and relax)
+def _warp(k3, X, c):
+    """Smooth large-scale map of the fabric, parametrised by three numbers k3 = (kx, ky, t): bend into a cylinder along x (curvature kx, 1/length), then along y (ky), then add a twist z += t*(x-cx)*(y-cy).
+    Identity for k3 = 0. Lengths along the mid-surface are kept; a vertex at height z above the centre plane moves with the factor (1 - z k). Written with sinc so that k = 0 is smooth for the gradient."""
+    P = X
+    for ax, k in ((0, k3[0]), (1, k3[1])):
+        s = P[:, ax] - c[ax]; z = P[:, 2] - c[2]; a = k*s
+        u = s*jnp.sinc(a/jnp.pi) - z*jnp.sin(a); w = 0.5*k*s*s*jnp.sinc(a/(2*jnp.pi))**2 + z*jnp.cos(a)
+        P = jnp.stack([c[0] + u if ax == 0 else P[:, 0], c[1] + u if ax == 1 else P[:, 1], c[2] + w], axis=1)
+    return jnp.stack([P[:, 0], P[:, 1], P[:, 2] + k3[2]*(P[:, 0] - c[0])*(P[:, 1] - c[1])], axis=1)
+def _energy_macro(v, c, sc, *args):
+    """Same energy, in the variables v = (q1, q2, q3, local positions): positions = _warp(q*sc, local). A change of variables (a bijection for every q), so the minimum is the same; it only lets the optimiser reach the soft bending modes directly."""
+    return _energy(_warp(v[:3]*sc, v[3:].reshape(-1, 3), c).ravel(), *args)
+_vgm = jax.jit(jax.value_and_grad(_energy_macro))
+def set_law(law):
+    """Install a stretch law (None = Hooke) and rebuild the compiled energy: jax.jit reads module globals only when it first traces, so changing LAW without this has no effect."""
+    global LAW, _vg
+    global _vgm
+    LAW = law; _vg = jax.jit(jax.value_and_grad(_energy)); _vgm = jax.jit(jax.value_and_grad(_energy_macro))
 
 def pack(sim):
     off = np.r_[0, np.cumsum([len(y.X) for y in sim.yarns])]; seg, tri, l0, lbar = [], [], [], []
@@ -121,12 +150,16 @@ def relax(sim, E, kc, maxiter=300, rounds=4, verbose=False):
     EA, EI = bend_stiffness(sim, E)
     for r in range(rounds):
         off, seg, tri, l0, lbar = pack(sim); pairs, pm, npair = near_pairs(sim, off); kb0 = baseline_curvature(sim, tri); sa = shell_args(sim)
-        x0 = np.vstack([y.X for y in sim.yarns]).ravel()
-        f = lambda x: tuple(np.asarray(v, float) for v in _vg(x, l0, seg, tri, lbar, kb0, pairs, pm, EA, EI, kc, 2*sim.R, *sa))
-        res = minimize(f, x0, jac=True, method='L-BFGS-B', options=dict(maxiter=maxiter, maxcor=30, ftol=1e-13, gtol=1e-9))
-        X = res.x.reshape(-1, 3)
+        x0 = np.vstack([y.X for y in sim.yarns]).ravel(); args = (l0, seg, tri, lbar, kb0, pairs, pm, EA, EI, kc, 2*sim.R, *sa)
+        if MACRO:       # variables: three scaled bending modes (unit = the edge of the sheet moves by about one yarn radius) + the positions, re-referenced to the current shape every round
+            P = x0.reshape(-1, 3); c = 0.5*(P.max(0) + P.min(0)); L = np.maximum(P.max(0) - P.min(0), 10*sim.R); sc = np.array([8*sim.R/L[0]**2, 8*sim.R/L[1]**2, 4*sim.R/(L[0]*L[1])])
+            f = lambda v: tuple(np.asarray(t, float) for t in _vgm(v, c, sc, *args)); res = minimize(f, np.r_[np.zeros(3), x0], jac=True, method='L-BFGS-B', options=dict(maxiter=maxiter, maxcor=30, ftol=1e-13, gtol=1e-9))
+            k3 = res.x[:3]*sc; X = np.asarray(_warp(k3, res.x[3:].reshape(-1, 3), c), float); sim.macro_k = getattr(sim, 'macro_k', np.zeros(3)) + k3
+        else:
+            f = lambda x: tuple(np.asarray(v, float) for v in _vg(x, *args))
+            res = minimize(f, x0, jac=True, method='L-BFGS-B', options=dict(maxiter=maxiter, maxcor=30, ftol=1e-13, gtol=1e-9)); X = res.x.reshape(-1, 3)
         for y, o in zip(sim.yarns, off): y.X = X[o:o+len(y.X)].copy()
-        if verbose: print('   relax round %d: %d pairs, E %.6g, %d its, %s' % (r+1, npair, res.fun, res.nit, res.message if isinstance(res.message, str) else res.message.decode()), flush=True)
+        if verbose: print('   relax round %d: %d pairs, E %.6g, %d its, %s' % (r+1, npair, res.fun, res.nit, res.message if isinstance(res.message, str) else res.message.decode()) + ('' if not MACRO else '   macro bend kx %+.4g ky %+.4g twist %+.4g (added this round)' % tuple(k3)), flush=True)
         if res.nit < maxiter: break
 
 def min_axis_distance(sim, skip=6):

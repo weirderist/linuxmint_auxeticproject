@@ -149,6 +149,12 @@ class SimBody(BaseModel):
     ramp: int = Field(0, ge=0, le=40, description="no shell: grow the stress-free state from the built loop shape to the target in this many stages (0 = off)")
     ramp_iter: int = Field(200, ge=10, le=3000, description="L-BFGS iterations per growth stage")
     seed_stitch: float = Field(0.0, ge=-1, le=1, description="no shell: out-of-plane seed, front loops +a R, back loops -a R (0 = off)")
+    macro: bool = Field(False, description="no shell: the optimiser also moves the three large-scale bending modes (same energy, same minimum)")
+    warp_kx: float = Field(0.0, ge=-1, le=1, description="no shell: start from the sheet bent along the courses, curvature in 1/mm (0 = flat start)")
+    warp_ky: float = Field(0.0, ge=-1, le=1, description="no shell: same along the wales")
+    ea: float = Field(0.0, ge=0, le=1e6, description='measured axial stiffness EA in N (0 = solid rod from E)')
+    ei: float = Field(0.0, ge=0, le=1e6, description='measured bending stiffness EI in N mm^2 (0 = solid rod from E)')
+    stretch_law: str = Field('', max_length=400, pattern=r'^([0-9.eE+-]+:[0-9.eE+-]+(,[0-9.eE+-]+:[0-9.eE+-]+){0,19})?$', description="measured stretch curve 'strain:cN,...'")
     stall_tol: float = Field(0.0, ge=0, le=0.01, description="early stop: relative energy change per outer round below this for 3 rounds (0 = off)")
 
 class TileBody(BaseModel):
@@ -165,8 +171,15 @@ def _folder(rid):
         raise HTTPException(404, "unknown result")
     return RESULTS / rid
 
+def _law_points(s):
+    """'strain:cN,...' -> [(strain, N)]; ValueError unless both columns are positive and strictly increasing (same rule as relax_state.build_law)."""
+    p = [(float(a), 0.01*float(c)) for a, c in (t.split(':') for t in s.split(','))]
+    if p[0][0] <= 0 or p[0][1] <= 0 or any(q[0] <= o[0] or q[1] <= o[1] for o, q in zip(p, p[1:])): raise ValueError('strain and force must be positive and strictly increasing')
+    return p
+
 def _sim_cmd(d, b, R):
-    kc = b.kc_ratio * b.E * math.pi * R          # kc = ratio * EA / R, with EA = E pi R^2
+    EA_in = b.ea or (_law_points(b.stretch_law)[0][1]/_law_points(b.stretch_law)[0][0] if b.stretch_law else None)
+    kc = b.kc_ratio * (EA_in if EA_in else b.E * math.pi * R**2) / R          # kc = ratio * EA / R; EA = E pi R^2 unless EA or a stretch law is entered (then the entered EA)
     cmd = [sys.executable, str(SCRIPTS / "relax_job.py"), "--folder", str(d), "--E", repr(b.E), "--mu", repr(b.mu),
            "--k-contact", repr(kc), "--perturb", repr(b.perturb), "--outer", str(b.outer), "--maxiter", str(b.maxiter),
            "--curl", repr(b.curl), "--tension", repr(b.tension_cN), "--creep-tau", repr(b.creep_tau_h), "--hours", repr(b.hours)] + (["--curl-aniso"] if b.curl_aniso else []) + ["--ref-scale", repr(b.ref_scale)]
@@ -176,6 +189,12 @@ def _sim_cmd(d, b, R):
         if not b.shell_frame: cmd += ["--no-shell-frame"]
     cmd += ["--stretch-scale", repr(b.stretch_scale), "--bend-scale", repr(b.bend_scale), "--straight", repr(b.straight), "--length-ratio", repr(b.length_ratio),
             "--ramp", str(b.ramp), "--ramp-iter", str(b.ramp_iter), "--seed-stitch", repr(b.seed_stitch), "--stall-tol", repr(b.stall_tol)]
+    if b.macro: cmd += ["--macro"]
+    if b.warp_kx: cmd += ["--warp-kx", repr(b.warp_kx)]
+    if b.warp_ky: cmd += ["--warp-ky", repr(b.warp_ky)]
+    if b.ea: cmd += ["--ea", repr(b.ea)]
+    if b.ei: cmd += ["--ei", repr(b.ei)]
+    if b.stretch_law: cmd += ["--stretch-law", b.stretch_law]
     return cmd, kc
 
 def _launch(rid, d, cmd, resume=False):
@@ -200,10 +219,23 @@ def simulate(rid: str, b: SimBody):
         raise HTTPException(422, "shell-only needs the shell option ticked")
     if b.shell and not meta.get("matrix"):
         raise HTTPException(422, "the shell option needs the stitch matrix in meta.json (result built by an older pipeline)")
+    if (b.macro or b.warp_kx or b.warp_ky) and b.shell:
+        raise HTTPException(422, "the macro modes and the bent start are for runs without the shell: untick the shell")
     if b.ramp and b.shell:
         raise HTTPException(422, "growth stages are for runs without the shell: untick the shell or set the stages to 0")
     if b.seed_stitch and (b.shell or not meta.get("matrix")):
         raise HTTPException(422, "the stitch seed needs the stitch matrix and is for runs without the shell")
+    if (b.ea or b.ei or b.stretch_law) and (meta.get("structure") or {}).get("units") != "mm":
+        raise HTTPException(422, "EA, EI and the stretch curve are in N and mm: they need a result built in mm; leave them 0/empty for R-unit results")
+    if b.ea and b.stretch_law:
+        raise HTTPException(422, "give either EA or a stretch curve (the curve's first point already fixes EA)")
+    if (b.ea or b.stretch_law) and b.stretch_scale != 1.0:
+        raise HTTPException(422, "the axial stiffness scale does not apply together with EA or a stretch curve: set it to 1")
+    if b.ei and b.bend_scale != 1.0:
+        raise HTTPException(422, "the bending stiffness scale does not apply together with EI: set it to 1")
+    if b.stretch_law:
+        try: _law_points(b.stretch_law)
+        except (ValueError, ZeroDivisionError) as e: raise HTTPException(422, "stretch curve: %s (format strain:cN,strain:cN with both rising)" % e)
     cmd, kc = _sim_cmd(d, b, R)
     for f in ("relaxed_axis.csv", "relaxed_tube.obj", "relaxed_tube.bin", "state.json", "job.json", "shell.npz") + CKPT_FILES:
         (d / f).unlink(missing_ok=True)          # never leave a previous run's files next to a new one

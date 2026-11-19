@@ -95,6 +95,12 @@ button:disabled{opacity:.45}
   <label><span>Growth stages (no shell; 0 = off). Moves the reference curvature and rest length from the built loop shape to the values above in this many steps</span><input id="fRamp" type="number" step="1" min="0" max="40"></label>
   <label><span>L-BFGS iterations per growth stage</span><input id="fRampIt" type="number" step="1" min="10" max="3000"></label>
   <label><span>Stitch seed (x R; no shell; 0 = off). Front loops up, back loops down, before the random perturbation; negative flips</span><input id="fSeedSt" type="number" step="any" min="-1" max="1"></label>
+  <label><span>Large-scale bending modes as variables (no shell). Same energy and minimum; lets the optimiser reach the slow course/wale bending and twist modes directly</span><input id="fMacro" type="checkbox"></label>
+  <label><span>Bent start along the courses (1/mm, + toward +z; no shell; 0 = flat). A starting shape only: nothing holds it, the yarn energy decides what remains</span><input id="fWarpX" type="number" step="any" min="-1" max="1"></label>
+  <label><span>Bent start along the wales (1/mm; no shell; 0 = flat)</span><input id="fWarpY" type="number" step="any" min="-1" max="1"></label>
+  <label><span>Measured axial stiffness EA (N; 0 = solid rod from E; mm results). Tensile tester: EA = force / strain in the first linear part</span><input id="fEA" type="number" step="any" min="0"></label>
+  <label><span>Measured bending stiffness EI (N mm² = cN cm²; 0 = solid rod from E). Bending frame or KES-FB2 (the frame reads about 1.6x KES, Alshukur and Macintyre 2020). Leave the bending scale at 1 when this is used</span><input id="fEI" type="number" step="any" min="0"></label>
+  <label><span>Measured stretch curve (strain:cN pairs, rising, e.g. 0.01:80,0.03:200,0.06:330; empty = Hooke). Its first point fixes EA; do not also enter EA</span><input id="fLaw" type="text" placeholder="strain:cN,strain:cN"></label>
   <label><span>Stop when stalled (relative energy change per round; 0 = off). Reported as settled with the reason</span><input id="fStall" type="number" step="any" min="0" max="0.01"></label>
   <label class="row"><input id="fSeedOnly" type="checkbox"><span>Quick mode: shell fold plus 3 short relaxation rounds (about a minute; not an equilibrium)</span></label>
  </div>
@@ -354,7 +360,7 @@ function setupSim() {
     $('#fE').value = mm ? CFG.yarn_E_MPa : 1;
     $('#lE').textContent = mm ? 'Yarn modulus E (MPa = N/mm\u00b2)' : 'Yarn modulus E (R-unit result: only the ratio to contact stiffness matters)';
     $('#fCurl').value = 0; $('#fAniso').checked = false; $('#fRef').value = 1; $('#fTen').value = mm ? CFG.tension_cN : 0; $('#fTau').value = 0; $('#fHours').value = 0; $('#fTen').disabled = !mm;
-    $('#fShell').checked = true; $('#fShellW').value = CFG.shell_w; $('#fShellTile').checked = false; $('#fTileRef').value = 0.5; $('#fKScale').value = 1; $('#fStretch').value = 1; $('#fSeedOnly').checked = false; $('#fStr').value = CFG.straight; $('#fShellF').checked = true; $('#fBend').value = 0.003; $('#fLenRatio').value = 1; $('#fRamp').value = CFG.ramp || 0; $('#fRampIt').value = CFG.ramp_iter || 200; $('#fSeedSt').value = CFG.seed_stitch || 0; $('#fStall').value = CFG.stall_tol || 0;
+    $('#fShell').checked = true; $('#fShellW').value = CFG.shell_w; $('#fShellTile').checked = false; $('#fTileRef').value = 0.5; $('#fKScale').value = 1; $('#fStretch').value = 1; $('#fSeedOnly').checked = false; $('#fStr').value = CFG.straight; $('#fShellF').checked = true; $('#fBend').value = 0.003; $('#fLenRatio').value = 1; $('#fRamp').value = CFG.ramp || 0; $('#fRampIt').value = CFG.ramp_iter || 200; $('#fSeedSt').value = CFG.seed_stitch || 0; $('#fStall').value = CFG.stall_tol || 0; $('#fMacro').checked = false; $('#fWarpX').value = 0; $('#fWarpY').value = 0; $('#fEA').value = 0; $('#fEI').value = 0; $('#fLaw').value = '';
     $('#fKc').value = CFG.kc_ratio; $('#fPert').value = CFG.perturb; $('#fOuter').value = CFG.outer; $('#fMax').value = CFG.maxiter;
     applyBody(PRES._last, mm);
     $('#eNote').textContent = mm ? 'Units: mm. E in MPa (N/mm\u00b2), contact stiffness in N/mm, feeder tension in cN.' : 'R-unit result: no physical yarn size, so no physical modulus applies.';
@@ -376,11 +382,11 @@ function updateSimButtons() {
 const FLD = { E: ['#fE', 'n'], mu: ['#fMu', 'n'], kc_ratio: ['#fKc', 'n'], perturb: ['#fPert', 'n'], outer: ['#fOuter', 'n'], maxiter: ['#fMax', 'n'], curl: ['#fCurl', 'n'], curl_aniso: ['#fAniso', 'b'], ref_scale: ['#fRef', 'n'],
   tension_cN: ['#fTen', 'n'], creep_tau_h: ['#fTau', 'n'], hours: ['#fHours', 'n'], shell: ['#fShell', 'b'], shell_w: ['#fShellW', 'n'], shell_kappa: ['#fShellTile', 'k'], tile_ref: ['#fTileRef', 'n'],
   kappa_scale: ['#fKScale', 'n'], stretch_scale: ['#fStretch', 'n'], bend_scale: ['#fBend', 'n'], straight: ['#fStr', 'n'], shell_frame: ['#fShellF', 'b'], length_ratio: ['#fLenRatio', 'n'], seed_only: ['#fSeedOnly', 'b'],
-  ramp: ['#fRamp', 'n'], ramp_iter: ['#fRampIt', 'n'], seed_stitch: ['#fSeedSt', 'n'], stall_tol: ['#fStall', 'n'] };
-function getBody() { const o = {}; for (const [k, [id, t]] of Object.entries(FLD)) o[k] = t === 'n' ? +$(id).value : t === 'b' ? $(id).checked : ($(id).checked ? 'tile' : 'guess'); return o; }
+  ramp: ['#fRamp', 'n'], ramp_iter: ['#fRampIt', 'n'], seed_stitch: ['#fSeedSt', 'n'], stall_tol: ['#fStall', 'n'], macro: ['#fMacro', 'b'], warp_kx: ['#fWarpX', 'n'], warp_ky: ['#fWarpY', 'n'], ea: ['#fEA', 'n'], ei: ['#fEI', 'n'], stretch_law: ['#fLaw', 's'] };
+function getBody() { const o = {}; for (const [k, [id, t]] of Object.entries(FLD)) o[k] = t === 'n' ? +$(id).value : t === 'b' ? $(id).checked : t === 's' ? $(id).value.trim() : ($(id).checked ? 'tile' : 'guess'); return o; }
 function applyBody(b, mm) {
   if (!b) return;
-  for (const [k, [id, t]] of Object.entries(FLD)) { if (!(k in b) || (!mm && (k === 'E' || k === 'tension_cN'))) continue; if (t === 'n') $(id).value = b[k]; else if (t === 'b') $(id).checked = !!b[k]; else $(id).checked = b[k] === 'tile'; }
+  for (const [k, [id, t]] of Object.entries(FLD)) { if (!(k in b) || (!mm && (k === 'E' || k === 'tension_cN'))) continue; if (t === 'n') $(id).value = b[k]; else if (t === 'b') $(id).checked = !!b[k]; else if (t === 's') $(id).value = b[k]; else $(id).checked = b[k] === 'tile'; }
   updateSimButtons();
 }
 // ---- saved settings
