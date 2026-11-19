@@ -110,7 +110,30 @@ def build_contacts(sim, reach=1.15, skip_arc=3.0):
     return [Contact(*v, wrap_angle(sim.yarns[v[0]].X, v[1]), wrap_angle(sim.yarns[v[2]].X, v[3])) for v in best.values()]
 
 # ---- slip (capstan criterion, rest-length transfer)
-def tension(l, l0, EA): return EA*(l/l0 - 1.0)            # linear axial law. Unsourced assumption: Hookean, EA user-supplied
+LAW = None     # measured stretch law (build_law) or None = Hooke. Set by relax_job together with relax_solver.set_law.
+
+def build_law(strain, force_N):
+    """Piecewise-linear yarn stretch law from measured points (tensile test: strain as a fraction, force in N), through the origin and linear beyond the last point.
+    Stored as the normalised tension tau = F/s0, s0 = first-point slope = EA, so that tension = EA x tau(strain) and a straight-line test gives Hooke exactly.
+    Returns dict(K strain nodes, T tau at the nodes, S slopes, W integral of tau, EA). Raises ValueError for points that are not increasing in both strain and force."""
+    e = [float(v) for v in strain]; f = [float(v) for v in force_N]
+    if len(e) < 1 or len(e) != len(f): raise ValueError('stretch law needs at least one strain:force pair')
+    if e[0] <= 0 or f[0] <= 0 or any(b <= a for a, b in zip(e, e[1:])) or any(b <= a for a, b in zip(f, f[1:])): raise ValueError('stretch law: strain and force must both be positive and strictly increasing')
+    s0 = f[0]/e[0]; K = np.array([0.0] + e); T = np.array([0.0] + [v/s0 for v in f]); S = np.diff(T)/np.diff(K); S = np.r_[S, S[-1]]
+    W = np.r_[0.0, np.cumsum(0.5*(T[1:] + T[:-1])*np.diff(K))]
+    return dict(K=K, T=T, S=S, W=W, EA=s0)
+
+def tau(eps):
+    k = np.clip(np.searchsorted(LAW['K'], eps, side='right') - 1, 0, len(LAW['K']) - 1); return LAW['T'][k] + LAW['S'][k]*(eps - LAW['K'][k])
+
+def strain_at(t):
+    """Inverse of tau: the strain at normalised tension t (the feeder tension in N divided by EA)."""
+    if LAW is None: return t
+    k = np.clip(np.searchsorted(LAW['T'], t, side='right') - 1, 0, len(LAW['T']) - 1); return float(LAW['K'][k] + (t - LAW['T'][k])/LAW['S'][k])
+
+def tension(l, l0, EA):
+    """Yarn tension from the stretched length l and rest length l0. Hooke (EA x strain) unless a measured law is installed; the user supplies EA (or the law)."""
+    eps = l/l0 - 1.0; return EA*(eps if LAW is None else tau(eps))
 
 def slip_at_node(la, l0a, lb, l0b, EA, mu, phi, step_max):
     """Segments a|b meet at a contact node. Returns delta moved from b's rest length to a's (negative = other way); 0 if the contact holds."""
