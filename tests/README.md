@@ -23,6 +23,8 @@ python tests/make_fixtures.py
 | `python tests/test_start_interpreter.py` | the Start endpoint uses the project interpreter when it exists |
 | `python tests/test_parse_scripts.py` | every script block of the four HTML pages and every script, parsed with a real JavaScript parser (esprima) and `ast` |
 | `python tests/test_loop_grade.py` | the starting loop-length field (`scripts/loop_grade.py`) without the solver; see the section below |
+| `python tests/test_slip_ext.py` | the opt-in slip extensions, the per-round diagnostics, the tightness record and their wiring in `relax_job.py` / `relax_state.py`, without the solver |
+| `python tests/make_golden_loop_grade.py` | not a test: writes `golden_loop_grade.json` (fingerprints of the grade's starting rest lengths); run it ONCE before refactoring `loop_grade.py` |
 | `python tests/analysis_slip_rule.py` | not a test: applies the capstan slip rule to the as-built start and a saved relaxed state (arithmetic, no solver) |
 
 Each test prints PASS/FAIL lines and ends with `ALL OK` or `FAILURES`.
@@ -46,3 +48,20 @@ Needs the fixtures: the finished fidelity runs 0001 (Pattern 1, tiles 1) and 000
 - That the field is physically right: every constant is UNSOURCED.
 - The web page in a browser (the HTML and script blocks are parsed and the field ids checked, never rendered).
 - Anything on the server.
+
+## `test_slip_ext.py`: what it proves and what it does not
+
+**Proves (no solver, no JAX):**
+- `loop_grade.py` after the refactor gives bit-identical starting rest lengths for six fixed cases (SHA-256 against `golden_loop_grade.json`).
+- `slip_ext.slip_at_node_ext` with no offsets and no extra limit returns exactly what `relax_state.slip_at_node` returns (2500 random nodes); a larger `mu_n F_n` moves less rest length and the contact then sits exactly on the new limit; a drive offset moves rest length toward the segment that looks more tense.
+- `relax_state.migrate` with nothing set equals the old function exactly on a real saved relaxed state; the slip statistics (number, sum, largest) equal the values the slip rule returned; transfers conserve the rest length of every yarn.
+- `mu_n`: fewer and smaller transfers; a huge `mu_n` holds every contact with overlap and leaves contacts without overlap alone.
+- The drive: from a uniform start with no drive nothing happens (as the probe found); with the drive the slip rule acts at many contacts and rest length moves toward the higher-G loops, only where the field changes; a negative drive reverses it; at the as-built +5.4 % pre-strain a drive of 0.01 stays inside the friction limit and 0.1 does not; `rs.run` sets `round_index`, passes the statistics and applies the exponential decay.
+- Diagnostics: all 30 documented columns, region means above / below 1 for the outer ring / inner core of a graded jersey, share of the change stored in l0, fold descriptor 0 for a flat sheet, header once in the CSV; tightness record (Ne 12: tex 49.208, loop length 5.489 mm, factor 1.278 per mm).
+- Wiring in `relax_job.py` (checked on the source with `ast`): the four options default off, are validated, say UNSOURCED, and attach nothing to the solver state unless set; the record is written only when an extension is on; the tightness is only recorded; `campaign.py` picks the flags up and its dry-run command carries them.
+
+**Does not prove:**
+- That the extensions or the diagnostics run inside the real solver (needs JAX): in a real run the relaxation re-equilibrates positions between rounds, which the tests replace by a no-op.
+- That the drive produces a persistent chain or the loop-length gradient, how the sign of the feedback comes out, or that any value of `mu_n`, `e` or `N` is right: all are UNSOURCED.
+- That the fold descriptor equals `campaign.py`'s on real data (same definition, not compared).
+- Anything in a browser or on the server.

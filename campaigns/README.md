@@ -153,6 +153,17 @@ The `--dry-run` printout shows the three flags with their values. `meta.json` of
 
 **Everything here is UNSOURCED**: `a`, the minimum strength 0.2, the strength mapping `s = 2 (f - 0.5)`, the linear fall-off with distance, the mode weights (both 1), the per-section additive normalisation. No measured loop-length field exists yet; K will set them from loop lengths measured by region.
 
+**Slip extensions and diagnostics (opt-in, all off by default).** Four more keys in `relax` (or `vary`), all UNSOURCED; see `tests/NOTES_slip_model.md`:
+
+| Key | Meaning |
+|---|---|
+| `slip_friction_load` | `mu_n` (0 = off, range 0 to 10): adds `mu_n x F_n` to the slip limit, `F_n = k_contact x overlap` of the contact. A tightly packed fabric slips less; the strain stays stored. On the saved relaxed state of fidelity run 0001 the median `F_n` is 0.2 N (strains there give tensions of 0.1 to 0.6 N), and `mu_n` 0.3 / 1 leaves 81 % / 62 % of the slips. |
+| `slip_drive` | `e` (0 = off, signed, -0.1 to 0.1): a persistent drive, every round, from the sectioned loop field (same `loop_grade_target` / `loop_grade_min_strength`; no `loop_grade` needed): an effective tension offset `+-0.5 e EA (G_b - G_a)` at each contact node, so rest length keeps flowing toward the section boundary / TM axes. One pass on that saved state moved 1.4x / 4x / 22x the baseline transfer at `e` 0.001 / 0.003 / 0.01. At the as-built start (+5.4 % pre-strain) a drive of 0.01 stays inside the friction limit; it acts once the strain has relaxed. |
+| `slip_drive_decay` | `N` in outer rounds (0 = no decay): the drive falls as `exp(-round / N)`. With fixed positions the stored elastic strain then pushes rest length back (recovery). |
+| `diagnostics` | `true`: writes `diagnostics.csv` in the run folder, one row per outer round (loop rest length and geometric length for all / outer / inner loops, share of the length change stored in the rest length, number and size of slips, a fold descriptor). No effect on the result. |
+
+`meta.json` records the three constants and a `slip_ext` block only when one is on. Every run records the knitting tightness factor `sqrt(tex) / loop length` under `simulations[-1].tightness` (no effect on any calculation; tex = 590.5 / Ne).
+
 **Two things to know.** (1) Tile joins merge sections: Pattern 1 has 3 sections at `tiles` 1, 6 at 2 and 9 at 3, so the sections grow with `tiles` and the same `a` gives a different field at a different `tiles`. (2) Creep (`creep_tau`, `hours`) moves every rest length toward its current length each round and does **not** conserve the total, so it can partly erase the starting grade.
 
 ## What happens after a power cut or a dropped connection

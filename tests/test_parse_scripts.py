@@ -24,6 +24,6 @@ for f in ("index.html", "campaigns.html", "strain.html", "run.html"):
 for f, typ in (("campaigns.js", "script"), ("strain.js", "module"), ("viewer_core.js", "module"), ("run.js", "script")):
     parse((W / f).read_text(encoding="utf8"), typ, f + " (standalone, " + typ + ")")
 for f in ("main.py", "campaign_api.py", "runview.py"): ast.parse((W / f).read_text(encoding="utf8")); print("OK    %s (python)" % f)
-for f in ("relax_job.py", "relax_state.py", "loop_grade.py", "campaign.py"): ast.parse((W.parent / "scripts" / f).read_text(encoding="utf8")); print("OK    scripts/%s (python)" % f)
+for f in ("relax_job.py", "relax_state.py", "loop_grade.py", "slip_ext.py", "round_diag.py", "campaign.py"): ast.parse((W.parent / "scripts" / f).read_text(encoding="utf8")); print("OK    scripts/%s (python)" % f)
 print("ALL OK" if not bad else "FAILURES")
 sys.exit(bad)

@@ -93,7 +93,7 @@ def guarded_by(node, name):
 calls = [n for n in ast.walk(tree) if isinstance(n, ast.Call) and getattr(n.func, "attr", "") == "apply_start_grade"]
 check("relax_job.py calls apply_start_grade exactly once, only inside 'if g.loop_grade:' (so with 0 nothing runs)", len(calls) == 1 and guarded_by(calls[0], "loop_grade"))
 upd = [n for n in ast.walk(tree) if isinstance(n, ast.Attribute) and n.attr == "update" and isinstance(n.value, ast.Subscript) and "params" in ast.dump(n.value)]
-check("the meta.json record (params and loop_grade block) is written only inside 'if grade_rec:' (a run without the option writes what it wrote before)", len(upd) >= 1 and all(guarded_by(u, "grade_rec") for u in upd) and "run_entry['loop_grade'] = grade_rec" in src)
+check("the meta.json record (params and loop_grade block) is written only inside 'if grade_rec:'; the slip-extension record only inside 'if ext_rec:' (a run without the options writes what it wrote before)", len(upd) >= 2 and sum(guarded_by(u, "grade_rec") for u in upd) == 1 and sum(guarded_by(u, "ext_rec") for u in upd) == 1 and all(guarded_by(u, "grade_rec") or guarded_by(u, "ext_rec") for u in upd) and "run_entry['loop_grade'] = grade_rec" in src)
 adds = {a.args[0].value: a for a in ast.walk(tree) if isinstance(a, ast.Call) and getattr(a.func, "attr", "") == "add_argument" and a.args and isinstance(a.args[0], ast.Constant)}
 check("--loop-grade defaults to 0.0, --loop-grade-target to 'both' (choices boundary/tm/both), --loop-grade-min-strength to 0.2",
       all(k in adds for k in ("--loop-grade", "--loop-grade-target", "--loop-grade-min-strength")) and ast.literal_eval({k.arg: k.value for k in adds["--loop-grade"].keywords}["default"]) == 0.0
