@@ -64,6 +64,7 @@ sp_ = os.path.join(SM, "campaigns", "smoke1", "spec.json"); orig = open(sp_).rea
 r = c.post(SMK + "/start"); check("start refused: spec changed", r.status_code == 409 and "spec.json changed" in r.json()["detail"], r.text); open(sp_, "w").write(orig)
 # --- simulate allowed when nothing alive
 r = c.post("/api/results/r1/simulate", json=body); check("simulate proceeds when no runner alive", r.status_code == 200 and calls == ["launch"], r.text)
+jr_ = json.loads((main.RESULTS / "r1" / "job_request.json").read_text()); check("job_request.json records the starting-grade fields, off by default (loop_grade 0, target both, minimum strength 0.2)", jr_.get("loop_grade") == 0.0 and jr_.get("loop_grade_target") == "both" and jr_.get("loop_grade_min_strength") == 0.2, jr_)
 # --- datasets, help, pages
 ds = c.get("/api/datasets").json(); print(json.dumps([{k: x[k] for k in ("id", "kind", "role", "provenance", "rows", "warnings")} for x in ds], indent=1)[:1200])
 check("datasets", len(ds) == 2 and all(x["rows"] for x in ds))

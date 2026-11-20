@@ -68,7 +68,7 @@ The owner (K) is a textile student. Define new technical concepts explicitly, us
 
 - Loop-length migration: yarn slip between loops is modelled as capstan-style rest-length transfer along the yarn. In a small test the migration was only about 1e-7 per wale, so its effect is not yet demonstrated.
 - Status: the yarn-only simulation does not yet rival the shell-hold simulation. Folding appears only when the start is seeded. The other AI's "roll" result is a single 12x12 case whose control run had not converged. Treat it as unverified.
-- Planned: --loop-grade a and --tm-boost b, giving a starting rest-length field (loops smallest at section centre, larger towards borders and corners; larger on the "transfer medium axis" wales). No-shell runs only. The direction of the effect is attributed to Basiri 2010 and Amanatides 2022 via the other AI's CHANGES.txt and is NOT independently verified. The magnitudes of a and b are UNSOURCED.
+- Planned (note: --tm-boost is superseded by --loop-grade-target tm, see tests/NOTES_loop_grade.md): --loop-grade a and --tm-boost b, giving a starting rest-length field (loops smallest at section centre, larger towards borders and corners; larger on the "transfer medium axis" wales). No-shell runs only. The direction of the effect is attributed to Basiri 2010 and Amanatides 2022 via the other AI's CHANGES.txt and is NOT independently verified. The magnitudes of a and b are UNSOURCED.
 - Target case: --ne 12 --cpi 22 --wpi 16 --tiles 3 with K's 20-row x 16-column matrix of 1/2 blocks (K will supply the matrix).
 - Still needed from physical measurement: yarn length per loop at section centre versus border on a real swatch, measured fold height, and the yarn EA/EI/stretch curve to calibrate.
 

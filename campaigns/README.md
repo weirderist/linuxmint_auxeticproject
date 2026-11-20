@@ -132,6 +132,29 @@ Equivalent by hand: `nohup setsid venv/bin/python scripts/campaign.py run <name>
 
 `run` refuses to start if `spec.json` changed after `plan` (hash stored in the manifest); `--ignore-spec-change` overrides.
 
+### Starting loop-length grade (`--loop-grade`, opt-in)
+
+By default every run starts from a uniform rest length (the as-built chord times one ratio). The grade changes that start: rest length grows toward the boundary of every *section* (a 4-connected region of one loop type; the fabric edge counts as a boundary) and along *TM axes* (wales or courses that are mostly one type, stronger the purer they are). The total rest length of every section is conserved exactly. It works with and without `shell`. Rule, prototype and decisions: `tests/NOTES_loop_grade.md`, code: `scripts/loop_grade.py`.
+
+Put the three keys in `relax` (they are checked against the options of `relax_job.py` like every other key), or give `loop_grade` in `vary`:
+
+```
+"relax": { ..., "loop_grade": 0.02, "loop_grade_target": "both", "loop_grade_min_strength": 0.2 }
+"vary":  [ {"name": "loop_grade", "min": 0.0, "max": 0.05, "scale": "linear", "integer": false} ]
+```
+
+| Key | Meaning |
+|---|---|
+| `loop_grade` | `a`: how much longer the loops at the target are than the farthest loops of their section, as a fraction of the section's mean loop length (0.02 = 2 %). `0` or absent = off: the start is bit-identical to a run without the option. Range -0.4 to 1. |
+| `loop_grade_target` | `boundary`, `tm` or `both` (default `both`). |
+| `loop_grade_min_strength` | Smallest TM-axis strength `s = 2 (f - 0.5)` (f = fraction of the majority type of a wale or course) that counts as an axis. Default 0.2. |
+
+The `--dry-run` printout shows the three flags with their values. `meta.json` of the run records them under `simulations[-1].params` and a `loop_grade` block (factor range, per-section totals before and after, the axis bands) only when the grade is on.
+
+**Everything here is UNSOURCED**: `a`, the minimum strength 0.2, the strength mapping `s = 2 (f - 0.5)`, the linear fall-off with distance, the mode weights (both 1), the per-section additive normalisation. No measured loop-length field exists yet; K will set them from loop lengths measured by region.
+
+**Two things to know.** (1) Tile joins merge sections: Pattern 1 has 3 sections at `tiles` 1, 6 at 2 and 9 at 3, so the sections grow with `tiles` and the same `a` gives a different field at a different `tiles`. (2) Creep (`creep_tau`, `hours`) moves every rest length toward its current length each round and does **not** conserve the total, so it can partly erase the starting grade.
+
 ## What happens after a power cut or a dropped connection
 
 - The runner and every job are started in their own sessions, so a dropped SSH connection stops nothing.

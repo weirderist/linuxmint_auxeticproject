@@ -1,4 +1,5 @@
-"""DESIGN PROTOTYPE (not part of the solver, no simulation): the proposed sectioned starting loop-length field for relax_job --loop-grade.
+"""REFERENCE PROTOTYPE (independent, SciPy based; no simulation) of the sectioned starting loop-length field of relax_job --loop-grade. The production code is scripts/loop_grade.py (numpy only);
+tests/test_loop_grade.py checks that it reproduces this prototype exactly. The prototype weights every loop equally; the production code weights by rest length per solver segment.
 Run:  python tests/analysis_loop_grade_design.py        (needs numpy and scipy)
 
 Every constant below is UNSOURCED (A, S_MIN, the linear strength mapping, the linear fall-off, weights W_B and W_T).
