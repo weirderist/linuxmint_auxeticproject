@@ -75,3 +75,4 @@ smoke_test/
 
 # measured-data photographs
 data/*/photos/
+campaigns/*/runs/

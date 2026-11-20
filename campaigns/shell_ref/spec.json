@@ -1,0 +1,67 @@
+{
+ "name": "shell_ref",
+ "purpose": "PROPOSAL, not to be run until K says so: one shell-hold reference run at tiles 1 (shell fold imposed, loops held toward it), same yarn settings as fidelity, for comparison with the yarn-only arms.",
+ "fabric": {
+  "matrix_file": "pattern1_matrix.txt",
+  "ne": 12,
+  "cpi": 22,
+  "wpi": 16,
+  "tiles": 1
+ },
+ "relax": {
+  "E": 3700.0,
+  "mu": 0.49,
+  "kc_ratio": 30.0,
+  "outer": 20,
+  "maxiter": 150,
+  "perturb": 0.02,
+  "seed": 0,
+  "ref_scale": 1.0,
+  "curl": 0.01,
+  "curl_aniso": true,
+  "tension": 10.0,
+  "length_ratio": 0.95,
+  "straight": 0.05,
+  "ei": 0.25,
+  "stretch_law": "0.01:80,0.03:200,0.06:330",
+  "shell": true,
+  "shell_kappa": "tile",
+  "kappa_scale": 1.0,
+  "tile_ref": 0.5,
+  "shell_w": 1.0
+ },
+ "vary": [],
+ "design": {
+  "type": "explicit",
+  "runs": [
+   {}
+  ]
+ },
+ "timeout_s": 3600,
+ "max_rss_gb": 5,
+ "max_interrupts": 3,
+ "thresholds": {
+  "fold_min_turn_rad": 0.2,
+  "wavelength_min_power_fraction": 0.3
+ },
+ "estimate": {
+  "expected_min": 8,
+  "range_min": "6 to 12",
+  "basis": "relax part: same as the yarn-only tiles-1 run, 5.2 min by the formula to 6.4 min corrected (the old jobs show the shell hold adds no cost per round: tiles 3, outer 15, maxiter 200: 237 s per outer round with the shell, 234 s without). Start-up part: the old tiles-3 shell jobs spent 290 to 620 s before the first outer round, of which the shell stage was 278 s for 2880 stitches; tiles 1 has 9x fewer stitches, so the shell stage is expected near 30 s (EXTRAPOLATED, scaling with size unknown) and the tile analysis (a few minutes per the job log) is cached in scripts/cell_cache/tile_kappa_cache.json if the cache key matches, otherwise it adds a few minutes (UNSOURCED).",
+  "note": "Not run. The old shell-hold job in webui/results/20261031-191813 was the full 60 x 48 stitch fabric; its entry 6 (outer 20, maxiter 200) took 5117 s."
+ },
+ "sourced": [
+  "relax.E 3700 MPa: Kharkova et al. 2011 (webui/main.py CONFIG)",
+  "relax.tension 10 cN: lowest of the 10/20/30 cN cotton values in the Mechanika study cited in webui/main.py"
+ ],
+ "unsourced": [
+  "relax.mu 0.49, relax.ei 0.25, relax.stretch_law 0.01:80,0.03:200,0.06:330, relax.length_ratio 0.95, relax.straight 0.05, relax.curl 0.01 (copied from the last real job, webui/results/20261031-191813/job_request.json; provenance not recorded; CLAUDE.md says the yarn EA/EI/stretch curve is still to be measured)",
+  "relax.kc_ratio 30 (webui default)",
+  "relax.shell_w 1.0 (webui CONFIG: 'numerical choice, not tested on the real solver')",
+  "relax.tile_ref 0.5 (relax_job.py help: 'unsourced')",
+  "relax.kappa_scale 1.0",
+  "thresholds.*",
+  "timeout_s 3600 (operational limit)",
+  "seed_stitch is omitted: relax_job.py refuses --seed-stitch together with --shell"
+ ]
+}

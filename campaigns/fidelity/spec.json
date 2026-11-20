@@ -1,0 +1,101 @@
+{
+ "name": "fidelity",
+ "purpose": "Does a small piece of the Pattern 1 matrix fold like a large one? Two arms (seed_stitch 0.2 and 0) at tiles 1 and 2, yarn only, no shell. Tiles 3 is the separate spec fidelity_large.",
+ "fabric": {
+  "matrix_file": "pattern1_matrix.txt",
+  "ne": 12,
+  "cpi": 22,
+  "wpi": 16,
+  "tiles": 1
+ },
+ "relax": {
+  "E": 3700.0,
+  "mu": 0.49,
+  "kc_ratio": 30.0,
+  "outer": 20,
+  "maxiter": 150,
+  "perturb": 0.02,
+  "seed": 0,
+  "ref_scale": 1.0,
+  "curl": 0.01,
+  "curl_aniso": true,
+  "tension": 10.0,
+  "length_ratio": 0.95,
+  "straight": 0.05,
+  "ei": 0.25,
+  "stretch_law": "0.01:80,0.03:200,0.06:330"
+ },
+ "vary": [
+  {
+   "name": "tiles",
+   "min": 1,
+   "max": 2,
+   "scale": "linear",
+   "integer": true
+  },
+  {
+   "name": "seed_stitch",
+   "min": 0.0,
+   "max": 0.2,
+   "scale": "linear",
+   "integer": false
+  }
+ ],
+ "design": {
+  "type": "explicit",
+  "runs": [
+   {
+    "tiles": 1,
+    "seed_stitch": 0.2
+   },
+   {
+    "tiles": 1,
+    "seed_stitch": 0.0
+   },
+   {
+    "tiles": 2,
+    "seed_stitch": 0.2
+   },
+   {
+    "tiles": 2,
+    "seed_stitch": 0.0
+   }
+  ]
+ },
+ "timeout_s": 7200,
+ "max_rss_gb": 5,
+ "max_interrupts": 3,
+ "thresholds": {
+  "fold_min_turn_rad": 0.2,
+  "wavelength_min_power_fraction": 0.3
+ },
+ "estimate": {
+  "basis": "2.9e-4 s per vertex per sub-round x 80 sub-rounds (outer 20 x 4); 42.1 vertices per stitch (measured by building: 13481 at tiles 1, 53953 at tiles 2). The old tiles-3 yarn-only jobs (webui/results/20261031-191813, entries 8 and 10: same total iterations) ran 23% longer than this formula, so the corrected figure is shown too.",
+  "tiles1_each": {
+   "vertices": 13481,
+   "formula_min": 5.2,
+   "corrected_min": 6.4
+  },
+  "tiles2_each": {
+   "vertices": 53953,
+   "formula_min": 20.9,
+   "corrected_min": 25.7
+  },
+  "total_four_runs_min": {
+   "formula": 52,
+   "corrected": 64
+  },
+  "note": "Extrapolated beyond the timing ladder (largest 6048 vertices); startup adds about 5 to 10 s per run."
+ },
+ "sourced": [
+  "relax.E 3700 MPa: Kharkova et al. 2011 (webui/main.py CONFIG)",
+  "relax.tension 10 cN: lowest of the 10/20/30 cN cotton values in the Mechanika study cited in webui/main.py"
+ ],
+ "unsourced": [
+  "relax.mu 0.49, relax.ei 0.25, relax.stretch_law 0.01:80,0.03:200,0.06:330, relax.length_ratio 0.95, relax.straight 0.05, relax.curl 0.01 (copied from the last real job, webui/results/20261031-191813/job_request.json; provenance not recorded; CLAUDE.md says the yarn EA/EI/stretch curve is still to be measured)",
+  "relax.kc_ratio 30 (webui default, numerical choice tested on one fabric)",
+  "seed_stitch 0.2 (chosen by K; magnitude has no source, 0 is the unseeded control arm)",
+  "thresholds.* (classification thresholds for the metrics, chosen by the author)",
+  "timeout_s 7200 (operational limit, about 4.7x the longest corrected estimate)"
+ ]
+}

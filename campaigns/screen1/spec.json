@@ -1,0 +1,98 @@
+{
+ "name": "screen1",
+ "purpose": "Screening: does a fold appear at any setting? 16 Latin-hypercube runs on tiles 1 of the Pattern 1 matrix, yarn only (no shell), tension fixed at 10 cN.",
+ "fabric": {
+  "matrix_file": "pattern1_matrix.txt",
+  "ne": 12,
+  "cpi": 22,
+  "wpi": 16,
+  "tiles": 1
+ },
+ "relax": {
+  "E": 3700.0,
+  "mu": 0.49,
+  "kc_ratio": 30.0,
+  "outer": 20,
+  "maxiter": 150,
+  "perturb": 0.02,
+  "seed": 0,
+  "curl_aniso": true,
+  "tension": 10.0
+ },
+ "vary": [
+  {
+   "name": "ref_scale",
+   "min": 0.0,
+   "max": 1.0,
+   "scale": "linear",
+   "integer": false
+  },
+  {
+   "name": "bend_scale",
+   "min": 0.001,
+   "max": 1.0,
+   "scale": "log",
+   "integer": false
+  },
+  {
+   "name": "seed_stitch",
+   "min": 0.0,
+   "max": 0.5,
+   "scale": "linear",
+   "integer": false
+  },
+  {
+   "name": "curl",
+   "min": 0.0,
+   "max": 0.05,
+   "scale": "linear",
+   "integer": false
+  },
+  {
+   "name": "length_ratio",
+   "min": 0.85,
+   "max": 1.0,
+   "scale": "linear",
+   "integer": false
+  }
+ ],
+ "design": {
+  "type": "latin_hypercube",
+  "seed": 1,
+  "n_runs": 16
+ },
+ "timeout_s": 1800,
+ "max_rss_gb": 5,
+ "max_interrupts": 3,
+ "thresholds": {
+  "fold_min_turn_rad": 0.2,
+  "wavelength_min_power_fraction": 0.3
+ },
+ "estimate": {
+  "per_run_minutes": "5.2 (formula) to 6.4 (corrected by the old tiles-3 jobs)",
+  "total_minutes": "83 to 103",
+  "basis": "2.9e-4 s x 13481 vertices x 80 sub-rounds = 313 s plus startup; the 16 runs are one after another"
+ },
+ "ranges": {
+  "ref_scale": "0 to 1: argparse help and UI limits; the solver notes report smooth behaviour at 0.3 and 0.6. SOURCED as limits.",
+  "bend_scale": "1e-3 to 1 (log): lower end = Sperl et al. 2022 range (1e-3..10) and Ding et al. 0.0032 for acrylic; upper end = UI limit. Not measured for cotton Ne 12.",
+  "seed_stitch": "0 to 0.5 x R: UI limit is -1..1; the 0.5 upper end is UNSOURCED.",
+  "curl": "0 to 0.05 rad per vertex: UI limit is 0..0.5; the 0.05 upper end is UNSOURCED (the last real job used 0.01).",
+  "length_ratio": "0.85 to 1.0: UNSOURCED. The UI limit is 0.5..1; relax_job help: eta < 1 = yarn knitted tighter than built (Ding et al. 2023, A.7), but no value for cotton Ne 12 is sourced.",
+  "tension": "fixed at 10 cN (SOURCED: lowest of the cotton circular-knitting values 10, 20, 30 cN cited in webui/main.py); no longer varied."
+ },
+ "unsourced": [
+  "relax.mu 0.49 (copied from earlier runs, no source)",
+  "relax.kc_ratio 30 (webui default, numerical choice tested on one fabric)",
+  "seed_stitch range upper end 0.5",
+  "curl range upper end 0.05",
+  "bend_scale applicability to cotton Ne 12",
+  "thresholds.* (classification thresholds for the metrics, chosen by the author)",
+  "length_ratio range 0.85 to 1.0",
+  "timeout_s 1800 (operational limit, about 5x the estimate)"
+ ],
+ "sourced": [
+  "relax.E 3700 MPa: Kharkova et al. 2011 (webui/main.py CONFIG)",
+  "relax.tension 10 cN (fixed)"
+ ]
+}

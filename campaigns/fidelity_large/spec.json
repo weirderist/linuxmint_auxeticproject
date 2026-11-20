@@ -1,0 +1,80 @@
+{
+ "name": "fidelity_large",
+ "purpose": "Tiles 3 (the full 48 x 60 stitch fabric) with seed_stitch 0.2, same settings as fidelity. A separate spec so that it is started on purpose; NOT to be run until K says so.",
+ "fabric": {
+  "matrix_file": "pattern1_matrix.txt",
+  "ne": 12,
+  "cpi": 22,
+  "wpi": 16,
+  "tiles": 1
+ },
+ "relax": {
+  "E": 3700.0,
+  "mu": 0.49,
+  "kc_ratio": 30.0,
+  "outer": 20,
+  "maxiter": 150,
+  "perturb": 0.02,
+  "seed": 0,
+  "ref_scale": 1.0,
+  "curl": 0.01,
+  "curl_aniso": true,
+  "tension": 10.0,
+  "length_ratio": 0.95,
+  "straight": 0.05,
+  "ei": 0.25,
+  "stretch_law": "0.01:80,0.03:200,0.06:330"
+ },
+ "vary": [
+  {
+   "name": "tiles",
+   "min": 3,
+   "max": 4,
+   "scale": "linear",
+   "integer": true
+  },
+  {
+   "name": "seed_stitch",
+   "min": 0.0,
+   "max": 0.2,
+   "scale": "linear",
+   "integer": false
+  }
+ ],
+ "design": {
+  "type": "explicit",
+  "runs": [
+   {
+    "tiles": 3,
+    "seed_stitch": 0.2
+   }
+  ]
+ },
+ "timeout_s": 10800,
+ "max_rss_gb": 5,
+ "max_interrupts": 3,
+ "thresholds": {
+  "fold_min_turn_rad": 0.2,
+  "wavelength_min_power_fraction": 0.3
+ },
+ "estimate": {
+  "basis": "Observed: the old yarn-only jobs on this same 60 x 48 stitch fabric (webui/results/20261031-191813, entries 8 and 10; outer 15, maxiter 200 = the same 3000 L-BFGS iterations per sub-round count as outer 20, maxiter 150) took 3470 s and 3467 s. The formula (2.9e-4 s x 121400 vertices x 80 sub-rounds) gives 2817 s.",
+  "tiles3": {
+   "vertices_approx": 121400,
+   "formula_min": 47,
+   "observed_like_min": 58
+  },
+  "note": "Peak RAM of such a run was not recorded; max_rss_gb 5 stops it if it grows past that."
+ },
+ "sourced": [
+  "relax.E 3700 MPa: Kharkova et al. 2011 (webui/main.py CONFIG)",
+  "relax.tension 10 cN: lowest of the 10/20/30 cN cotton values in the Mechanika study cited in webui/main.py"
+ ],
+ "unsourced": [
+  "relax.mu 0.49, relax.ei 0.25, relax.stretch_law 0.01:80,0.03:200,0.06:330, relax.length_ratio 0.95, relax.straight 0.05, relax.curl 0.01 (copied from the last real job, webui/results/20261031-191813/job_request.json; provenance not recorded; CLAUDE.md says the yarn EA/EI/stretch curve is still to be measured)",
+  "relax.kc_ratio 30 (webui default, numerical choice tested on one fabric)",
+  "seed_stitch 0.2 (chosen by K; magnitude has no source, 0 is the unseeded control arm)",
+  "thresholds.* (classification thresholds for the metrics, chosen by the author)",
+  "timeout_s 10800 (operational limit, about 3x the estimate)"
+ ]
+}
