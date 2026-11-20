@@ -39,8 +39,8 @@ Format: `- [ ] N. job | WAITING FOR: dependency | OWNER: Claude or K`.
 - [ ] 6. Smallest confirmation run: 8x8 single jersey, tiles 1, Ne 12, CPI 22, WPI 16, current code (writes relaxed_l0.csv), with --loop-grade 0 and with the grade (e.g. 0.02), same other settings | WAITING FOR: loop-grade code (committed a177053..2097e8e) pulled on the server, server idle, user approval | OWNER: Claude
 - [ ] 7. Shell-only stage: read-only investigation of shell_sim.py (inputs, time per run, fold descriptors), then a proposal to extend scripts/campaign.py with a shell-only job type, a pattern source (fixed / random / proposer) and a descriptor column | WAITING FOR: nothing for the investigation (do it when asked); design approval before any code | OWNER: Claude
 - [ ] 8. Validate the shell against the real fabrics (Miura-ori, Pattern 1, Batch B samples 1-11) | WAITING FOR: task 7 | OWNER: Claude
-- [ ] 9. ML loop (random patterns, then proposed patterns, readable rules) on the shell | WAITING FOR: tasks 7 and 8 | OWNER: Claude
-- [ ] 10. Fit the loop-grade / migration parameters so the yarn-level fold matches the shell, scored out of 100 | WAITING FOR: tasks 6 and 9 | OWNER: Claude
+- [ ] 9. ML loop (random patterns, then proposed patterns, readable rules) on the shell; the shell-only stage is fully automated and controlled by the ML after a few seed patterns chosen by K, with guardrails (pattern bounds, a server-time budget, stop rules, logs, and K approval before any learned rule enters the yarn model) | WAITING FOR: tasks 7 and 8 | OWNER: Claude
+- [ ] 10. Fit the loop-grade / migration parameters so the yarn-level fold matches the shell, scored out of 100; the shell-only stage is fully automated and controlled by the ML after a few seed patterns chosen by K, with guardrails (pattern bounds, a server-time budget, stop rules, logs, and K approval before any learned rule enters the yarn model) | WAITING FOR: tasks 6 and 9 | OWNER: Claude
 - [ ] 11. Parameter sensitivity screen (about 36 inputs) | WAITING FOR: task 10, server time | OWNER: Claude
 - [ ] 12. Power-cut hardening: checkpoint.npz fsync + checkpoint.prev.npz fallback + validation, then one-owner decide_resumes() with desired.json (resume only if the boot id changed and no STOP file; cap of 3 resumes per run, then needs_approval) | WAITING FOR: no campaign running; user approval | OWNER: Claude
 - [ ] 13. Stretch-test engine (Test mode), scoring with the K-ratings queue, proposer/advisor, "Add measurement" form | WAITING FOR: shell validated (task 8) | OWNER: Claude
@@ -55,6 +55,9 @@ Format: `- [ ] N. job | WAITING FOR: dependency | OWNER: Claude or K`.
 - [ ] 22. Decide how the grade scales with tile count: the fall-off now runs over the whole section, so the same a differs at tiles 1, 2 and 3 (option: a fixed length scale in loops) | WAITING FOR: task 6 | OWNER: K and Claude
 - [ ] 23. Decide the single-jersey contour shape (square versus elliptical, corners longer) by comparing with the shell | WAITING FOR: task 8 | OWNER: K and Claude
 - [ ] 24. Check the two-loop-wide ridge at shared boundaries and the dilution sensitivity against the shell | WAITING FOR: task 8 | OWNER: K and Claude
+- [ ] 25. Web UI fields for --slip-friction-load, --slip-drive, --slip-drive-decay and --diagnostics (SimBody, _sim_cmd, Simulate form, presets; UNSOURCED marks) | WAITING FOR: user request | OWNER: Claude
+- [ ] 26. Reconcile the fold descriptor of scripts/round_diag.py with fold_metric.py and campaign.py's descriptor so there is one definition | WAITING FOR: shell-only stage (task 7) | OWNER: Claude
+- [ ] 27. First real run of the slip extensions: the 8x8 single jersey pair (tiles 1, Ne 12, CPI 22, WPI 16; with --diagnostics, once with --slip-drive 0.003 --slip-friction-load 0.3, once without; compare diagnostics.csv and the rest-length colouring) | WAITING FOR: server idle, pull approved (task 3) | OWNER: Claude
 
 ### Done
 (none yet)
