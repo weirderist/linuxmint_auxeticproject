@@ -101,6 +101,6 @@ export async function fetchColors(id, field, variant, kind, extra) {
 }
 
 export function legendHTML(l) {
-  const g = l.stops.map(c => 'rgb(' + c.join(',') + ')').join(','), f = x => (+x).toPrecision(3), e = l.end_labels || ['low', 'high'];
-  return '<b>' + l.label + '</b><div class="bar" style="background:linear-gradient(to right,' + g + ')"></div><div class="tk"><span>' + f(l.vmin) + ' (' + e[0] + ')</span><span>' + f(l.ticks[1]) + '</span><span>' + f(l.vmax) + ' (' + e[1] + ')</span></div>';
+  const g = l.stops.map(c => 'rgb(' + c.join(',') + ')').join(','), f = x => (+x).toPrecision(4), e = l.end_labels || ['low', 'high'];
+  return '<b>' + l.label + '</b><div class="bar" style="background:linear-gradient(to right,' + g + ')"></div><div class="tk"><span>' + f(l.vmin) + ' (' + e[0] + ')</span><span>' + f(l.ticks[1]) + (l.centre != null ? ' (as-built mean)' : '') + '</span><span>' + f(l.vmax) + ' (' + e[1] + ')</span></div>' + (l.note ? '<div>' + l.note + '</div>' : '') + (l.data_min != null ? '<div style="opacity:.7">data ' + f(l.data_min) + ' to ' + f(l.data_max) + '</div>' : '');
 }

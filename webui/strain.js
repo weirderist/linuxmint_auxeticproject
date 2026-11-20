@@ -24,7 +24,7 @@ async function showA(refit) {
   try {
     const base = await getBase(v, t => { st.textContent = t; });
     st.textContent = 'colouring…';
-    const c = await fetchColors(id, 'looplen', v, 'tube');
+    const c = await fetchColors(id, 'loop', v, 'tube');
     if (v !== aVariant) return;
     disposeMesh(meshA); meshA = tubeMesh(base, c.rgb); vA.show(meshA, refit || firstA); firstA = false;
     $('#lA').innerHTML = legendHTML(c.legend); $('#lA').hidden = false; st.textContent = base.nv.toLocaleString() + ' vertices';

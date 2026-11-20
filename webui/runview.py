@@ -169,12 +169,30 @@ def _rest_ratio(meta, R):
     return ratio, "rest length = as-built chord x %.5f (length_ratio %g, tension %g cN, strain under tension %.5f)%s" % (ratio, lr, T, eps, "" if exact else "; growth stages (ramp) were used, so this is not exact"), exact
 
 _FCACHE = {}
+LOOP_HALF_MIN = 0.01     # UNSOURCED display choice: the loop-length colour range is 1 +- h with h = max(clip-th percentile of |ratio - 1|, 0.01), so a field that is flat within 1 % shows one mid colour instead of noise
+
+def _cum_at(cum, p):
+    i = np.minimum(np.floor(p).astype(int), len(cum) - 2)
+    return cum[i] + (p - i) * (cum[i + 1] - cum[i])
+
+def _loop_sum(v, beta):
+    """Sum of a per-segment quantity over each loop. beta = loop boundaries in segment units (fractional): the segments that straddle a boundary are split in proportion, so the result is not
+    quantised to whole segments (the old whole-segment rule moved +-1 segment, about +-2.4 % of a loop, between neighbouring loops)."""
+    a = _cum_at(np.r_[0.0, np.cumsum(v)], beta)
+    return a[1:] - a[:-1]
+
+def _boundaries(P, W, ncol):
+    """Fine-curve sample indices of the ncol + 1 loop boundaries of one course, from the build itself: build_knit.py builds every stitch from control points that start and end exactly on x = k W
+    (16 control points per stitch) and the Catmull-Rom curve passes through its control points, so the samples with x / W an integer are the loop boundaries. None if that does not give ncol + 1."""
+    w = P[:, 0] / W; b = np.where(np.abs(w - np.round(w)) < 1e-6)[0]
+    if len(b) != ncol + 1 or b[0] != 0 or b[-1] != len(P) - 1 or not np.array_equal(np.round(w[b]).astype(int), np.arange(ncol + 1)): return None
+    return b
 
 def fields(d):
     """Loop and strain data of one folder, cached while its files do not change."""
     d = Path(d)
     files = [d / n for n in ("meta.json", "fab_axis.csv", "relaxed_axis.csv", "relaxed_l0.csv")]
-    key = (str(d),) + tuple((f.stat().st_mtime_ns if f.exists() else 0) for f in files)
+    key = (str(d), "v3") + tuple((f.stat().st_mtime_ns if f.exists() else 0) for f in files)
     if key in _FCACHE: return _FCACHE[key]
     meta = _rjson(d / "meta.json") or {}
     st = meta.get("structure") or {}; R = meta.get("R"); W = st.get("W") or meta.get("W"); C = st.get("C") or meta.get("C")
@@ -189,17 +207,26 @@ def fields(d):
     if f.has_relaxed:
         cr, Xr = read_axis(d / "relaxed_axis.csv")
         if list(cr) == list(cs) and all(len(a) == len(b) for a, b in zip(Xr, f.X0)): f.Xr = Xr
-    seg_col = lambda X: np.clip(((X[:-1, 0] + X[1:, 0]) / 2 // f.W).astype(int), 0, f.ncol - 1)
-    vcol = lambda X: np.clip((X[:, 0] // f.W).astype(int), 0, f.ncol - 1)
-    f.seg_col = [seg_col(X) for X in f.X0]; f.vcol0 = [vcol(X) for X in f.X0]; f.vcolF = [vcol(P) for P in F]
+    # loop boundaries: exact from the build where possible. beta = boundary position in segment units of the resampled curve (the solver's vertex i of a course is the as-built vertex i).
+    f.bidx, f.beta, f.vid0, f.vidF, fallback = [], [], [], [], 0
+    for P, X in zip(F, f.X0):
+        b = _boundaries(P, f.W, f.ncol); n = len(X); s_ = np.r_[0, np.cumsum(np.linalg.norm(np.diff(P, axis=0), axis=1))]
+        if b is not None:
+            beta = s_[b] / (s_[-1] / (n - 1)); vF = np.searchsorted(b, np.arange(len(P)), side="right") - 1
+        else:        # fallback (older or foreign builds): the first crossing of x = k W along the curve; counted and reported
+            fallback += 1; xm = np.maximum.accumulate(X[:, 0]); beta = np.interp(np.arange(f.ncol + 1) * f.W, xm, np.arange(n), right=n - 1); vF = np.clip((P[:, 0] // f.W).astype(int), 0, f.ncol - 1)
+        beta = np.maximum.accumulate(np.clip(beta, 0, n - 1)); beta[0], beta[-1] = 0.0, n - 1.0
+        f.bidx.append(b); f.beta.append(beta); f.vid0.append(np.clip(np.searchsorted(beta, np.arange(n), side="right") - 1, 0, f.ncol - 1)); f.vidF.append(np.clip(vF, 0, f.ncol - 1))
+    f.identity = "loop boundaries from the build (control points on x = k W)" if not fallback else "loop boundaries from the first crossing of x = k W (%d of %d courses had no exact build boundaries)" % (fallback, len(cs))
     f.l_asb = [np.linalg.norm(np.diff(X, axis=0), axis=1) for X in f.X0]
     nc = len(cs)
-    arc = lambda L: np.array([np.bincount(f.seg_col[i], weights=L[i], minlength=f.ncol)[:f.ncol] for i in range(nc)])
+    arc = lambda L: np.array([_loop_sum(L[i], f.beta[i]) for i in range(nc)])
+    f.span = np.array([np.diff(b) for b in f.beta])                        # segments (fractional) per loop
     f.arc_asb = arc(f.l_asb)
-    ok = f.arc_asb > 0
-    f.mean_asb = float(f.arc_asb[ok].mean())
+    f.mean_asb = float(f.arc_asb[f.arc_asb > 0].mean())
     f.rest_src, f.rest_note, f.rest_exact = "reconstructed", "", False
-    f.l_rel = f.arc_rel = f.l0 = f.strain = f.strain_grid = None
+    f.l_rel = f.arc_rel = f.l0 = f.strain = f.strain_grid = f.rest_sum = None
+    f.ratio, _n, _e = _rest_ratio(meta, f.R); f.rest0_mean = f.ratio * f.mean_asb      # the as-built rest length of a loop is ratio x its as-built chord length
     if f.Xr is not None:
         f.l_rel = [np.linalg.norm(np.diff(X, axis=0), axis=1) for X in f.Xr]; f.arc_rel = arc(f.l_rel)
         l0file = d / "relaxed_l0.csv"
@@ -208,31 +235,40 @@ def fields(d):
             f.rest_src, f.rest_note, f.rest_exact = "saved", "rest lengths read from relaxed_l0.csv", True
             if any(len(a) != len(b) for a, b in zip(f.l0, f.l_rel)): raise HTTPException(409, "relaxed_l0.csv does not match relaxed_axis.csv")
         else:
-            ratio, f.rest_note, _ = _rest_ratio(meta, f.R)      # reconstructed: never "exact", because the migration during the relaxation is not known
-            f.l0 = [l * ratio for l in f.l_asb]
+            f.rest_note = _n; f.l0 = [l * f.ratio for l in f.l_asb]
+        f.rest_sum = arc(f.l0)
         f.strain = [lr / l0 - 1.0 for lr, l0 in zip(f.l_rel, f.l0)]
-        sums = np.array([np.bincount(f.seg_col[i], weights=f.strain[i], minlength=f.ncol)[:f.ncol] for i in range(nc)])
-        cnt = np.array([np.bincount(f.seg_col[i], minlength=f.ncol)[:f.ncol] for i in range(nc)])
-        f.strain_grid = np.where(cnt > 0, sums / np.maximum(cnt, 1), np.nan)
+        f.strain_grid = np.array([_loop_sum(f.strain[i], f.beta[i]) / np.maximum(f.span[i], 1e-12) for i in range(nc)])
     if len(_FCACHE) >= 3: _FCACHE.pop(next(iter(_FCACHE)))
     _FCACHE[key] = f
     return f
 
 def _vertex_values(f, field, variant):
-    """(values per source vertex in the file order of the variant's axis csv, nominal range note)."""
-    if field == "looplen":
+    """(values per source vertex in the file order of the variant's axis csv, the field actually used).
+    loop    = restlen when the run has saved rest lengths and the relaxed state is asked for, otherwise looplen
+    looplen = yarn ARC LENGTH of each loop in the shown geometry / as-built mean loop length (geometric: does not show migration)
+    restlen = SUM OF THE REST LENGTHS l0 of each loop / as-built mean rest length of a loop (needs relaxed_l0.csv): this is the migrated length
+    strain  = axial strain of the relaxed fabric, per vertex"""
+    if field == "loop": field = "restlen" if (variant == "relaxed" and f.rest_src == "saved") else "looplen"
+    if field in ("looplen", "restlen"):
         if variant == "relaxed":
             if f.Xr is None: raise HTTPException(404, "no relaxed axis for this folder")
-            grid = f.arc_rel / f.mean_asb; cols = f.vcol0
-        else: grid = f.arc_asb / f.mean_asb; cols = f.vcolF
-        return np.concatenate([grid[i][cols[i]] for i in range(len(f.courses))])
+            if field == "restlen":
+                if f.rest_src != "saved": raise HTTPException(404, "the rest lengths after the relaxation are not saved for this run (no relaxed_l0.csv)")
+                grid = f.rest_sum / f.rest0_mean
+            else: grid = f.arc_rel / f.mean_asb
+            ids = f.vid0
+        else:
+            if field == "restlen": raise HTTPException(404, "the as-built rest length is the as-built loop length times a constant: use the loop length")
+            grid, ids = f.arc_asb / f.mean_asb, f.vidF
+        return np.concatenate([grid[i][ids[i]] for i in range(len(f.courses))]), field
     if field == "strain":
         if variant != "relaxed" or f.strain is None: raise HTTPException(404, "strain is defined for the relaxed fabric only")
         out = []
-        for s in f.strain:
-            v = np.empty(len(s) + 1); v[0] = s[0]; v[-1] = s[-1]; v[1:-1] = (s[:-1] + s[1:]) / 2.0; out.append(v)
-        return np.concatenate(out)
-    raise HTTPException(422, "field must be looplen or strain")
+        for s_ in f.strain:
+            v = np.empty(len(s_) + 1); v[0] = s_[0]; v[-1] = s_[-1]; v[1:-1] = (s_[:-1] + s_[1:]) / 2.0; out.append(v)
+        return np.concatenate(out), "strain"
+    raise HTTPException(422, "field must be loop, looplen, restlen or strain")
 
 
 # ------------------------------------------------------------------ colour maps
@@ -244,12 +280,17 @@ def ramp(stops, t):
     t = np.clip(t, 0.0, 1.0) * (len(stops) - 1); i = np.minimum(t.astype(int), len(stops) - 2); u = (t - i)[:, None]
     return stops[i] * (1 - u) + stops[i + 1] * u
 
+LOOP_NOTES = {"looplen": "geometric arc length - does not show migration", "restlen": "rest length l0 of each loop - shows migration"}
+
 def colour_values(field, vals, flip, clip):
-    """(uint8 RGB per value, legend dict)."""
-    if field == "looplen":
-        lo, hi = float(np.min(vals)), float(np.max(vals))
-        t = (vals - lo) / (hi - lo) if hi > lo else np.zeros_like(vals)
-        return ramp(LOOP_STOPS, t).round().astype(np.uint8), dict(vmin=lo, vmax=hi, stops=LOOP_STOPS.astype(int).tolist(), label="loop yarn length / as-built mean loop length", ticks=[lo, (lo + hi) / 2, hi], end_labels=["shortest", "longest"])
+    """(uint8 RGB per value, legend dict). Loop fields: the range is 1 +- h, h = max(clip-th percentile of |value - 1|, LOOP_HALF_MIN): yellow = shorter than the as-built mean, dark blue = longer,
+    so a few outlier loops cannot compress everything else into one colour (the old min-to-max range did)."""
+    if field in ("looplen", "restlen"):
+        h = max(float(np.percentile(np.abs(vals - 1.0), clip)), LOOP_HALF_MIN); lo, hi = 1.0 - h, 1.0 + h
+        t = (vals - lo) / (2 * h)
+        lab = "loop yarn length (relaxed geometry)" if field == "looplen" else "loop rest length l0"
+        return ramp(LOOP_STOPS, t).round().astype(np.uint8), dict(vmin=lo, vmax=hi, centre=1.0, half_width=h, min_half_width=LOOP_HALF_MIN, data_min=float(vals.min()), data_max=float(vals.max()), clip_percentile=clip,
+                                                                  stops=LOOP_STOPS.astype(int).tolist(), label=lab + " / as-built mean", note=LOOP_NOTES[field], field=field, ticks=[lo, 1.0, hi], end_labels=["shorter", "longer"])
     c = float(np.percentile(np.abs(vals), clip)) or 1e-12
     t = np.clip(vals / c, -1, 1)[:, None]
     pos, neg = (STRAIN_GREEN, STRAIN_RED) if flip else (STRAIN_RED, STRAIN_GREEN)       # default: tension red, compression green
@@ -291,7 +332,7 @@ def _check_layout(V, idx, pts, R):
     if not np.all(np.isfinite(dist)) or float(np.median(np.abs(dist - R))) > 0.25 * R: raise HTTPException(409, "the mesh does not match this axis (vertices are not one yarn radius from the yarn centre)")
 
 def colour_bytes(rid, field, variant, kind, flip, clip):
-    d = view_dir(rid); f = fields(d); vals = _vertex_values(f, field, variant)
+    d = view_dir(rid); f = fields(d); vals, field = _vertex_values(f, field, variant)
     rgb, legend = colour_values(field, vals, flip, clip)
     curves = f.Xr if variant == "relaxed" else f.F
     pts = np.vstack(curves)
@@ -339,21 +380,26 @@ def info(rid: str):
                 campaign=RUN_ID_RE.match(rid).group(1) if is_run(rid) else None, run=RUN_ID_RE.match(rid).group(2) if is_run(rid) else None)
 
 @router.get("/api/results/{rid}/field-info")
-def field_info(rid: str, field: str = "looplen", variant: str = "baseline", flip: int = 0, clip: float = CLIP_PERCENTILE):
-    d = view_dir(rid); f = fields(d); vals = _vertex_values(f, field, variant)
-    _, legend = colour_values(field, vals, bool(flip), clip)
+def field_info(rid: str, field: str = "loop", variant: str = "baseline", flip: int = 0, clip: float = CLIP_PERCENTILE):
+    d = view_dir(rid); f = fields(d); vals, fu = _vertex_values(f, field, variant)
+    _, legend = colour_values(fu, vals, bool(flip), clip)
     notes = []
-    if field == "looplen":
-        notes.append("Loop = one stitch of one course (column = floor(x / W) of the as-built vertex). Arc length is the sum of the segment lengths of the solver's resampled yarn (spacing about one yarn radius), "
-                     "divided by the as-built mean over all %d loops (%.4g)." % (int((f.arc_asb > 0).sum()), f.mean_asb))
+    if fu in ("looplen", "restlen"):
+        notes.append(LOOP_NOTES[fu].capitalize() + ".")
+        notes.append("Loop = one stitch of one course; identity: %s. Lengths are chord sums of the solver's resampled yarn, with the two segments at a loop boundary split in proportion; divided by the as-built mean over all %d loops "
+                     "(%.4g%s)." % (f.identity, int((f.arc_asb > 0).sum()), f.mean_asb if fu == "looplen" else f.rest0_mean, "" if fu == "looplen" else ", as-built rest length = chord x %.5f" % f.ratio))
+        notes.append("UNSOURCED display choice: colour range = 1 +- h, h = max(%g-th percentile of |value - 1|, %g); here h = %.4g, data range %.4f to %.4f." % (clip, LOOP_HALF_MIN, legend["half_width"], legend["data_min"], legend["data_max"]))
+        if fu == "looplen" and variant == "relaxed":
+            if f.strain is not None: notes.append("The geometric arc length follows the rest length only through l = l0 (1 + strain), so it can show migration larger than the elastic strain (here up to about %.2f %%) and nothing smaller." % (100 * float(np.abs(np.concatenate(f.strain)).max())))
+            if f.rest_src != "saved": notes.append("This run has no relaxed_l0.csv (runs made before commit c325e07 did not save it). Its colouring cannot be used as evidence for or against loop-length migration.")
     else:
         notes += ["Axial strain of the relaxed fabric = segment length / rest length - 1. It is not stretch-test strain.", f.rest_note,
                   "Rest-length migration during the relaxation is %s." % ("included (saved rest lengths)" if f.rest_src == "saved" else "NOT included: after relaxation the rest lengths are not saved"),
                   "UNSOURCED display choice: colour range = +-%g-th percentile of |strain|." % clip]
-    return dict(field=field, variant=variant, legend=legend, mean_loop_asbuilt=f.mean_asb, n_loops=int((f.arc_asb > 0).sum()), rest_source=f.rest_src, rest_exact=f.rest_exact, notes=notes)
+    return dict(field=fu, requested=field, variant=variant, legend=legend, mean_loop_asbuilt=f.mean_asb, n_loops=int((f.arc_asb > 0).sum()), rest_source=f.rest_src, rest_exact=f.rest_exact, identity=f.identity, notes=[n for n in notes if n])
 
 @router.get("/api/results/{rid}/colors")
-def colors(rid: str, field: str = "looplen", variant: str = "baseline", kind: str = "tube", flip: int = 0, clip: float = CLIP_PERCENTILE):
+def colors(rid: str, field: str = "loop", variant: str = "baseline", kind: str = "tube", flip: int = 0, clip: float = CLIP_PERCENTILE):
     if variant not in ("baseline", "relaxed") or not (50.0 <= clip <= 100.0): raise HTTPException(422, "bad variant or clip")
     data, legend = colour_bytes(rid, field, variant, kind, bool(flip), clip)
     return Response(data, media_type="application/octet-stream", headers={"Content-Encoding": "identity", "X-Count": str(len(data) // 3), "X-Legend": json.dumps(legend)})
@@ -364,7 +410,8 @@ def loops(rid: str):
     out = dict(ncourse=len(f.courses), ncol=f.ncol, mean_loop_asbuilt=f.mean_asb, units=f.units, asbuilt=_grid(np.where(f.arc_asb > 0, f.arc_asb, np.nan)),
                relaxed=_grid(np.where(f.arc_rel > 0, f.arc_rel, np.nan)) if f.arc_rel is not None else None,
                ratio_asbuilt=_grid(np.where(f.arc_asb > 0, f.arc_asb / f.mean_asb, np.nan)), ratio_relaxed=_grid(np.where(f.arc_rel > 0, f.arc_rel / f.mean_asb, np.nan)) if f.arc_rel is not None else None,
-               note="Loop = one stitch of one course. Lengths are chord sums of the solver's resampled yarn (not the stretched arc of the fine curve).")
+               rest_ratio=(_grid(np.where(f.rest_sum > 0, f.rest_sum / f.rest0_mean, np.nan)) if f.rest_sum is not None and f.rest_src == "saved" else None), rest_source=f.rest_src, identity=f.identity,
+               note="Loop = one stitch of one course (%s). Lengths are chord sums of the solver's resampled yarn, the two segments at a loop boundary split in proportion." % f.identity)
     return out
 
 @router.get("/api/results/{rid}/strain")

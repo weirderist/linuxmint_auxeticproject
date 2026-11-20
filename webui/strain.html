@@ -29,7 +29,7 @@ svg text{fill:var(--mut);font-size:10px;font-family:system-ui,sans-serif}svg .ax
 <p class="small mut">Strain on this page is the <b>axial strain of the relaxed fabric</b> (segment length / rest length &minus; 1), not stretch-test strain. The rest length is reconstructed from the as-built length and the run's length ratio and tension, because the relaxed rest lengths are not saved.</p>
 <div id="err" class="err"></div>
 <section><h2>A &ndash; loop length</h2>
- <div class="row"><span class="seg"><button id="aBase">As built</button><button id="aRel" class="on">Relaxed</button></span><span class="mut small">colour: loop yarn length / as-built mean loop length</span></div>
+ <div class="row"><span class="seg"><button id="aBase">As built</button><button id="aRel" class="on">Relaxed</button></span><span class="mut small">colour: loop length / as-built mean (rest length if the run saved it, otherwise geometric arc length; the legend says which)</span></div>
  <div class="view" id="vA"><div class="status" id="sA"></div><div class="legend" id="lA" hidden></div></div></section>
 <div class="row card"><label><input type="checkbox" id="sync" checked> keep the two cameras synchronised</label></div>
 <section><h2>B &ndash; axial strain of the relaxed fabric</h2>
