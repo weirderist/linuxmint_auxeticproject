@@ -19,6 +19,8 @@ HERE = Path(__file__).parent
 ROOT = HERE.parent
 CAMPAIGNS = Path(os.environ.get("CAMPAIGN_DIR") or ROOT / "campaigns")
 SCRIPTS = Path(os.environ.get("CAMPAIGN_SCRIPTS") or ROOT / "scripts")
+if str(SCRIPTS) not in sys.path: sys.path.append(str(SCRIPTS))
+import loop_grade as lg          # shared with relax_job.py --loop-grade: resample, loop boundaries, loop sums (one loop identity for the viewer and the field)
 RESULTS = HERE / "results"
 ID_RE = re.compile(r"^[0-9A-Za-z_-]{1,64}$")
 RUN_ID_RE = re.compile(r"^run~([0-9A-Za-z_-]{1,64})~([0-9]{1,6})$")
@@ -119,11 +121,7 @@ def _gen(src, out, R, sides, prog):
 
 
 # ------------------------------------------------------------------ geometry helpers
-def resample(P, ds):
-    """Same as relax_state.resample (checked equal in the tests)."""
-    s = np.r_[0, np.cumsum(np.linalg.norm(np.diff(P, axis=0), axis=1))]
-    u = np.linspace(0, s[-1], max(3, int(round(s[-1] / ds)) + 1))
-    return np.c_[[np.interp(u, s, P[:, k]) for k in range(3)]].T
+resample = lg.resample          # same as relax_state.resample (checked equal in tests/test_loop_grade.py)
 
 def decim_idx(P, R, max_step=0.8, max_turn_deg=6.0):
     """Indices that build_knit.decimate_curve keeps (same algorithm; the tests compare it with the original)."""
@@ -171,22 +169,7 @@ def _rest_ratio(meta, R):
 _FCACHE = {}
 LOOP_HALF_MIN = 0.01     # UNSOURCED display choice: the loop-length colour range is 1 +- h with h = max(clip-th percentile of |ratio - 1|, 0.01), so a field that is flat within 1 % shows one mid colour instead of noise
 
-def _cum_at(cum, p):
-    i = np.minimum(np.floor(p).astype(int), len(cum) - 2)
-    return cum[i] + (p - i) * (cum[i + 1] - cum[i])
-
-def _loop_sum(v, beta):
-    """Sum of a per-segment quantity over each loop. beta = loop boundaries in segment units (fractional): the segments that straddle a boundary are split in proportion, so the result is not
-    quantised to whole segments (the old whole-segment rule moved +-1 segment, about +-2.4 % of a loop, between neighbouring loops)."""
-    a = _cum_at(np.r_[0.0, np.cumsum(v)], beta)
-    return a[1:] - a[:-1]
-
-def _boundaries(P, W, ncol):
-    """Fine-curve sample indices of the ncol + 1 loop boundaries of one course, from the build itself: build_knit.py builds every stitch from control points that start and end exactly on x = k W
-    (16 control points per stitch) and the Catmull-Rom curve passes through its control points, so the samples with x / W an integer are the loop boundaries. None if that does not give ncol + 1."""
-    w = P[:, 0] / W; b = np.where(np.abs(w - np.round(w)) < 1e-6)[0]
-    if len(b) != ncol + 1 or b[0] != 0 or b[-1] != len(P) - 1 or not np.array_equal(np.round(w[b]).astype(int), np.arange(ncol + 1)): return None
-    return b
+_cum_at, _loop_sum, _boundaries = lg.cum_at, lg.loop_sum, lg.boundaries
 
 def fields(d):
     """Loop and strain data of one folder, cached while its files do not change."""
@@ -210,12 +193,9 @@ def fields(d):
     # loop boundaries: exact from the build where possible. beta = boundary position in segment units of the resampled curve (the solver's vertex i of a course is the as-built vertex i).
     f.bidx, f.beta, f.vid0, f.vidF, fallback = [], [], [], [], 0
     for P, X in zip(F, f.X0):
-        b = _boundaries(P, f.W, f.ncol); n = len(X); s_ = np.r_[0, np.cumsum(np.linalg.norm(np.diff(P, axis=0), axis=1))]
-        if b is not None:
-            beta = s_[b] / (s_[-1] / (n - 1)); vF = np.searchsorted(b, np.arange(len(P)), side="right") - 1
-        else:        # fallback (older or foreign builds): the first crossing of x = k W along the curve; counted and reported
-            fallback += 1; xm = np.maximum.accumulate(X[:, 0]); beta = np.interp(np.arange(f.ncol + 1) * f.W, xm, np.arange(n), right=n - 1); vF = np.clip((P[:, 0] // f.W).astype(int), 0, f.ncol - 1)
-        beta = np.maximum.accumulate(np.clip(beta, 0, n - 1)); beta[0], beta[-1] = 0.0, n - 1.0
+        b, beta = lg.course_boundaries(P, X, f.W, f.ncol); n = len(X)
+        if b is not None: vF = np.searchsorted(b, np.arange(len(P)), side="right") - 1
+        else: fallback += 1; vF = np.clip((P[:, 0] // f.W).astype(int), 0, f.ncol - 1)          # fallback (older or foreign builds): the first crossing of x = k W along the curve; counted and reported
         f.bidx.append(b); f.beta.append(beta); f.vid0.append(np.clip(np.searchsorted(beta, np.arange(n), side="right") - 1, 0, f.ncol - 1)); f.vidF.append(np.clip(vF, 0, f.ncol - 1))
     f.identity = "loop boundaries from the build (control points on x = k W)" if not fallback else "loop boundaries from the first crossing of x = k W (%d of %d courses had no exact build boundaries)" % (fallback, len(cs))
     f.l_asb = [np.linalg.norm(np.diff(X, axis=0), axis=1) for X in f.X0]
@@ -389,6 +369,7 @@ def field_info(rid: str, field: str = "loop", variant: str = "baseline", flip: i
         notes.append("Loop = one stitch of one course; identity: %s. Lengths are chord sums of the solver's resampled yarn, with the two segments at a loop boundary split in proportion; divided by the as-built mean over all %d loops "
                      "(%.4g%s)." % (f.identity, int((f.arc_asb > 0).sum()), f.mean_asb if fu == "looplen" else f.rest0_mean, "" if fu == "looplen" else ", as-built rest length = chord x %.5f" % f.ratio))
         notes.append("UNSOURCED display choice: colour range = 1 +- h, h = max(%g-th percentile of |value - 1|, %g); here h = %.4g, data range %.4f to %.4f." % (clip, LOOP_HALF_MIN, legend["half_width"], legend["data_min"], legend["data_max"]))
+        if fu == "restlen": notes.append("The as-built loops already differ between loop types (min to max spread %.1f %% of the mean loop length); that variation is part of this colour, so compare it with the baseline view to see what the relaxation or a starting grade changed." % (100 * float(f.arc_asb.max() - f.arc_asb.min()) / f.mean_asb))
         if fu == "looplen" and variant == "relaxed":
             if f.strain is not None: notes.append("The geometric arc length follows the rest length only through l = l0 (1 + strain), so it can show migration larger than the elastic strain (here up to about %.2f %%) and nothing smaller." % (100 * float(np.abs(np.concatenate(f.strain)).max())))
             if f.rest_src != "saved": notes.append("This run has no relaxed_l0.csv (runs made before commit c325e07 did not save it). Its colouring cannot be used as evidence for or against loop-length migration.")

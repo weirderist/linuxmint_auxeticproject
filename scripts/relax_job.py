@@ -7,6 +7,8 @@ Shell option (--shell): first the thin-shell model (shell_sim.py, Niu et al. 202
 (each vertex keeps its offset from the sheet along the sheet normal) and the loops are relaxed with the mean position of every stitch-sized cell held toward the shell shape,
 with stiffness shell-w x EA/R per vertex (0 = start from the fold but do not hold it). Use --ref-scale 1 with it. By default the stress-free curvature kb0 is also rotated into the local frame of the shell (--no-shell-frame restores the fixed global-frame kb0).
 Without the shell (loops that fold on their own): --ramp K grows the stress-free state from the built loop shape to the target in K quasi-static stages (--ramp-iter L-BFGS iterations each),
+--loop-grade a (opt-in, default off) starts from a sectioned rest-length field, short inside each section of one loop type and longer towards its boundary, and longer along TM axes (loop_grade.py;
+--loop-grade-target boundary|tm|both, --loop-grade-min-strength; every constant UNSOURCED); the total rest length of every section is conserved; it works with and without the shell; creep can partly erase it.
 --seed-stitch a tilts front loops by +a R and back loops by -a R out of the plane before the random perturbation, --stall-tol t ends the outer loop when energy, rest lengths and positions have stopped changing
 (reported as 'settled', with the reason in the state history; not strict convergence). The end summary now also gives the size change of the relaxed fabric and the rest length per stitch.
 """
@@ -173,7 +175,7 @@ def main():
     a.add_argument('--curl-aniso', action='store_true', help='anticlastic curl: course-direction yarn opposite to wale-direction yarn')
     a.add_argument('--ref-scale', type=float, default=0.0, help='stress-free curvature = ref_scale x baseline loop curvature: 0 straight yarn (default), 1 knitted loop shape')
     a.add_argument('--tension', type=float, default=0.0, help='feeder tension in cN (mm results only); the yarn is knitted stretched by this force')
-    a.add_argument('--creep-tau', type=float, default=0.0, help='creep relaxation time in hours (0 = no creep)'); a.add_argument('--hours', type=float, default=0.0, help='simulated duration in hours (with creep)')
+    a.add_argument('--creep-tau', type=float, default=0.0, help='creep relaxation time in hours (0 = no creep). NOTE: creep moves every rest length toward its current length each round and does NOT conserve the total, so it can partly erase a starting --loop-grade'); a.add_argument('--hours', type=float, default=0.0, help='simulated duration in hours (with creep)')
     a.add_argument('--shell', action='store_true', help='run the shell model first and relax the loops toward its folded shape')
     a.add_argument('--shell-w', type=float, default=1.0, help='hold strength on each stitch cell, x EA/R per vertex (0 = start from the fold only)')
     a.add_argument('--shell-kappa', choices=('guess', 'tile'), default='guess', help='shell curvature: the fixed guess of Niu et al. (kx = -k, ky = +k, k = 1.2/C) or the natural curvature computed by tile_sim.py from the yarn energy')
@@ -184,6 +186,11 @@ def main():
     a.add_argument('--stretch-scale', type=float, default=1.0, help='multiplies the axial stiffness EA only (1 = solid rod); lower values let rest length migrate more')
     a.add_argument('--no-shell-frame', action='store_true', help='keep kb0 as fixed vectors in the global frame (previous behaviour) instead of rotating it into the local frame of the shell')
     a.add_argument('--ramp', type=int, default=0, help='no shell: grow the stress-free state (reference curvature and rest length ratio) from the built loop shape to the target in this many quasi-static stages (0 = off)')
+    a.add_argument('--loop-grade', type=float, default=0.0, help='opt-in STARTING loop-length field (0 = off: the uniform start, bit-identical to a run without the option). Rest length grows toward the boundary of every section '
+                  '(4-connected region of one loop type; the fabric edge is a boundary) and along TM axes (wales/courses that are mostly one type); a = the length difference between the target loops and the farthest loops as a fraction '
+                  'of the section mean loop length; the total rest length of every section is conserved. a and every constant of the rule are UNSOURCED (no measured loop-length field yet). Range -0.4..1')
+    a.add_argument('--loop-grade-target', choices=['boundary', 'tm', 'both'], default='both', help='which term the grade uses (default both; UNSOURCED weights 1 and 1). Only with --loop-grade')
+    a.add_argument('--loop-grade-min-strength', type=float, default=0.2, help='smallest TM-axis strength s = 2 (f - 0.5) that counts as an axis (default 0.2, UNSOURCED). Only with --loop-grade')
     a.add_argument('--ramp-iter', type=int, default=200, help='L-BFGS iterations per ramp stage'); a.add_argument('--seed-stitch', type=float, default=0.0, help='no shell: out-of-plane seed, front loops +a R and back loops -a R (0 = off; negative flips)')
     a.add_argument('--ea', type=float, default=0.0, help='measured axial stiffness EA in N (0 = solid rod from --E). mm results only')
     a.add_argument('--ei', type=float, default=0.0, help='measured bending stiffness EI in N mm^2 (numerically equal to cN cm^2; 0 = solid rod from --E). mm results only')
@@ -218,6 +225,8 @@ def main():
     if g.shell and 'matrix' not in meta: sys.exit('the shell option needs the stitch matrix in meta.json (result built by an older pipeline)')
     if g.shell and g.ref_scale == 0: print('warning: --shell with --ref-scale 0 (straight-yarn reference): the loops will open against the shell hold; use --ref-scale 1', flush=True)
     if g.ramp and g.shell: sys.exit('--ramp is for runs without the shell')
+    if not 0.0 <= g.loop_grade_min_strength <= 1.0: sys.exit('--loop-grade-min-strength must be between 0 and 1')
+    if not -0.4 <= g.loop_grade <= 1.0: sys.exit('--loop-grade must be between -0.4 and 1.0 (edge loops longer than centre loops by this fraction; 0 = off)')
     if g.seed_stitch and g.shell: sys.exit('--seed-stitch is for runs without the shell')
     if g.seed_stitch and 'matrix' not in meta: sys.exit('the stitch seed needs the stitch matrix in meta.json (result built by an older pipeline)')
     kxy = None
@@ -238,8 +247,18 @@ def main():
     ten_strain = rs.strain_at(0.01*g.tension/EA)                              # strain under the feeder tension: T/EA for Hooke, from the measured curve with --stretch-law
     ratio = g.length_ratio/(1.0 + ten_strain)                                 # rest length = baseline length / (1 + strain), T in N (cN x 0.01)
     p = rs.Params(mu=g.mu, EA=EA, EI=EI, GJ=0.0, k_contact=g.k_contact, outer_max=g.outer, rest_length_ratio=ratio, curl=g.curl, curl_aniso=g.curl_aniso, ref_scale=g.ref_scale, creep_tau=g.creep_tau, hours=g.hours, stall_tol=g.stall_tol, stall_rounds=g.stall_rounds, stall_move=g.stall_move)       # GJ unused: twist not in the energy (see relax_solver)
+    # creep: each outer round moves every rest length (and reference curvature) a fraction a_creep toward the current state; the total rest length is NOT conserved, so a starting --loop-grade can be partly erased
     a_creep = 1.0 - math.exp(-(g.hours/g.outer)/g.creep_tau) if g.creep_tau else 0.0
     sim = rs.load(g.folder, p)
+    grade_rec = None
+    if g.loop_grade:        # opt-in starting loop-length field (scripts/loop_grade.py, numpy only). With 0 this block does not run: l0 is exactly the uniform ratio of load(). It also works together with --shell:
+        import loop_grade as lg      # the grade only changes l0, from the AS-BUILT loop geometry read here, before the shell moves the vertices; the shell hold acts on positions, not on rest lengths
+        try: grade_rec = lg.apply_start_grade(sim, g.folder, meta, g.loop_grade, g.loop_grade_target, g.loop_grade_min_strength, with_shell=bool(g.shell))
+        except ValueError as e: sys.exit('--loop-grade: %s' % e)
+        print('loop grade %g, target %s, minimum axis strength %g (all UNSOURCED): %d sections, rest-length factor %.4f to %.4f, total rest length of each section conserved (%.6g -> %.6g)%s' % (
+            g.loop_grade, g.loop_grade_target, g.loop_grade_min_strength, grade_rec['sections_count'], grade_rec['factor_min'], grade_rec['factor_max'], grade_rec['total_l0_before'], grade_rec['total_l0_after'],
+            '; together with the shell' if g.shell else ''), flush=True)
+        if g.creep_tau: print('note: creep (tau %g h) moves rest lengths without conserving the total and can partly erase this grade' % g.creep_tau, flush=True)
     if (g.curl or g.seed_stitch) and sim.yarns[0].s is None: sys.exit('curl and the stitch seed need the stitch types: meta.json must hold the matrix, tiles and structure W and C')
     rs.release(sim)
     stc = meta.get('structure', {}); ncol = len(meta['matrix'][0])*meta['tiles'] if 'matrix' in meta and 'tiles' in meta else 0
@@ -285,6 +304,7 @@ def main():
     run_entry = dict(started=time.strftime('%Y-%m-%dT%H:%M:%S'), status='running', finished=None, seconds=None,
                      params=dict(E=g.E, mu=g.mu, k_contact=g.k_contact, curl=g.curl, curl_aniso=bool(g.curl_aniso), ref_scale=g.ref_scale, shell=bool(g.shell), shell_w=g.shell_w, shell_frame=bool(g.shell and not g.no_shell_frame), shell_kappa=g.shell_kappa, kappa_scale=g.kappa_scale, kappa_xy=kxy, stretch_scale=g.stretch_scale, bend_scale=g.bend_scale, straight=g.straight, length_ratio=g.length_ratio, seed_only=bool(g.seed_only), ramp=g.ramp, ramp_iter=g.ramp_iter, seed_stitch=g.seed_stitch, ea=g.ea, ei=g.ei, stretch_law=g.stretch_law, macro=bool(g.macro), fold_search=g.fold_search, fold_iter=g.fold_iter, fold_delta=g.fold_delta, stall_tol=g.stall_tol, stall_rounds=g.stall_rounds, stall_move=g.stall_move, tension_cN=g.tension, creep_tau_h=g.creep_tau, hours=g.hours, outer=g.outer, maxiter=g.maxiter, perturb=g.perturb, seed=g.seed),
                      start=dict(e0, min_dist_over_2R=d0/(2*sim.R)), rounds=[], resumed_at_outer=(k0 if resuming else None))
+    if grade_rec: run_entry['params'].update(loop_grade=g.loop_grade, loop_grade_target=g.loop_grade_target, loop_grade_min_strength=g.loop_grade_min_strength); run_entry['loop_grade'] = grade_rec          # recorded only when the option is on, so a run without it writes exactly what it wrote before
     meta_update(lambda m: m.__setitem__('simulations', (m.get('simulations') or []) + [run_entry]))
     def save_checkpoint(knext):
         """Atomic: positions, rest lengths, reference curvature and energy log after outer iteration knext-1. A power cut loses at most one outer iteration."""
