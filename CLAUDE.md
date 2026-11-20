@@ -32,7 +32,7 @@ At the start of every session, before anything else, read the TO DO: section. Ru
 Format: `- [ ] N. job | WAITING FOR: dependency | OWNER: Claude or K`.
 
 - [ ] 1. Analyse the old-code reproduction runs ~/old_runs/A and ~/old_runs/B (convergence, fold shape against the Blender reference, compare with the 13 Nov settings) | WAITING FOR: server busy until both runs finish (about 23:00 IST on 2026-11-20; check ~/old_runs/chain.log) | OWNER: Claude
-- [ ] 2. Run the identical settings in the CURRENT code at the same size, and diff 8346645..HEAD for the cause of any regression (about 5 h server time) | WAITING FOR: task 1 and user approval | OWNER: Claude
+- [ ] 2. Run the identical settings in the CURRENT code at the same size, and diff 8346645..HEAD for the cause of any regression (about 5 h server time); also diff the creep code (relax_solver.creep, a_creep in relax_job.py) between 8346645 and HEAD, because creep is unbounded here (the 20 % bound is only in tile_sim.rest_shape) | WAITING FOR: task 1 and user approval | OWNER: Claude
 - [ ] 3. Pull the approved commits on the server and run the optional numpy/scipy check in webui/venv | WAITING FOR: user approval and no job running on the server | OWNER: Claude
 - [ ] 4. Restart the web service (sudo) and add KillMode=process to auxetic_webui.service plus sudo systemctl daemon-reload | WAITING FOR: task 3 and no job running | OWNER: K
 - [ ] 5. Open /?run=fidelity/0003, /strain?run=fidelity/0003 and /run?run=fidelity/0003 through the tunnel and check the visuals (none has been seen in a browser yet); then Claude fixes what is wrong | WAITING FOR: task 4 | OWNER: K, then Claude
@@ -61,7 +61,7 @@ Format: `- [ ] N. job | WAITING FOR: dependency | OWNER: Claude or K`.
 
 ## Code map
 - scripts/relax_job.py: job driver, writes job_stage.json (prepare, tile, shell, ramp, fold, relax); writes relaxed_l0.csv (rest lengths) at the end.
-- scripts/relax_solver.py, relax_state.py: yarn-level elastic rod model (JAX autodiff + SciPy L-BFGS-B). scripts/loop_grade.py: optional starting loop-length field (numpy only).
+- scripts/relax_solver.py, relax_state.py: yarn-level elastic rod model (JAX autodiff + SciPy L-BFGS-B). scripts/loop_grade.py: optional starting loop-length field (numpy only). Opt-in extras: scripts/slip_ext.py (load-dependent slip limit, persistent drive), scripts/round_diag.py (--diagnostics CSV).
 - scripts/build_knit.py: geometry and mesh export (KMSH .bin always, OBJ only when small).
 - scripts/shell_sim.py: shell-hold simulation. yarn_check.py, fold_metric.py, fold_scan.py, tile_sim.py: checks and scans. scripts/campaign.py: campaign runner (see campaigns/README.md).
 - webui/main.py (FastAPI) and webui/index.html (viewer and UI); webui/campaign_api.py + campaigns.html (campaign control page); webui/runview.py + strain.html + run.html (run viewer, strain, graphs).
