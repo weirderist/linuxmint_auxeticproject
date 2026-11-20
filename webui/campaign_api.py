@@ -19,6 +19,7 @@ NAME_RE = re.compile(r"^[0-9A-Za-z_-]{1,64}$")
 RUN_RE = re.compile(r"^[0-9]{1,6}$")
 MIN_DIST_FLAG = 0.97          # "below about 0.97 the yarns pass into each other": campaigns/README.md (results.csv columns)
 TEXT_COLS = {"relax_state", "settled_by", "fold_direction", "reason"}
+PROJECT_PY = Path(os.environ.get("CAMPAIGN_PYTHON") or ROOT / "venv" / "bin" / "python")      # the interpreter of the README commands (venv/bin/python); the web service itself runs in webui/venv
 START_GUARD_S = 20            # a second Start for the same campaign within this time is refused (the first runner may not have written its lock yet)
 
 router = APIRouter()
@@ -280,7 +281,8 @@ def start(name: str):
     with _start_lock:
         if time.time() - _last_start.get(name, 0) < START_GUARD_S: raise HTTPException(409, "Not started: a start for this campaign was requested a moment ago. Reload in a few seconds.")
         _last_start[name] = time.time()
-    cmd = [sys.executable, str(SCRIPTS / "campaign.py"), "run", name, "--detach"]          # the same command as the README step 3
+    py = str(PROJECT_PY) if PROJECT_PY.exists() else sys.executable                       # campaign.py starts build_knit.py and relax_job.py with ITS OWN sys.executable, so use the project venv, not the web service's
+    cmd = [py, str(SCRIPTS / "campaign.py"), "run", name, "--detach"]          # the same command as the README step 3
     try:
         p = subprocess.run(cmd, capture_output=True, text=True, timeout=60, cwd=str(SCRIPTS))
     except Exception as e:

@@ -61,7 +61,8 @@ details{border:1px solid var(--line);border-radius:8px;padding:.4rem .8rem;margi
   <div class="row"><h2 id="cname" style="margin:0"></h2><span id="pill" class="pill idle">idle</span><span id="pdetail" class="mut small"></span></div>
   <div class="row" style="margin-top:.7rem">
    <div class="act"><button id="bStart" class="big">Start / Resume</button>
-    <div class="exp">Starts the runner (the same command as <code>campaign.py run &lt;name&gt; --detach</code>). Runs already finished are never repeated; queued runs continue, and a run cut off by a power failure resumes from its checkpoint.</div></div>
+    <div class="exp">Starts the runner (the same command as <code>campaign.py run &lt;name&gt; --detach</code>). Runs already finished are never repeated; queued runs continue, and a run cut off by a power failure resumes from its checkpoint.</div>
+    <div class="exp" id="bgNote">Runs in the background. Closing this page or the terminal will not stop it.</div></div>
    <div class="act"><button id="bStop" class="big">Pause</button>
     <div class="exp">Asks the runner to stop after the run in progress finishes (it creates the STOP file). Nothing is killed, so this can take as long as one run.</div></div>
   </div>

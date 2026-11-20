@@ -76,3 +76,6 @@ smoke_test/
 # measured-data photographs
 data/*/photos/
 campaigns/*/runs/
+
+# viewer cache of generated tube meshes for campaign runs (never written into runs/)
+campaigns/*/cache/

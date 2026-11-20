@@ -47,6 +47,8 @@ def _any_running():
 
 sys.path.insert(0, str(HERE)); import campaign_api          # Campaigns page and its API (webui/campaign_api.py)
 campaign_api.setup(app, _any_running)
+import runview                                              # read-only run viewer: path-safe run lookup, loop / strain colours, tube on demand (webui/runview.py)
+runview.setup(app, RESULTS)
 
 def _read_json(path):
     try:
@@ -89,9 +91,9 @@ def list_results():
     return out
 
 def _file(rid, pattern, media, variant="baseline"):
-    if not ID_RE.match(rid) or variant not in ("baseline", "relaxed"):
+    if variant not in ("baseline", "relaxed"):
         raise HTTPException(404)
-    hits = sorted(h for h in (RESULTS / rid).glob(pattern) if h.name.startswith("relaxed_") == (variant == "relaxed") and ".view." not in h.name)
+    hits = sorted(h for h in runview.view_dir(rid).glob(pattern) if h.name.startswith("relaxed_") == (variant == "relaxed") and ".view." not in h.name)
     if not hits:
         raise HTTPException(404)
     return FileResponse(hits[0], media_type=media)
@@ -130,12 +132,13 @@ def _bin_to_obj_lines(binp):
 @app.get("/api/results/{rid}/tube")
 def tube(rid: str, v: str = "baseline"):
     """OBJ text of the tube. Large meshes have no stored OBJ; it is streamed from the .bin on request (the web viewer itself uses /mesh)."""
-    if not ID_RE.match(rid) or v not in ("baseline", "relaxed"):
+    if v not in ("baseline", "relaxed"):
         raise HTTPException(404)
-    d = RESULTS / rid
-    if v == "baseline" and d.is_dir():
+    d = runview.view_dir(rid); rel = (v == "relaxed")
+    if runview.is_run(rid):
+        d = runview.ensure_tube(rid, d, rel)            # a campaign run: its own relaxed_tube.bin, anything else generated into campaigns/<name>/cache/<id>/
+    elif v == "baseline" and d.is_dir():
         _ensure_baseline_tube(d)
-    rel = (v == "relaxed")
     objs = sorted(h for h in d.glob("*_tube.obj") if h.name.startswith("relaxed_") == rel)
     if objs:
         return FileResponse(objs[0], media_type="text/plain")
@@ -149,13 +152,13 @@ def axis(rid: str, v: str = "baseline", view: int = 0):
     """Axis CSV. view=1: a thinned copy for drawing (cached as <name>.view.csv): the files are sampled about 0.2 R apart, which a line drawing does not need."""
     if not view:
         return _file(rid, "*_axis.csv", "text/plain", v)
-    if not ID_RE.match(rid) or v not in ("baseline", "relaxed"):
+    if v not in ("baseline", "relaxed"):
         raise HTTPException(404)
-    d = RESULTS / rid
+    d = runview.view_dir(rid)
     hits = sorted(h for h in d.glob("*_axis.csv") if h.name.startswith("relaxed_") == (v == "relaxed") and not h.name.endswith(".view.csv"))
     if not hits:
         raise HTTPException(404)
-    src = hits[0]; out = src.with_name(src.stem + ".view.csv")
+    src = hits[0]; out = (runview.cache_dir(rid) if runview.is_run(rid) else src.parent) / (src.stem + ".view.csv")      # a run folder is never written to
     if not out.exists() or out.stat().st_mtime < src.stat().st_mtime:
         import numpy as np
         if str(SCRIPTS) not in sys.path:
@@ -216,6 +219,8 @@ class TileBody(BaseModel):
     do: str = Field("rest,curl,poisson", pattern=r"^(rest|curl|poisson)(,(rest|curl|poisson))*$")
 
 def _folder(rid):
+    if runview.is_run(rid):
+        raise HTTPException(403, "campaign runs are read-only in the viewer: simulate, rename, delete, resume and cancel are not available for them")
     if not ID_RE.match(rid) or not (RESULTS / rid / "meta.json").exists():
         raise HTTPException(404, "unknown result")
     return RESULTS / rid
@@ -294,7 +299,7 @@ def simulate(rid: str, b: SimBody):
         try: _law_points(b.stretch_law)
         except (ValueError, ZeroDivisionError) as e: raise HTTPException(422, "stretch curve: %s (format strain:cN,strain:cN with both rising)" % e)
     cmd, kc = _sim_cmd(d, b, R)
-    for f in ("relaxed_axis.csv", "relaxed_axis.view.csv", "relaxed_tube.obj", "relaxed_tube.bin", "state.json", "job.json", STAGE_FILE, "shell.npz") + CKPT_FILES:
+    for f in ("relaxed_axis.csv", "relaxed_l0.csv", "relaxed_axis.view.csv", "relaxed_tube.obj", "relaxed_tube.bin", "state.json", "job.json", STAGE_FILE, "shell.npz") + CKPT_FILES:
         (d / f).unlink(missing_ok=True)          # never leave a previous run's files next to a new one
     (d / "job_request.json").write_text(json.dumps(b.model_dump()))      # lets a power cut be resumed with exactly these settings
     _preset_write("_last", b.model_dump())
@@ -449,10 +454,12 @@ def _obj_to_bin(obj, binp):
 
 @app.get("/api/results/{rid}/mesh")
 def mesh(rid: str, v: str = "baseline"):
-    if not ID_RE.match(rid) or v not in ("baseline", "relaxed"):
+    if v not in ("baseline", "relaxed"):
         raise HTTPException(404)
-    d = RESULTS / rid; rel = (v == "relaxed")
-    if not rel and d.is_dir():
+    d = runview.view_dir(rid); rel = (v == "relaxed")
+    if runview.is_run(rid):
+        d = runview.ensure_tube(rid, d, rel)            # a campaign run: its own relaxed_tube.bin, anything else generated into campaigns/<name>/cache/<id>/
+    elif not rel and d.is_dir():
         _ensure_baseline_tube(d)
     cand = sorted(h for h in d.glob("*_tube.bin") if h.name.startswith("relaxed_") == rel)
     if not cand:

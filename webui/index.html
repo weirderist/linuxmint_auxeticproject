@@ -49,12 +49,16 @@ dialog#newDlg::backdrop{background:#0006}
 .dh{display:flex;align-items:center;justify-content:space-between;margin-bottom:.4rem}
 #vinfo{opacity:.7;font-size:.85rem}
 #logSelect{max-width:100%;margin:.3rem 0}
+.runmode #simBox,.runmode #tileBox,.runmode #bNew{display:none}
+#runNote{font-size:.8rem;border:1px solid #8886;border-radius:9px;padding:.05rem .55rem}
+#legend{position:absolute;left:10px;bottom:10px;z-index:2;background:Canvas;color:CanvasText;border:1px solid #8888;border-radius:6px;padding:.4rem .6rem;font-size:.78rem;max-width:70%}
+#legend .bar{height:.7rem;border:1px solid #8886;margin:.25rem 0}#legend .tk{display:flex;justify-content:space-between;font-variant-numeric:tabular-nums}
 </style></head><body>
 <header><h1>Auxetic sim UI</h1><span id="fps"></span><span id="vinfo"></span><span id="srv" class="srv off">Server: connecting…</span><span id="sys"></span>
 <span class="seg"><button id="bBase" class="on">Baseline</button><button id="bRelax" disabled>Relaxed</button></span>
-<span class="seg"><button id="bTube" class="on">Tube</button><button id="bAxis">Axis</button></span><a href="/campaigns" id="aCamp" style="font-weight:600">Campaigns</a><button id="bNew" title="New fabric: photo or typed pattern, then build">+</button>
+<span class="seg"><button id="bTube" class="on">Tube</button><button id="bAxis">Axis</button></span><span class="seg" id="colSeg"><button id="bColNone" class="on" title="plain colour">No colour</button><button id="bColLoop" title="yarn arc length of each loop / as-built mean loop length">Loop length</button></span><span id="runNote" hidden></span><a href="/campaigns" id="aCamp" style="font-weight:600">Campaigns</a><button id="bNew" title="New fabric: photo or typed pattern, then build">+</button>
 <button id="bReset">Reset view</button></header>
-<main><div id="list"></div><div id="right"><div id="view"></div>
+<main><div id="list"></div><div id="right"><div id="view"><div id="legend" hidden></div></div>
 <div id="tools">
 <details id="simBox" open><summary>Simulate (relaxation and yarn length migration)</summary>
  <div class="grid">
@@ -164,6 +168,10 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 const $ = s => document.querySelector(s);
 const LITE = new URLSearchParams(location.search).has('lite');   // open /?lite for a lighter render
+// ?run=<campaign>/<id>: read-only view of a campaign run (webui/runview.py). Simulate, rename and delete are hidden here and refused by the server (HTTP 403).
+const RUNQ = new URLSearchParams(location.search).get('run');
+const RUNID = RUNQ && /^[0-9A-Za-z_-]{1,64}\/[0-9]{1,6}$/.test(RUNQ) ? 'run~' + RUNQ.replace('/', '~') : null;
+if (RUNID) { document.body.classList.add('runmode'); const rn = document.getElementById('runNote'); rn.hidden = false; rn.textContent = 'read-only run ' + RUNQ + ': Simulate, rename and delete are disabled'; }
 const view = $('#view');
 const renderer = new THREE.WebGLRenderer({ antialias: !LITE, alpha: true, powerPreference: 'high-performance' });
 renderer.setPixelRatio(LITE ? 1 : Math.min(window.devicePixelRatio || 1, 1.5));
@@ -181,7 +189,7 @@ const DEF = { zoom: 2.5, rot: 1, pan: 1, damp: 0, auto: false, autoS: 2, invert:
 let S = { ...DEF };
 try { Object.assign(S, JSON.parse(localStorage.getItem('viewSettings') || '{}')); } catch (e) {}
 try { const z = parseFloat(localStorage.getItem('zoomSpeed')); if (z >= 0.5 && z <= 8 && !localStorage.getItem('viewSettings')) S.zoom = z; } catch (e) {}   // old key
-let tubeMat = null, loopOn = false;
+let tubeMat = null, tubeMatCol = null, lineMatCol = null, loopOn = false;
 function applySettings(save) {
   controls.zoomSpeed = S.invert ? -S.zoom : S.zoom; controls.rotateSpeed = S.rot; controls.panSpeed = S.pan;
   controls.enableDamping = S.damp > 0; controls.dampingFactor = S.damp || 0.05;
@@ -291,7 +299,9 @@ async function load(id, kind, v, tag) {
   const q = v === 'relaxed' ? '&v=relaxed' : '';
   if (kind === 'axis') { setStatus(tag, 'loading axis…'); const r = await fetch('/api/results/' + id + '/axis?view=1' + q); if (!r.ok) throw new Error('axis file: HTTP ' + r.status); return axisLines(await r.text()); }       // view=1: thinned copy for drawing
   setStatus(tag, 'preparing mesh\u2026');          // a result without a baseline tube is built on the server first; the MB count starts when the download does
-  const g = new THREE.BufferGeometry(), rb = await fetch('/api/results/' + id + '/mesh' + q.replace('&', '?'));
+  const g = new THREE.BufferGeometry();
+  const pt = RUNID ? setInterval(async () => { try { const sj = await (await fetch('/api/results/' + id + '/tube-status')).json(); const gg = (sj.stages || []).find(x => !x.finished); if (gg) setStatus(tag, 'generating tube: ' + gg.stage + ' ' + Math.round(gg.pct) + '%'); } catch (e) {} }, 1000) : null;      // a run without a tube mesh is generated on the server (niced, cached)
+  let rb; try { rb = await fetch('/api/results/' + id + '/mesh' + q.replace('&', '?')); } finally { if (pt) clearInterval(pt); }
   if (rb.ok) {                                              // compact binary mesh: no text parsing, streams with a progress readout
     const buf = await readWithProgress(rb, tag), hd = new DataView(buf);
     if (hd.getUint32(0, false) !== 0x4b4d5348) throw new Error('mesh: bad header');
@@ -308,7 +318,7 @@ async function load(id, kind, v, tag) {
   if (!tubeMat) tubeMat = new THREE.MeshLambertMaterial({ color: S.color, side: THREE.DoubleSide });
   return new THREE.Mesh(g, tubeMat);          // one shared material so the colour setting applies to every tube
 }
-function disposeObj(o) { o.traverse(x => { if (x.geometry) x.geometry.dispose(); if (x.material && x.material !== tubeMat) x.material.dispose(); }); }
+function disposeObj(o) { o.traverse(x => { if (x.geometry) x.geometry.dispose(); if (x.material && x.material !== tubeMat && x.material !== tubeMatCol && x.material !== lineMatCol) x.material.dispose(); }); }
 const vertsOf = o => { let n = 0; o.traverse(x => { if (x.geometry && x.geometry.attributes.position) n += x.geometry.attributes.position.count; }); return n; };
 const VERT_BUDGET = 6e6;                        // vertices kept in memory over all cached views; the oldest are dropped first (never the current result)
 function trimCache() {
@@ -351,7 +361,7 @@ function renderList() {
     const d = document.createElement('div'); d.className = 'item' + (r.id === current ? ' sel' : ''); d.dataset.id = r.id;
     const a = document.createElement('div');
     const x = document.createElement('span'); x.className = 'del'; x.textContent = '\u{1F5D1}'; x.title = 'Delete this result'; x.onclick = ev => { ev.stopPropagation(); delResult(r); };
-    a.append(x, r.name || fmt(r));
+    if (RUNID) a.append(r.name || fmt(r)); else a.append(x, r.name || fmt(r));
     if (r.sim && r.sim.state) { const b = document.createElement('span'); b.className = 'badge'; b.textContent = BADGE[r.sim.state] || r.sim.state; a.append(b); }
     const s = document.createElement('small'); s.textContent = r.id + ' | ' + (r.matrix_text ? r.matrix_text + ' | ' : '') + fmt(r); d.title = r.id;
     d.append(a, s); d.onclick = () => show(r.id, true); el.append(d);
@@ -402,6 +412,7 @@ async function show(id, refit) {
     shown = obj; scene.add(obj); const nvx = vertsOf(obj); if (statusFor === tag) { statusFor = null; $('#fps').textContent = ''; } $('#vinfo').textContent = nvx ? (nvx >= 1e5 ? (nvx / 1e6).toFixed(2) + ' M' : nvx) + ' vertices' : '';
     if (refit) fit(obj);
     invalidate();
+    paint(obj, id, v, m);
   } catch (e) { if (statusFor === tag) { statusFor = null; $('#fps').textContent = ''; } cache.delete(ckey(id)); $('#info').textContent += '\nCould not load: ' + e; }
 }
 function toast(text, label, fn) {
@@ -411,9 +422,54 @@ function toast(text, label, fn) {
   const b2 = document.createElement('button'); b2.textContent = 'Dismiss'; b2.onclick = () => { t.hidden = true; }; t.append(b2);
 }
 
+// ---- colour by loop length: per-vertex Uint8 RGB from /api/results/<id>/colors (the mesh itself is not reloaded)
+let colMode = 'none';
+function setLegend(l) {
+  const el = $('#legend'); if (!l) { el.hidden = true; return; }
+  const g = l.stops.map(c => 'rgb(' + c.join(',') + ')').join(','), f = x => (+x).toFixed(3);
+  el.innerHTML = '<b>' + l.label + '</b><div class="bar" style="background:linear-gradient(to right,' + g + ')"></div><div class="tk"><span>' + f(l.vmin) + ' (shortest)</span><span>' + f(l.ticks[1]) + '</span><span>' + f(l.vmax) + ' (longest)</span></div>';
+  el.hidden = false;
+}
+function setColButtons() { $('#bColNone').classList.toggle('on', colMode === 'none'); $('#bColLoop').classList.toggle('on', colMode === 'loop'); }
+async function paint(obj, id, v, m) {
+  if (!obj) return;
+  if (colMode !== 'loop') {
+    obj.traverse(x => { if (x.isMesh) x.material = tubeMat; else if (x.isLine && x.userData.baseMat) x.material = x.userData.baseMat; });
+    setLegend(null); invalidate(); return;
+  }
+  try {
+    if (!obj.userData.loop) {
+      $('#vinfo').textContent = 'colouring\u2026';
+      const r = await fetch('/api/results/' + id + '/colors?field=looplen&variant=' + v + '&kind=' + m);
+      if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.detail || ('HTTP ' + r.status)); }
+      obj.userData.loop = { rgb: new Uint8Array(await r.arrayBuffer()), legend: JSON.parse(r.headers.get('X-Legend')) };
+    }
+    if (current !== id || mode !== m || variant !== v || colMode !== 'loop') return;
+    const rgb = obj.userData.loop.rgb;
+    if (obj.isMesh) {
+      if (!obj.geometry.attributes.color) obj.geometry.setAttribute('color', new THREE.BufferAttribute(rgb, 3, true));
+      if (!tubeMatCol) tubeMatCol = new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide });
+      obj.material = tubeMatCol;
+    } else {
+      if (!lineMatCol) lineMatCol = new THREE.LineBasicMaterial({ vertexColors: true });
+      let off = 0;
+      for (const line of obj.children) {
+        const n = line.geometry.attributes.position.count;
+        if (!line.userData.baseMat) line.userData.baseMat = line.material;
+        if (!line.geometry.attributes.color) line.geometry.setAttribute('color', new THREE.BufferAttribute(rgb.subarray(3 * off, 3 * (off + n)), 3, true));
+        line.material = lineMatCol; off += n;
+      }
+    }
+    setLegend(obj.userData.loop.legend); const nvv = vertsOf(obj); $('#vinfo').textContent = nvv >= 1e5 ? (nvv / 1e6).toFixed(2) + ' M vertices' : nvv + ' vertices'; invalidate();
+  } catch (e) { colMode = 'none'; setColButtons(); $('#vinfo').textContent = ''; toast('Loop-length colour is not available for this view: ' + e.message); }
+}
+$('#bColNone').onclick = () => { colMode = 'none'; setColButtons(); paint(shown, current, variant, mode); };
+$('#bColLoop').onclick = () => { colMode = 'loop'; setColButtons(); paint(shown, current, variant, mode); };
+
 // ---- simulate panel
 document.addEventListener('wheel', e => { const t = e.target; if (t && t.tagName === 'INPUT' && t.type === 'number' && document.activeElement === t) t.blur(); }, { passive: true });   // scrolling over a focused number box scrolls the page instead of changing the value
 function setupSim() {
+  if (RUNID) return;
   const rec = recOf(current), mm = rec && rec.units === 'mm';
   if (!rec || !CFG) return;
   const dirty = $('#simBox').dataset.for !== rec.id; if (dirty) {
@@ -536,6 +592,7 @@ $('#bSim').onclick = async () => {
 $('#bCancel').onclick = async () => { $('#bCancel').disabled = true; await fetch('/api/results/' + current + '/cancel', { method: 'POST' }).catch(() => {}); pollState(); poll(); };
 let prevRun = null;
 async function pollState() {
+  if (RUNID) return;
   if (!current) return; const id = current;
   try {
     const r = await fetch('/api/results/' + id + '/state');
@@ -552,7 +609,9 @@ async function pollState() {
 }
 async function poll() {
   try {
-    results = await (await fetch('/api/results')).json(); markSrv(true);
+    if (RUNID) { const ri = await fetch('/api/results/' + RUNID + '/info'); if (!ri.ok) { const e = await ri.json().catch(() => ({})); $('#info').textContent = 'Run ' + RUNQ + ': ' + (e.detail || ('HTTP ' + ri.status)); markSrv(true); return; } results = [await ri.json()]; }
+    else results = await (await fetch('/api/results')).json();
+    markSrv(true);
     const s = results.map(r => r.id + ':' + ((r.sim && r.sim.state) || '') + ((r.sim && r.sim.relaxed_at) || '')).join(',');
     if (s !== sig) { sig = s; renderList(); setVariantButtons(); }
     const newest = results.length ? results[0].id : '';
@@ -569,6 +628,7 @@ $('#bReset').onclick = () => { if (shown) fit(shown); };
 // ---- tile panel
 let tileSt = null;
 function setupTile() {
+  if (RUNID) return;
   const rec = recOf(current); if (!rec || !CFG) return;
   if ($('#tileBox').dataset.for !== rec.id) { $('#tileBox').dataset.for = rec.id; $('#tE').value = rec.units === 'mm' ? CFG.yarn_E_MPa : 1; $('#tKc').value = CFG.kc_ratio; $('#tRef').value = 0.5; $('#tReset').value = 0; $('#tRounds').value = 3; $('#tMax').value = 1500; $('#tPert').value = 0.02; $('#tDelta').value = 0.05; $('#tStrain').value = '0.05,0.1,0.2'; tileSt = null; }
   pollTile();
@@ -594,6 +654,7 @@ function renderTile() {
   [['poisson_x', 'Stretch along x (courses)'], ['poisson_y', 'Stretch along y (wales)']].forEach(([k, n]) => { if (r[k]) { const t = document.createElement('div'); t.className = 'note'; t.textContent = n + ': nu = -orthogonal strain / stretch'; body.append(t); body.append(tileTable(r[k], [['strain', 'stretch'], ['eps_perp', 'orthogonal strain'], ['nu', 'nu'], ['E', 'energy']])); } });
 }
 async function pollTile() {
+  if (RUNID) return;
   if (!current) return; const id = current;
   try { const r = await fetch('/api/results/' + id + '/tile'); if (!r.ok) return; const s = await r.json(); if (current !== id) return; tileSt = s; renderTile(); } catch (e) {}
 }
@@ -616,6 +677,7 @@ function tickTimer() {
   el.textContent = timer.running ? 'running for ' + fmtDur(timer.base + (performance.now() - timer.at) / 1000) : 'last run took ' + fmtDur(timer.base);
 }
 async function loadLog() {
+  if (RUNID) return;
   if (!current) return; const id = current;
   try {
     const r = await fetch('/api/results/' + id + '/log'); if (!r.ok) return; const runs = await r.json(); if (current !== id) return;

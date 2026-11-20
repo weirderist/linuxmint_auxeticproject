@@ -71,3 +71,10 @@ The owner (K) is a textile student. Define new technical concepts explicitly, us
 - Planned: --loop-grade a and --tm-boost b, giving a starting rest-length field (loops smallest at section centre, larger towards borders and corners; larger on the "transfer medium axis" wales). No-shell runs only. The direction of the effect is attributed to Basiri 2010 and Amanatides 2022 via the other AI's CHANGES.txt and is NOT independently verified. The magnitudes of a and b are UNSOURCED.
 - Target case: --ne 12 --cpi 22 --wpi 16 --tiles 3 with K's 20-row x 16-column matrix of 1/2 blocks (K will supply the matrix).
 - Still needed from physical measurement: yarn length per loop at section centre versus border on a real swatch, measured fold height, and the yarn EA/EI/stretch curve to calibrate.
+
+## Planned, on hold: phone app
+
+Not built yet. Do not start it until K says so. Decisions so far:
+
+- The PIN is 6 digits (this replaces the earlier 4-digit idea).
+- After 5 wrong tries the PIN stays locked until K clears it with a command on his PC terminal. There is no timed unlock. Claude gives K that command when the app is built.

@@ -114,6 +114,7 @@ async function openRun(id) {
     const kv = o => "<dl>" + Object.keys(o).map(k => "<dt>" + esc(k) + "</dt><dd>" + esc(fmt(o[k], k)) + "</dd>").join("") + "</dl>";
     el.innerHTML = '<div class="card" style="margin-top:.6rem"><h2>Run ' + esc(j.run) + " &ndash; " + esc(j.status) + (j.stage ? " (stage " + esc(j.stage) + ")" : "") + " " + flagTags(j.flags || {}) + "</h2>" +
       (j.reason ? '<div class="small" style="color:var(--crit)">Reason: ' + esc(j.reason) + "</div>" : "") +
+      '<div class="small" style="margin:.3rem 0">' + [["/?run=", "Open in viewer"], ["/strain?run=", "Strain page"], ["/run?run=", "Run graphs"]].map(l => '<a href="' + l[0] + encodeURIComponent(j.campaign) + "/" + encodeURIComponent(j.run) + '" target="_blank" rel="noopener">' + l[1] + "</a>").join(" &middot; ") + "</div>" +
       '<div class="small mut">attempts ' + j.attempts + ", interruptions " + j.interrupted + ", exit code " + esc(j.exit_code == null ? "-" : j.exit_code) + ", wall time " + esc(j.wall_s == null ? "-" : dur(j.wall_s)) + "</div>" +
       '<div class="row"><div style="flex:1;min-width:240px"><b>Parameters</b>' + kv(j.params) + '</div><div style="flex:2;min-width:300px"><b>Metrics</b>' + kv(j.metrics) + "</div></div>" +
       "<b>Last 40 lines of relax.log</b><pre>" + esc(j.log_tail || "(no log yet)") + "</pre></div>";
