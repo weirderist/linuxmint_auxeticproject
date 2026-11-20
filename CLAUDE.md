@@ -78,3 +78,11 @@ Not built yet. Do not start it until K says so. Decisions so far:
 
 - The PIN is 6 digits (this replaces the earlier 4-digit idea).
 - After 5 wrong tries the PIN stays locked until K clears it with a command on his PC terminal. There is no timed unlock. Claude gives K that command when the app is built.
+
+## Decisions and findings, 2026-11-20
+
+- The shell is the accepted fold reference. A shell comparison is optional per run. The final yarn-level run is scored for similarity out of 100.
+- The first shell success was made with commit 8346645 (13 Nov) with E 3700, mu 0.49, contact 40, perturb 0.20, outer 40, L-BFGS 400, curl 0.5, tension 17 cN, creep 3 h over 6 h, shell on, hold 0.05 x EA/R, tiles 3, Ne 12, CPI 22, WPI 16. It ended unsettled but folded very close to the real fabric.
+- Reproduction runs are in ~/old_runs on the server (A then B). Do not touch them.
+- New plan: shell-only experiments first (no yarn mesh), validate against real fabrics, an ML loop on random then proposed patterns to find fold rules, then the yarn mesh with migration and creep, then parameter sensitivity.
+- Loop-grade (sectioned, graded TM-axis rule) is designed and parked, see tests/. All its constants are UNSOURCED.
