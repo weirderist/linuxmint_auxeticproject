@@ -87,6 +87,10 @@ dialog#newDlg::backdrop{background:#0006}
   <label><span>Growth stages (0 = off)</span><input id="fRamp" type="number" step="1" min="0" max="40"></label>
   <label><span>Iterations per growth stage</span><input id="fRampIt" type="number" step="1" min="10" max="3000"></label>
   <label><span>Stitch seed (× R, 0 = off)</span><input id="fSeedSt" type="number" step="any" min="-1" max="1"></label>
+  <label><span>Starting loop-length grade a (0 = off) &mdash; UNSOURCED</span><input id="fGrade" type="number" step="any" min="-0.4" max="1"></label>
+  <label><span>Grade target &mdash; UNSOURCED weights</span><select id="fGradeT"><option value="both">both</option><option value="boundary">boundary</option><option value="tm">tm</option></select></label>
+  <label><span>Grade: minimum TM-axis strength &mdash; UNSOURCED</span><input id="fGradeS" type="number" step="any" min="0" max="1"></label>
+  <div class="note" style="grid-column:1/-1">Starting loop-length grade: a = how much longer the loops at the target are than the farthest loops of their section (0.02 = 2 %); the total rest length of every section is kept. Target: <b>boundary</b> = toward the boundary of each region of one loop type (the fabric edge counts), <b>tm</b> = along wales or courses that are mostly one type (stronger the purer they are), <b>both</b> = the two added. Minimum strength: the purity (0 = half and half, 1 = pure) below which a line is not an axis. Works with and without the shell. Creep (above) moves rest lengths without conserving the total and can partly erase the grade. Every value here is UNSOURCED until loop length has been measured by region.</div>
   <label><span>Fold search steps (0 = off)</span><input id="fFold" type="number" step="1" min="0" max="200"></label>
   <label><span>Fold search: iterations per trial</span><input id="fFoldIt" type="number" step="1" min="10" max="5000"></label>
   <label><span>Fold search: first step (1/mm, 0 = auto)</span><input id="fFoldD" type="number" step="any" min="0" max="1"></label>
@@ -478,6 +482,7 @@ function setupSim() {
     $('#lE').textContent = mm ? 'Yarn modulus E (MPa)' : 'Yarn modulus E (relative; R-unit result)';
     $('#fCurl').value = 0; $('#fAniso').checked = false; $('#fRef').value = 1; $('#fTen').value = mm ? CFG.tension_cN : 0; $('#fTau').value = 0; $('#fHours').value = 0; $('#fTen').disabled = !mm;
     $('#fShell').checked = true; $('#fShellW').value = CFG.shell_w; $('#fShellTile').checked = false; $('#fTileRef').value = 0.5; $('#fKScale').value = 1; $('#fStretch').value = 1; $('#fSeedOnly').checked = false; $('#fStr').value = CFG.straight; $('#fShellF').checked = true; $('#fBend').value = 0.003; $('#fLenRatio').value = 1; $('#fRamp').value = CFG.ramp || 0; $('#fRampIt').value = CFG.ramp_iter || 200; $('#fSeedSt').value = CFG.seed_stitch || 0; $('#fStall').value = CFG.stall_tol || 0; $('#fFold').value = 0; $('#fFoldIt').value = 200; $('#fFoldD').value = 0; $('#fMacro').checked = false; $('#fWarpX').value = 0; $('#fWarpY').value = 0; $('#fEA').value = 0; $('#fEI').value = 0; $('#fLaw').value = '';
+    $('#fGrade').value = 0; $('#fGradeT').value = 'both'; $('#fGradeS').value = 0.2;
     $('#fKc').value = CFG.kc_ratio; $('#fPert').value = CFG.perturb; $('#fOuter').value = CFG.outer; $('#fMax').value = CFG.maxiter;
     applyBody(PRES._last, mm);
     $('#eNote').textContent = mm ? '' : 'R-unit result: no physical modulus.';
@@ -498,6 +503,7 @@ function updateSimButtons() {
 const FLD = { E: ['#fE', 'n'], mu: ['#fMu', 'n'], kc_ratio: ['#fKc', 'n'], perturb: ['#fPert', 'n'], outer: ['#fOuter', 'n'], maxiter: ['#fMax', 'n'], curl: ['#fCurl', 'n'], curl_aniso: ['#fAniso', 'b'], ref_scale: ['#fRef', 'n'],
   tension_cN: ['#fTen', 'n'], creep_tau_h: ['#fTau', 'n'], hours: ['#fHours', 'n'], shell: ['#fShell', 'b'], shell_w: ['#fShellW', 'n'], shell_kappa: ['#fShellTile', 'k'], tile_ref: ['#fTileRef', 'n'],
   kappa_scale: ['#fKScale', 'n'], stretch_scale: ['#fStretch', 'n'], bend_scale: ['#fBend', 'n'], straight: ['#fStr', 'n'], shell_frame: ['#fShellF', 'b'], length_ratio: ['#fLenRatio', 'n'], seed_only: ['#fSeedOnly', 'b'],
+  loop_grade: ['#fGrade', 'n'], loop_grade_target: ['#fGradeT', 's'], loop_grade_min_strength: ['#fGradeS', 'n'],
   ramp: ['#fRamp', 'n'], ramp_iter: ['#fRampIt', 'n'], seed_stitch: ['#fSeedSt', 'n'], stall_tol: ['#fStall', 'n'], fold_search: ['#fFold', 'n'], fold_iter: ['#fFoldIt', 'n'], fold_delta: ['#fFoldD', 'n'], macro: ['#fMacro', 'b'], warp_kx: ['#fWarpX', 'n'], warp_ky: ['#fWarpY', 'n'], ea: ['#fEA', 'n'], ei: ['#fEI', 'n'], stretch_law: ['#fLaw', 's'] };
 function getBody() { const o = {}; for (const [k, [id, t]] of Object.entries(FLD)) o[k] = t === 'n' ? +$(id).value : t === 'b' ? $(id).checked : t === 's' ? $(id).value.trim() : ($(id).checked ? 'tile' : 'guess'); return o; }
 function applyBody(b, mm) {

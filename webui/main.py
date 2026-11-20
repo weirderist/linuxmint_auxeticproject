@@ -207,6 +207,9 @@ class SimBody(BaseModel):
     ea: float = Field(0.0, ge=0, le=1e6, description='measured axial stiffness EA in N (0 = solid rod from E)')
     ei: float = Field(0.0, ge=0, le=1e6, description='measured bending stiffness EI in N mm^2 (0 = solid rod from E)')
     stretch_law: str = Field('', max_length=400, pattern=r'^([0-9.eE+-]+:[0-9.eE+-]+(,[0-9.eE+-]+:[0-9.eE+-]+){0,19})?$', description="measured stretch curve 'strain:cN,...'")
+    loop_grade: float = Field(0.0, ge=-0.4, le=1.0, description="opt-in STARTING loop-length field (0 = off, the uniform start): rest length grows toward the boundary of every section of one loop type and along TM axes; a = length difference between the target loops and the farthest loops as a fraction of the section mean. UNSOURCED")
+    loop_grade_target: str = Field('both', pattern='^(boundary|tm|both)$', description="which term the grade uses (UNSOURCED weights 1 and 1); only with a non-zero grade")
+    loop_grade_min_strength: float = Field(0.2, ge=0, le=1, description="smallest TM-axis strength s = 2 (f - 0.5) that counts as an axis (UNSOURCED); only with a non-zero grade")
     stall_tol: float = Field(0.0, ge=0, le=0.01, description="early stop: relative energy change per outer round below this for 3 rounds (0 = off)")
 
 class TileBody(BaseModel):
@@ -250,6 +253,7 @@ def _sim_cmd(d, b, R):
     if b.ea: cmd += ["--ea", repr(b.ea)]
     if b.ei: cmd += ["--ei", repr(b.ei)]
     if b.stretch_law: cmd += ["--stretch-law", b.stretch_law]
+    if b.loop_grade: cmd += ["--loop-grade", repr(b.loop_grade), "--loop-grade-target", b.loop_grade_target, "--loop-grade-min-strength", repr(b.loop_grade_min_strength)]      # only when on: a run without the grade gets exactly the command it got before
     return cmd, kc
 
 def _boot_id():
@@ -285,6 +289,8 @@ def simulate(rid: str, b: SimBody):
         raise HTTPException(422, "the macro modes and the bent start are for runs without the shell: untick the shell")
     if b.ramp and b.shell:
         raise HTTPException(422, "growth stages are for runs without the shell: untick the shell or set the stages to 0")
+    if b.loop_grade and not (meta.get("matrix") and meta.get("tiles") and ((meta.get("structure") or {}).get("W") or meta.get("W"))):
+        raise HTTPException(422, "the starting loop grade needs the stitch matrix, tiles and W in meta.json (result built by an older pipeline)")
     if b.seed_stitch and (b.shell or not meta.get("matrix")):
         raise HTTPException(422, "the stitch seed needs the stitch matrix and is for runs without the shell")
     if (b.ea or b.ei or b.stretch_law) and (meta.get("structure") or {}).get("units") != "mm":
