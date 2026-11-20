@@ -1,0 +1,38 @@
+{
+  "id": "pattern1_npr",
+  "kind": "npr_curve",
+  "fabric": {
+    "name": "Pattern 1",
+    "matrix": null,
+    "ne": 10,
+    "cpi": null,
+    "wpi": null,
+    "loop_length_mm": null,
+    "yarn": "cotton, Ne 10 (2/20s or 3/30s ply; which one is not recorded)"
+  },
+  "test": {
+    "direction": "wale",
+    "gauge_L0_mm": null,
+    "gauge_W0_mm": null,
+    "repeat": 1,
+    "date": null,
+    "operator": null,
+    "protocol": "Stretched by hand; phone video at 60 fps; marker positions tracked with Tracker; one run."
+  },
+  "units": {
+    "eps_long": "dimensionless (engineering strain, change in length / initial length)",
+    "eps_trans": "dimensionless (engineering strain, change in width / initial width; negative = narrowing)",
+    "usable": "flag (1 = use, 0 = excluded)",
+    "time": "s",
+    "tape_length": "unknown (unit not stated in the source CSV)",
+    "tape_width": "unknown (unit not stated in the source CSV)",
+    "npr_reported": "dimensionless (Poisson's ratio as reported in the source CSV)",
+    "note": "text"
+  },
+  "uncertainty": {
+    "value": null,
+    "meaning": "Not yet quantified. The source CSV flags rows below 0.2 strain as pixel-quantisation noise (usable = 0); no numerical uncertainty was recorded."
+  },
+  "notes": "Moved unchanged from data/measured_npr_pattern1.csv (columns kept, including usable). Test direction is wale: longitudinal strain is along the wales (report, Chapter 1, paragraph on longitudinal and transverse directions, as cited by K; not re-read here). Matrix, CPI, WPI, loop length, gauge, date and operator are unknown and left null. tape_length and tape_width at t = 0 are 3.625 and 2.207 (unit not stated), so they are not copied into the gauge fields. Strain reaches 1.37; the time column steps by about 0.083 s.",
+  "role": "calibrate"
+}

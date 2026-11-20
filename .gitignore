@@ -72,3 +72,6 @@ scripts/run_knit/
 webui/presets.json
 install.cmd
 smoke_test/
+
+# measured-data photographs
+data/*/photos/

@@ -1,0 +1,38 @@
+{
+  "id": "miura_ori_npr",
+  "kind": "npr_curve",
+  "fabric": {
+    "name": "Miura-ori",
+    "matrix": null,
+    "ne": null,
+    "cpi": null,
+    "wpi": null,
+    "loop_length_mm": null,
+    "yarn": null
+  },
+  "test": {
+    "direction": "wale",
+    "gauge_L0_mm": null,
+    "gauge_W0_mm": null,
+    "repeat": null,
+    "date": null,
+    "operator": null,
+    "protocol": null
+  },
+  "units": {
+    "eps_long": "dimensionless (engineering strain, change in length / initial length)",
+    "eps_trans": "dimensionless (engineering strain, change in width / initial width; positive = widening)",
+    "usable": "flag (1 = use, 0 = excluded)",
+    "time": "s",
+    "tape_length": "unknown (unit not stated in the source CSV)",
+    "tape_width": "unknown (unit not stated in the source CSV)",
+    "npr_reported": "dimensionless (Poisson's ratio as reported in the source CSV)",
+    "note": "text"
+  },
+  "uncertainty": {
+    "value": null,
+    "meaning": "Not yet quantified. The source CSV flags rows below 0.2 strain as pixel-quantisation noise (usable = 0); no numerical uncertainty was recorded."
+  },
+  "notes": "Moved unchanged from data/measured_npr_miura_ori.csv (columns kept, including usable). Role is reference, not calibrate: strain reaches 3.47 and the reported NPR is only -0.04 to -0.15. Test direction is wale (longitudinal strain is along the wales; report, Chapter 1, as cited by K). Every other fabric and test field except the name is unknown and left null. The time column steps by about 0.167 s.",
+  "role": "reference"
+}
