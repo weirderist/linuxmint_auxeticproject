@@ -1,0 +1,85 @@
+diff --git a/scripts/relax_job.py b/scripts/relax_job.py
+index fd56b2e..f9579a2 100755
+--- a/scripts/relax_job.py
++++ b/scripts/relax_job.py
+@@ -7,6 +7,7 @@ Shell option (--shell): first the thin-shell model (shell_sim.py, Niu et al. 202
+ (each vertex keeps its offset from the sheet along the sheet normal) and the loops are relaxed with the mean position of every stitch-sized cell held toward the shell shape,
+ with stiffness shell-w x EA/R per vertex (0 = start from the fold but do not hold it). Use --ref-scale 1 with it. By default the stress-free curvature kb0 is also rotated into the local frame of the shell (--no-shell-frame restores the fixed global-frame kb0).
+ Without the shell (loops that fold on their own): --ramp K grows the stress-free state from the built loop shape to the target in K quasi-static stages (--ramp-iter L-BFGS iterations each),
++--loop-grade a (opt-in, default off) starts from a smooth rest-length gradient, radial from the centre, linear, shortest at the centre and a (fraction) longer at the edge middles, total rest length conserved (UNSOURCED),
+ --seed-stitch a tilts front loops by +a R and back loops by -a R out of the plane before the random perturbation, --stall-tol t ends the outer loop when energy, rest lengths and positions have stopped changing
+ (reported as 'settled', with the reason in the state history; not strict convergence). The end summary now also gives the size change of the relaxed fabric and the rest length per stitch.
+ """
+@@ -184,6 +185,7 @@ def main():
+     a.add_argument('--stretch-scale', type=float, default=1.0, help='multiplies the axial stiffness EA only (1 = solid rod); lower values let rest length migrate more')
+     a.add_argument('--no-shell-frame', action='store_true', help='keep kb0 as fixed vectors in the global frame (previous behaviour) instead of rotating it into the local frame of the shell')
+     a.add_argument('--ramp', type=int, default=0, help='no shell: grow the stress-free state (reference curvature and rest length ratio) from the built loop shape to the target in this many quasi-static stages (0 = off)')
++    a.add_argument('--loop-grade', type=float, default=0.0, help='opt-in starting loop-length gradient (0 = off, the uniform start). Radial from the centre of the built fabric, linear: the rest length is shortest at the centre and this fraction longer at the middle of the edges (sqrt 2 times this fraction at the corners); the total rest length of the fabric is conserved. No shell. The direction, the profile and the value are UNSOURCED. First version: the sectioned / TM-axis version is being designed')
+     a.add_argument('--ramp-iter', type=int, default=200, help='L-BFGS iterations per ramp stage'); a.add_argument('--seed-stitch', type=float, default=0.0, help='no shell: out-of-plane seed, front loops +a R and back loops -a R (0 = off; negative flips)')
+     a.add_argument('--ea', type=float, default=0.0, help='measured axial stiffness EA in N (0 = solid rod from --E). mm results only')
+     a.add_argument('--ei', type=float, default=0.0, help='measured bending stiffness EI in N mm^2 (numerically equal to cN cm^2; 0 = solid rod from --E). mm results only')
+@@ -218,6 +220,8 @@ def main():
+     if g.shell and 'matrix' not in meta: sys.exit('the shell option needs the stitch matrix in meta.json (result built by an older pipeline)')
+     if g.shell and g.ref_scale == 0: print('warning: --shell with --ref-scale 0 (straight-yarn reference): the loops will open against the shell hold; use --ref-scale 1', flush=True)
+     if g.ramp and g.shell: sys.exit('--ramp is for runs without the shell')
++    if g.loop_grade and g.shell: sys.exit('--loop-grade is for runs without the shell')
++    if not -0.4 <= g.loop_grade <= 1.0: sys.exit('--loop-grade must be between -0.4 and 1.0 (edge loops longer than centre loops by this fraction; 0 = off)')
+     if g.seed_stitch and g.shell: sys.exit('--seed-stitch is for runs without the shell')
+     if g.seed_stitch and 'matrix' not in meta: sys.exit('the stitch seed needs the stitch matrix in meta.json (result built by an older pipeline)')
+     kxy = None
+@@ -240,6 +244,10 @@ def main():
+     p = rs.Params(mu=g.mu, EA=EA, EI=EI, GJ=0.0, k_contact=g.k_contact, outer_max=g.outer, rest_length_ratio=ratio, curl=g.curl, curl_aniso=g.curl_aniso, ref_scale=g.ref_scale, creep_tau=g.creep_tau, hours=g.hours, stall_tol=g.stall_tol, stall_rounds=g.stall_rounds, stall_move=g.stall_move)       # GJ unused: twist not in the energy (see relax_solver)
+     a_creep = 1.0 - math.exp(-(g.hours/g.outer)/g.creep_tau) if g.creep_tau else 0.0
+     sim = rs.load(g.folder, p)
++    grade_rec = None
++    if g.loop_grade:        # opt-in starting loop-length gradient; with 0 nothing happens and l0 is exactly the uniform start
++        grade_rec = rs.apply_loop_grade(sim, g.loop_grade)
++        print('loop grade %g (radial, linear, UNSOURCED): rest-length factor %.4f at the centre, %.4f at the edge middles, %.4f at the corners; total rest length conserved (%.6g -> %.6g)' % (g.loop_grade, grade_rec['factor_centre'], grade_rec['factor_edge_middle'], grade_rec['factor_corner'], grade_rec['total_l0_before'], grade_rec['total_l0_after']), flush=True)
+     if (g.curl or g.seed_stitch) and sim.yarns[0].s is None: sys.exit('curl and the stitch seed need the stitch types: meta.json must hold the matrix, tiles and structure W and C')
+     rs.release(sim)
+     stc = meta.get('structure', {}); ncol = len(meta['matrix'][0])*meta['tiles'] if 'matrix' in meta and 'tiles' in meta else 0
+@@ -285,6 +293,7 @@ def main():
+     run_entry = dict(started=time.strftime('%Y-%m-%dT%H:%M:%S'), status='running', finished=None, seconds=None,
+                      params=dict(E=g.E, mu=g.mu, k_contact=g.k_contact, curl=g.curl, curl_aniso=bool(g.curl_aniso), ref_scale=g.ref_scale, shell=bool(g.shell), shell_w=g.shell_w, shell_frame=bool(g.shell and not g.no_shell_frame), shell_kappa=g.shell_kappa, kappa_scale=g.kappa_scale, kappa_xy=kxy, stretch_scale=g.stretch_scale, bend_scale=g.bend_scale, straight=g.straight, length_ratio=g.length_ratio, seed_only=bool(g.seed_only), ramp=g.ramp, ramp_iter=g.ramp_iter, seed_stitch=g.seed_stitch, ea=g.ea, ei=g.ei, stretch_law=g.stretch_law, macro=bool(g.macro), fold_search=g.fold_search, fold_iter=g.fold_iter, fold_delta=g.fold_delta, stall_tol=g.stall_tol, stall_rounds=g.stall_rounds, stall_move=g.stall_move, tension_cN=g.tension, creep_tau_h=g.creep_tau, hours=g.hours, outer=g.outer, maxiter=g.maxiter, perturb=g.perturb, seed=g.seed),
+                      start=dict(e0, min_dist_over_2R=d0/(2*sim.R)), rounds=[], resumed_at_outer=(k0 if resuming else None))
++    if grade_rec: run_entry['params']['loop_grade'] = g.loop_grade; run_entry['loop_grade'] = grade_rec          # recorded only when the option is on, so a run without it writes exactly what it wrote before
+     meta_update(lambda m: m.__setitem__('simulations', (m.get('simulations') or []) + [run_entry]))
+     def save_checkpoint(knext):
+         """Atomic: positions, rest lengths, reference curvature and energy log after outer iteration knext-1. A power cut loses at most one outer iteration."""
+diff --git a/scripts/relax_state.py b/scripts/relax_state.py
+index 7994628..0629d88 100755
+--- a/scripts/relax_state.py
++++ b/scripts/relax_state.py
+@@ -91,6 +91,32 @@ def load(folder, params, ds_over_R=1.0):
+     sim = Sim(folder, R, yarns, params); sim.history.append(dict(state='loaded', t=time.strftime('%Y-%m-%dT%H:%M:%S'), note=meta.get('id', ''))); sim.save()
+     return sim
+ 
++# ---- optional starting loop-length gradient (relax_job --loop-grade a). Off by default: with a = 0 nothing here is called and the start is the uniform ratio of load().
++def loop_grade_factors(Xs, a):
++    """Per-segment factors w that grade the starting rest lengths: radial from the centre of the built fabric, linear in the normalised distance d, short at the centre and longer towards the edges.
++    d = sqrt(u^2 + v^2) with u, v the segment midpoint measured from the centre of the bounding box of the built vertices in units of its half width and half height (x, y), so d = 0 at the centre,
++    d = 1 at the middle of each edge and d = sqrt(2) at the corners. Raw factor 1 + a d; then divided by M, the chord-weighted mean of the raw factors, so that the total rest length of the whole fabric
++    is exactly what the uniform start would give (the grade moves length, it does not add any). With a = 0 every factor is exactly 1.
++    UNSOURCED: the radial direction, the linear profile, the bounding-box normalisation and the value of a are modelling choices (no measured loop-length field exists yet).
++    Returns (list of factor arrays, list of d arrays, M)."""
++    P = np.vstack([X[:, :2] for X in Xs]); lo, hi = P.min(0), P.max(0); c = 0.5*(lo + hi); h = np.maximum(0.5*(hi - lo), 1e-12)
++    d, chord = [], []
++    for X in Xs:
++        mid = 0.5*(X[:-1, :2] + X[1:, :2]); d.append(np.hypot((mid[:, 0] - c[0])/h[0], (mid[:, 1] - c[1])/h[1])); chord.append(np.linalg.norm(np.diff(X, axis=0), axis=1))
++    raw = [1.0 + a*di for di in d]
++    M = sum(float((r*l).sum()) for r, l in zip(raw, chord))/sum(float(l.sum()) for l in chord)
++    return [r/M for r in raw], d, M
++
++def apply_loop_grade(sim, a):
++    """Multiply the rest length of every segment by its grade factor (see loop_grade_factors), in place. Returns a record for meta.json. Call right after load(), before anything reads l0."""
++    w, d, M = loop_grade_factors([y.X for y in sim.yarns], a)
++    before = sum(float(y.l0.sum()) for y in sim.yarns)
++    for y, wi in zip(sim.yarns, w): y.l0 = y.l0*wi
++    after = sum(float(y.l0.sum()) for y in sim.yarns); wall = np.concatenate(w)
++    return dict(a=float(a), direction='radial from the centre of the built fabric', profile='linear in d (d = 0 centre, 1 edge middles, sqrt 2 corners)', conserved='total rest length of the whole fabric (chord-weighted mean factor M)',
++                mean_factor_M=float(M), factor_centre=float(1.0/M), factor_edge_middle=float((1.0 + a)/M), factor_corner=float((1.0 + np.sqrt(2.0)*a)/M), factor_min=float(wall.min()), factor_max=float(wall.max()),
++                total_l0_before=before, total_l0_after=after, unsourced='the direction, the profile, the normalisation and the value of a are modelling choices (UNSOURCED)')
++
+ # ---- contacts and wrap angle
+ def wrap_angle(X, i, k=3):
+     a, b = max(0, i-k), min(len(X)-1, i+k)
