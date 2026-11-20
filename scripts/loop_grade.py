@@ -112,9 +112,8 @@ def bands(s, t, s_min):
         else: i += 1
     return out
 
-def loop_G(T, target='both', s_min=DEFAULT_MIN_STRENGTH):
-    """(G per loop, section labels, number of sections, info). G = W_B G_b + W_T G_t according to the target mode."""
-    if target not in TARGETS: raise ValueError('target must be one of %s' % (TARGETS,))
+def loop_G_parts(T, s_min=DEFAULT_MIN_STRENGTH):
+    """(G_b, G_t, section labels, number of sections, info): the two terms on the loop grid, before the target mode is applied."""
     T = np.asarray(T); lab, ns = label_sections(T); G_b = np.zeros(T.shape); G_t = np.zeros(T.shape); yy, xx = np.mgrid[0:T.shape[0], 0:T.shape[1]]
     for k in range(1, ns + 1):
         mask = lab == k; d = dist_to_outside(mask); dm = d[mask].max(); G_b[mask] = 1.0 if dm <= 1 else 1.0 - (d[mask] - 1.0) / (dm - 1.0)
@@ -126,9 +125,15 @@ def loop_G(T, target='both', s_min=DEFAULT_MIN_STRENGTH):
                 mask = lab == k
                 if not (mask & (T == typ) & (pos >= i) & (pos <= j)).any(): continue     # this section has no loop of the band's lines
                 dm = delta[mask].max(); G_t[mask] += s * (1.0 if dm == 0 else 1.0 - delta[mask] / dm)
-    G = (W_BOUNDARY * G_b if target in ('boundary', 'both') else 0.0) + (W_TM * G_t if target in ('tm', 'both') else 0.0)
     info = dict(sections=[dict(id=k, type=int(T[lab == k][0]), loops=int((lab == k).sum())) for k in range(1, ns + 1)], wale_bands=wb, course_bands=wc,
                 strength_wale=[float(x) for x in sw], strength_course=[float(x) for x in sc])
+    return G_b, G_t, lab, ns, info
+
+def loop_G(T, target='both', s_min=DEFAULT_MIN_STRENGTH):
+    """(G per loop, section labels, number of sections, info). G = W_B G_b + W_T G_t according to the target mode."""
+    if target not in TARGETS: raise ValueError('target must be one of %s' % (TARGETS,))
+    T = np.asarray(T); G_b, G_t, lab, ns, info = loop_G_parts(T, s_min)
+    G = (W_BOUNDARY * G_b if target in ('boundary', 'both') else 0.0) + (W_TM * G_t if target in ('tm', 'both') else 0.0)
     return np.asarray(G, float) * np.ones(T.shape), lab, ns, info
 
 def field_equal_weights(T, a, target='both', s_min=DEFAULT_MIN_STRENGTH):
@@ -144,22 +149,60 @@ def segment_overlaps(beta, nseg, ncol):
     i = np.arange(nseg, dtype=float)[:, None]
     return np.clip(np.minimum(i + 1, beta[None, 1:]) - np.maximum(i, beta[None, :-1]), 0, None)
 
-def apply_start_grade(sim, folder, meta, a, target='both', s_min=DEFAULT_MIN_STRENGTH, with_shell=False):
-    """Multiply the starting rest length of every segment by its grade factor, in place, and return the record for meta.json. Call right after relax_state.load(), before anything reads l0 or moves X
-    (the loop of a segment is found from the as-built geometry in `folder`). Raises ValueError for a meta.json without the matrix, tiles and W, or for a grade that would shrink a segment below
-    FACTOR_FLOOR."""
+def segment_field(sim, folder, meta, target='both', s_min=DEFAULT_MIN_STRENGTH):
+    """The loop field mapped onto the solver's segments, WITHOUT changing anything: dict(T, lab, ns, info, G (per loop), Gs (per yarn: G per segment, overlap-weighted), secs (per yarn: section of each segment, the
+    loop with the larger overlap), wts (per yarn: current l0), betas (per yarn: loop boundaries in segment units), ov (per yarn: segment x loop overlap fractions), nfall). Call right after relax_state.load()."""
     st = meta.get('structure') or {}; W = st.get('W') or meta.get('W'); M = meta.get('matrix'); tiles = meta.get('tiles')
     if not (W and M and tiles): raise ValueError('the starting loop grade needs the stitch matrix, tiles and W in meta.json (result built by an older pipeline)')
     T = tiled_matrix(M, tiles); nrow, ncol = T.shape
     G, lab, ns, info = loop_G(T, target, s_min)
     A = np.loadtxt(os.path.join(folder, 'fab_axis.csv'), delimiter=',', skiprows=1)
-    Gs, secs, wts, nfall = [], [], [], 0
+    Gs, secs, wts, betas, ovs, nfall = [], [], [], [], [], 0
     for y in sim.yarns:
         c = int(y.course)
         if not 0 <= c < nrow: raise ValueError('course %d is outside the %d courses of the tiled matrix' % (c, nrow))
         P = A[A[:, 0] == c][:, 1:]; b, beta = course_boundaries(P, y.X, W, ncol); nfall += b is None
         ov = segment_overlaps(beta, len(y.X) - 1, ncol); ov = ov / ov.sum(1, keepdims=True)
-        Gs.append(ov @ G[c]); secs.append(lab[c][np.argmax(ov, axis=1)]); wts.append(np.asarray(y.l0, float))
+        Gs.append(ov @ G[c]); secs.append(lab[c][np.argmax(ov, axis=1)]); wts.append(np.asarray(y.l0, float)); betas.append(beta); ovs.append(ov)
+    Gsm = []
+    for y, beta, g in zip(sim.yarns, betas, Gs):                      # smooth version for the persistent drive: loop values interpolated linearly along the yarn between the loop centres
+        centres = 0.5*(beta[:-1] + beta[1:]); Gsm.append(np.interp(np.arange(len(g)) + 0.5, centres, G[int(y.course)]))
+    nseg = sum(len(g) for g in Gs); per_loop = nseg / float(nrow*ncol)
+    return dict(T=T, lab=lab, ns=ns, info=info, G=G, Gs=Gs, Gs_smooth=Gsm, segments_per_loop=per_loop, secs=secs, wts=wts, betas=betas, ov=ovs, nfall=nfall, ncol=ncol, nrow=nrow)
+
+def drive_field(f):
+    """G per segment for the persistent drive (slip_ext.SlipExt): the loop values interpolated along the yarn, multiplied by the mean number of segments per loop. The slip rule acts only at contact nodes and
+    a loop boundary is rarely a contact node, so a field that jumps at the boundary would act almost nowhere; the smooth field has a small step at every node, and the step times the segments per loop is the
+    G change per loop, which makes the drive strength e 'the effective strain imbalance per unit G difference between adjacent loops'. UNSOURCED modelling choice."""
+    return [g*f['segments_per_loop'] for g in f['Gs_smooth']]
+
+def mean_loop_length(folder, meta):
+    """Mean as-built yarn length per loop (mm in mm results), from the fine fab_axis.csv curve between the exact loop boundaries; None if the boundaries or the matrix are not available."""
+    st = meta.get('structure') or {}; W = st.get('W') or meta.get('W'); M = meta.get('matrix'); tiles = meta.get('tiles')
+    if not (W and M and tiles): return None
+    ncol = len(M[0]) * int(tiles); A = np.loadtxt(os.path.join(folder, 'fab_axis.csv'), delimiter=',', skiprows=1); tot, n = 0.0, 0
+    for c in np.unique(A[:, 0]):
+        P = A[A[:, 0] == c][:, 1:]; b = boundaries(P, W, ncol)
+        if b is None: return None
+        seg = np.linalg.norm(np.diff(P, axis=0), axis=1); cum = np.r_[0.0, np.cumsum(seg)]; tot += float(cum[b[-1]] - cum[b[0]]); n += ncol
+    return tot / n if n else None
+
+def tightness_record(meta, folder):
+    """Knitting tightness factor TF = sqrt(tex) / loop length, recorded in meta.json, NO effect on any calculation. tex = 590.5 / Ne (standard cotton-count conversion); loop length = the mean as-built
+    yarn length per loop of the build. Returns None for results without Ne (R-unit results) or without exact loop boundaries."""
+    ne = meta.get('ne') or (meta.get('structure') or {}).get('ne')
+    if not ne: return None
+    L = mean_loop_length(folder, meta)
+    if not L: return None
+    tex = 590.5 / float(ne)
+    return dict(ne=float(ne), tex=tex, sqrt_tex=float(np.sqrt(tex)), loop_length_mm=float(L), tightness_factor_per_mm=float(np.sqrt(tex) / L), tightness_factor_per_cm=float(np.sqrt(tex) / (L / 10.0)),
+                definition='TF = sqrt(tex) / loop length; tex = 590.5 / Ne; loop length = mean as-built yarn length per loop of the build (not a measured value)')
+
+def apply_start_grade(sim, folder, meta, a, target='both', s_min=DEFAULT_MIN_STRENGTH, with_shell=False):
+    """Multiply the starting rest length of every segment by its grade factor, in place, and return the record for meta.json. Call right after relax_state.load(), before anything reads l0 or moves X
+    (the loop of a segment is found from the as-built geometry in `folder`). Raises ValueError for a meta.json without the matrix, tiles and W, or for a grade that would shrink a segment below
+    FACTOR_FLOOR."""
+    f = segment_field(sim, folder, meta, target, s_min); T, lab, ns, info, Gs, secs, wts, nfall, nrow, ncol = f['T'], f['lab'], f['ns'], f['info'], f['Gs'], f['secs'], f['wts'], f['nfall'], f['nrow'], f['ncol']
     Gall, sall, wall = np.concatenate(Gs), np.concatenate(secs), np.concatenate(wts)
     mean_S = {int(k): float((wall[sall == k] * Gall[sall == k]).sum() / wall[sall == k].sum()) for k in np.unique(sall)}
     lut = np.zeros(ns + 1)

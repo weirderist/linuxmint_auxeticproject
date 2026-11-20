@@ -150,16 +150,21 @@ def slip_at_node(la, l0a, lb, l0b, EA, mu, phi, step_max):
     dl = cap if gap(cap) > 0 else brentq(gap, 0.0, cap)
     return dl if hi_is_a else -dl
 
-def migrate(sim):
-    """One slip pass over all contacts. Returns max |rest-length change|. Contacts are interior vertices of a yarn: segment ia-1 | ia."""
-    mx = 0.0; p = sim.params
+def migrate(sim, stats=None):
+    """One slip pass over all contacts. Returns max |rest-length change|. Contacts are interior vertices of a yarn: segment ia-1 | ia.
+    Optional, both off unless set by relax_job: sim.slip_ext (slip_ext.SlipExt: load-dependent slip limit and persistent drive) replaces slip_at_node; `stats` (dict n, total, max) collects the number of slips,
+    the sum and the largest |transfer| for the diagnostics. With neither set this is exactly the old function."""
+    mx = 0.0; p = sim.params; ext = getattr(sim, 'slip_ext', None); k = getattr(sim, 'round_index', 0)
     for c in sim.contacts:
+        Fn = ext.normal_force(c.dist) if ext is not None else 0.0
         for yi, i, phi in ((c.ya, c.ia, c.phi_a), (c.yb, c.ib, c.phi_b)):
             y = sim.yarns[yi]
             if i < 1 or i > len(y.l0)-1: continue
             la, lb = np.linalg.norm(y.X[i]-y.X[i-1]), np.linalg.norm(y.X[i+1]-y.X[i])
-            d = slip_at_node(la, y.l0[i-1], lb, y.l0[i], p.EA, p.mu, phi, p.slip_step_max)
-            if d: y.l0[i-1] += d; y.l0[i] -= d; mx = max(mx, abs(d))
+            d = slip_at_node(la, y.l0[i-1], lb, y.l0[i], p.EA, p.mu, phi, p.slip_step_max) if ext is None else ext.slip(yi, i, la, y.l0[i-1], lb, y.l0[i], p.EA, p.mu, phi, p.slip_step_max, tension, Fn, k)
+            if d:
+                y.l0[i-1] += d; y.l0[i] -= d; mx = max(mx, abs(d))
+                if stats is not None: stats['n'] += 1; stats['total'] += abs(d); stats['max'] = max(stats['max'], abs(d))
     return mx
 
 # ---- the trigger
@@ -176,7 +181,7 @@ def run(sim, relax_fn, energy_fn, on_round=None, k0=0):
     for k in range(k0, p.outer_max):
         relax_fn(sim); X_now = np.vstack([y.X for y in sim.yarns])            # positions only change inside relax_fn
         dx = float(np.abs(X_now - X_prev).max()) if X_prev is not None and X_prev.shape == X_now.shape else None; X_prev = X_now
-        sim.contacts = build_contacts(sim); dmax = migrate(sim); E = energy_fn(sim); sim.energy_log.append(dict(iter=k, E=E, max_dl0=dmax, max_dx=dx)); on_round and on_round(k, E, dmax)
+        sim.round_index = k; sim.contacts = build_contacts(sim); dmax = migrate(sim, getattr(sim, 'slip_stats', None)); E = energy_fn(sim); sim.energy_log.append(dict(iter=k, E=E, max_dl0=dmax, max_dx=dx)); on_round and on_round(k, E, dmax)
         if not np.isfinite(E): return sim.to(S.FAILED, 'non-finite energy')
         if not p.creep_tau and dmax < p.tol_len and E_prev is not None and abs(E - E_prev) < p.tol_energy*max(1.0, abs(E)): return sim.to(S.SETTLED, 'iter %d' % k)
         calm = calm + 1 if (p.stall_tol > 0 and E_prev is not None and dx is not None and abs(E - E_prev) < p.stall_tol*max(abs(E), 1e-30) and dmax < p.tol_len and dx < p.stall_move*sim.R) else 0

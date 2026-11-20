@@ -9,6 +9,7 @@ with stiffness shell-w x EA/R per vertex (0 = start from the fold but do not hol
 Without the shell (loops that fold on their own): --ramp K grows the stress-free state from the built loop shape to the target in K quasi-static stages (--ramp-iter L-BFGS iterations each),
 --loop-grade a (opt-in, default off) starts from a sectioned rest-length field, short inside each section of one loop type and longer towards its boundary, and longer along TM axes (loop_grade.py;
 --loop-grade-target boundary|tm|both, --loop-grade-min-strength; every constant UNSOURCED); the total rest length of every section is conserved; it works with and without the shell; creep can partly erase it.
+--slip-friction-load mu_n, --slip-drive e, --slip-drive-decay N (opt-in extensions of the slip rule, slip_ext.py, UNSOURCED), --diagnostics (per-round diagnostics.csv, round_diag.py); the tightness factor is recorded in meta.json (no effect).
 --seed-stitch a tilts front loops by +a R and back loops by -a R out of the plane before the random perturbation, --stall-tol t ends the outer loop when energy, rest lengths and positions have stopped changing
 (reported as 'settled', with the reason in the state history; not strict convergence). The end summary now also gives the size change of the relaxed fabric and the rest length per stitch.
 """
@@ -191,6 +192,10 @@ def main():
                   'of the section mean loop length; the total rest length of every section is conserved. a and every constant of the rule are UNSOURCED (no measured loop-length field yet). Range -0.4..1')
     a.add_argument('--loop-grade-target', choices=['boundary', 'tm', 'both'], default='both', help='which term the grade uses (default both; UNSOURCED weights 1 and 1). Only with --loop-grade')
     a.add_argument('--loop-grade-min-strength', type=float, default=0.2, help='smallest TM-axis strength s = 2 (f - 0.5) that counts as an axis (default 0.2, UNSOURCED). Only with --loop-grade')
+    a.add_argument('--slip-friction-load', type=float, default=0.0, help='opt-in (0 = off): load-dependent slip limit, T_hi <= max(T_lo,0) exp(mu phi) + mu_n F_n with F_n = k_contact x overlap of the contact; this is mu_n. A tightly packed fabric slips less. UNSOURCED. Range 0..10')
+    a.add_argument('--slip-drive', type=float, default=0.0, help='opt-in (0 = off): persistent drive on the slip rule from the sectioned loop field of --loop-grade-target / --loop-grade-min-strength (needs no --loop-grade): effective tension offset +-0.5 e EA (G_b - G_a) at every contact node, so rest length keeps flowing toward the section boundary / TM axes. This is e (dimensionless, signed, -0.1..0.1; negative pushes the other way). UNSOURCED. Yarn and loop-field details: slip_ext.py')
+    a.add_argument('--slip-drive-decay', type=float, default=0.0, help='the persistent drive falls as exp(-round/N); this is N in outer rounds (0 = no decay, the default). UNSOURCED')
+    a.add_argument('--diagnostics', action='store_true', help='write diagnostics.csv in the run folder, one row per outer round: loop rest length and geometric length (mean/min/max for all / outer / inner loops), share of the length change stored in l0, number and size of slips, a fold descriptor (round_diag.py). No effect on the result')
     a.add_argument('--ramp-iter', type=int, default=200, help='L-BFGS iterations per ramp stage'); a.add_argument('--seed-stitch', type=float, default=0.0, help='no shell: out-of-plane seed, front loops +a R and back loops -a R (0 = off; negative flips)')
     a.add_argument('--ea', type=float, default=0.0, help='measured axial stiffness EA in N (0 = solid rod from --E). mm results only')
     a.add_argument('--ei', type=float, default=0.0, help='measured bending stiffness EI in N mm^2 (numerically equal to cN cm^2; 0 = solid rod from --E). mm results only')
@@ -225,6 +230,10 @@ def main():
     if g.shell and 'matrix' not in meta: sys.exit('the shell option needs the stitch matrix in meta.json (result built by an older pipeline)')
     if g.shell and g.ref_scale == 0: print('warning: --shell with --ref-scale 0 (straight-yarn reference): the loops will open against the shell hold; use --ref-scale 1', flush=True)
     if g.ramp and g.shell: sys.exit('--ramp is for runs without the shell')
+    if not 0.0 <= g.slip_friction_load <= 10.0: sys.exit('--slip-friction-load must be between 0 and 10 (0 = off)')
+    if not -0.1 <= g.slip_drive <= 0.1: sys.exit('--slip-drive must be between -0.1 and 0.1 (0 = off)')
+    if g.slip_drive_decay < 0: sys.exit('--slip-drive-decay must be >= 0 (0 = no decay)')
+    if g.slip_drive_decay and not g.slip_drive: sys.exit('--slip-drive-decay needs --slip-drive')
     if not 0.0 <= g.loop_grade_min_strength <= 1.0: sys.exit('--loop-grade-min-strength must be between 0 and 1')
     if not -0.4 <= g.loop_grade <= 1.0: sys.exit('--loop-grade must be between -0.4 and 1.0 (edge loops longer than centre loops by this fraction; 0 = off)')
     if g.seed_stitch and g.shell: sys.exit('--seed-stitch is for runs without the shell')
@@ -259,6 +268,19 @@ def main():
             g.loop_grade, g.loop_grade_target, g.loop_grade_min_strength, grade_rec['sections_count'], grade_rec['factor_min'], grade_rec['factor_max'], grade_rec['total_l0_before'], grade_rec['total_l0_after'],
             '; together with the shell' if g.shell else ''), flush=True)
         if g.creep_tau: print('note: creep (tau %g h) moves rest lengths without conserving the total and can partly erase this grade' % g.creep_tau, flush=True)
+    ext_rec = None; diag = None; ext_k = []
+    if g.slip_friction_load or g.slip_drive or g.diagnostics:         # opt-in extensions and diagnostics (numpy-only modules); with none of the options this block does nothing
+        import loop_grade as lg
+        try:
+            if g.slip_friction_load or g.slip_drive:
+                import slip_ext as se
+                Gseg = lg.drive_field(lg.segment_field(sim, g.folder, meta, g.loop_grade_target, g.loop_grade_min_strength)) if g.slip_drive else None
+                sim.slip_ext = se.SlipExt(mu_n=g.slip_friction_load, drive=g.slip_drive, decay_rounds=g.slip_drive_decay, Gseg=Gseg, kc=g.k_contact, R=sim.R)
+                ext_rec = sim.slip_ext.record(field=dict(target=g.loop_grade_target, min_strength=g.loop_grade_min_strength) if g.slip_drive else None)
+                print('slip extensions (UNSOURCED): load-dependent limit mu_n %g, persistent drive e %g%s (field target %s, minimum strength %g)' % (g.slip_friction_load, g.slip_drive, (', decay %g rounds' % g.slip_drive_decay) if g.slip_drive_decay else ', no decay', g.loop_grade_target, g.loop_grade_min_strength), flush=True)
+            if g.diagnostics:
+                import round_diag as rd; diag = rd.RoundDiag(sim, g.folder, meta, g.loop_grade_min_strength); print('diagnostics: one row per outer round in %s' % os.path.join(g.folder, 'diagnostics.csv'), flush=True)
+        except ValueError as e: sys.exit('slip extensions / diagnostics: %s' % e)
     if (g.curl or g.seed_stitch) and sim.yarns[0].s is None: sys.exit('curl and the stitch seed need the stitch types: meta.json must hold the matrix, tiles and structure W and C')
     rs.release(sim)
     stc = meta.get('structure', {}); ncol = len(meta['matrix'][0])*meta['tiles'] if 'matrix' in meta and 'tiles' in meta else 0
@@ -304,6 +326,11 @@ def main():
     run_entry = dict(started=time.strftime('%Y-%m-%dT%H:%M:%S'), status='running', finished=None, seconds=None,
                      params=dict(E=g.E, mu=g.mu, k_contact=g.k_contact, curl=g.curl, curl_aniso=bool(g.curl_aniso), ref_scale=g.ref_scale, shell=bool(g.shell), shell_w=g.shell_w, shell_frame=bool(g.shell and not g.no_shell_frame), shell_kappa=g.shell_kappa, kappa_scale=g.kappa_scale, kappa_xy=kxy, stretch_scale=g.stretch_scale, bend_scale=g.bend_scale, straight=g.straight, length_ratio=g.length_ratio, seed_only=bool(g.seed_only), ramp=g.ramp, ramp_iter=g.ramp_iter, seed_stitch=g.seed_stitch, ea=g.ea, ei=g.ei, stretch_law=g.stretch_law, macro=bool(g.macro), fold_search=g.fold_search, fold_iter=g.fold_iter, fold_delta=g.fold_delta, stall_tol=g.stall_tol, stall_rounds=g.stall_rounds, stall_move=g.stall_move, tension_cN=g.tension, creep_tau_h=g.creep_tau, hours=g.hours, outer=g.outer, maxiter=g.maxiter, perturb=g.perturb, seed=g.seed),
                      start=dict(e0, min_dist_over_2R=d0/(2*sim.R)), rounds=[], resumed_at_outer=(k0 if resuming else None))
+    try:
+        import loop_grade as _lg; run_entry['tightness'] = _lg.tightness_record(meta, g.folder)          # TF = sqrt(tex) / loop length, recorded only, used nowhere
+    except Exception: run_entry['tightness'] = None
+    if ext_rec: run_entry['params'].update(slip_friction_load=g.slip_friction_load, slip_drive=g.slip_drive, slip_drive_decay=g.slip_drive_decay); run_entry['slip_ext'] = ext_rec          # only when an extension is on
+    if diag: run_entry['params']['diagnostics'] = True
     if grade_rec: run_entry['params'].update(loop_grade=g.loop_grade, loop_grade_target=g.loop_grade_target, loop_grade_min_strength=g.loop_grade_min_strength); run_entry['loop_grade'] = grade_rec          # recorded only when the option is on, so a run without it writes exactly what it wrote before
     meta_update(lambda m: m.__setitem__('simulations', (m.get('simulations') or []) + [run_entry]))
     def save_checkpoint(knext):
@@ -315,6 +342,7 @@ def main():
         pr = sv.energy_parts(sim, g.k_contact, g.E)
         rec = dict(round=k+1, t=round(time.time()-t_start, 2), E=pr['total'], stretch=pr['stretch'], bend=pr['bend'], contact=pr['contact'], shell=pr['shell'], max_dl0=dmax, min_dist_over_2R=sv.min_axis_distance(sim)/(2*sim.R))
         meta_update(lambda m: m['simulations'][-1]['rounds'].append(rec))
+        if diag: rd.RoundDiag.append(os.path.join(g.folder, 'diagnostics.csv'), diag.row(sim, k, E, dmax, getattr(sim, 'slip_stats', None), sim.slip_ext.strength(k) if getattr(sim, 'slip_ext', None) else 0.0))
         if not g.seed_only: save_checkpoint(k + 1)
     if g.ramp and not resuming:
         set_stage('ramp'); ramp_rec = run_ramp(sim, g, kb_base, ratio)
@@ -324,6 +352,7 @@ def main():
         set_stage('fold'); fold_rec = fold_search(sim, g); meta_update(lambda m: m['simulations'][-1].update(fold_search=fold_rec)); save_checkpoint(0)
     t0 = time.time()
     def relax(s):
+        if diag: s.slip_stats = dict(n=0, total=0.0, max=0.0)          # filled by relax_state.migrate this round
         sv.relax(s, g.E, g.k_contact, maxiter=g.maxiter, verbose=True)
         if a_creep: sv.creep(s, a_creep)
     energy = lambda s: sv.energy_parts(s, g.k_contact, g.E)['total']
