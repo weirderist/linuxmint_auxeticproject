@@ -1,4 +1,4 @@
-import base64, json, math, os, re, shutil, signal, subprocess, sys, threading, time
+import base64, json, logging, math, os, re, shutil, signal, subprocess, sys, threading, time
 from datetime import datetime
 from pathlib import Path
 from fastapi import FastAPI, HTTPException, Request
@@ -44,6 +44,9 @@ def _alive(rid):
 
 def _any_running():
     return any(p.poll() is None for p in JOBS.values())
+
+sys.path.insert(0, str(HERE)); import campaign_api          # Campaigns page and its API (webui/campaign_api.py)
+campaign_api.setup(app, _any_running)
 
 def _read_json(path):
     try:
@@ -244,9 +247,13 @@ def _sim_cmd(d, b, R):
     if b.stretch_law: cmd += ["--stretch-law", b.stretch_law]
     return cmd, kc
 
+def _boot_id():
+    try: return Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+    except OSError: return ""
+
 def _launch(rid, d, cmd, resume=False):
     log = open(d / "job.log", "a" if resume else "w")
-    (d / "job.json").write_text(json.dumps({"started": time.time()}))          # before the job starts, so it can always read it
+    (d / "job.json").write_text(json.dumps({"started": time.time(), "boot_id": _boot_id()}))          # before the job starts, so it can always read it; boot_id as in campaign runner.lock
     JOBS[rid] = subprocess.Popen(cmd + (["--resume"] if resume else []), stdout=log, stderr=subprocess.STDOUT, cwd=str(SCRIPTS), start_new_session=True)
 
 @app.post("/api/results/{rid}/simulate")
@@ -254,6 +261,9 @@ def simulate(rid: str, b: SimBody):
     d = _folder(rid)
     if _any_running():
         raise HTTPException(409, "a simulation is already running")
+    busy = campaign_api.runner_busy()
+    if busy:
+        raise HTTPException(409, busy)
     meta = _read_json(d / "meta.json")
     R = meta.get("R")
     if not R:
@@ -297,6 +307,18 @@ def _resumable(d):
     s = _read_json(d / "state.json") or {}
     return (s.get("state") in RUNNING and not _alive(d.name) and (d / "checkpoint.npz").exists() and (d / "job_request.json").exists())
 
+def _auto_block(d):
+    """Why a resumable folder must NOT be resumed by itself at startup ('' = it may). Only a job that was running when the machine rebooted qualifies: the boot id recorded in job.json
+    must exist and differ from the current one. A job killed while the machine stayed up, a cancelled job and a job without a recorded boot id are left for the Resume button."""
+    s = _read_json(d / "state.json") or {}
+    sims = (_read_json(d / "meta.json") or {}).get("simulations") or []
+    if s.get("state") == "cancelled" or (sims and sims[-1].get("status") == "cancelled"): return "it was cancelled"
+    rec, now = (_read_json(d / "job.json") or {}).get("boot_id"), _boot_id()
+    if not rec: return "no boot id recorded for the job"
+    if not now: return "the current boot id cannot be read"
+    if rec == now: return "the job was started in the current boot, so the machine did not reboot"
+    return ""
+
 def _resume(rid):
     d = _folder(rid); meta = _read_json(d / "meta.json") or {}
     b = SimBody(**(_read_json(d / "job_request.json") or {}))
@@ -307,6 +329,9 @@ def resume(rid: str):
     d = _folder(rid)
     if _any_running():
         raise HTTPException(409, "a simulation is already running")
+    busy = campaign_api.runner_busy()
+    if busy:
+        raise HTTPException(409, busy)
     if not _resumable(d):
         raise HTTPException(409, "nothing to resume: no checkpoint for an interrupted run")
     _resume(rid)
@@ -317,9 +342,18 @@ def auto_resume():
     """After a power cut or reboot: continue the most recent interrupted run from its checkpoint (AUX_AUTORESUME=0 turns this off)."""
     if os.environ.get("AUX_AUTORESUME", "1") == "0":
         return
+    busy = campaign_api.runner_busy()
+    if busy:
+        logging.getLogger("uvicorn.error").warning("auto-resume skipped: %s", busy)      # a second solver job next to a campaign run must not start by itself; resume by hand later
+        return
     for d in sorted((p for p in RESULTS.iterdir() if p.is_dir() and not p.name.startswith(".")), key=lambda p: p.name, reverse=True):
-        if _resumable(d):
-            _resume(d.name); break
+        if not _resumable(d):
+            continue
+        why = _auto_block(d)
+        if why:
+            logging.getLogger("uvicorn.error").warning("auto-resume: %s left alone (%s); the Resume button still works", d.name, why)
+            continue
+        _resume(d.name); break
 
 def _tile_alive(rid):
     p = JOBS.get(rid + "#tile")
@@ -330,6 +364,9 @@ def tile_start(rid: str, b: TileBody):
     d = _folder(rid)
     if _any_running():
         raise HTTPException(409, "a job is already running")
+    busy = campaign_api.runner_busy()
+    if busy:
+        raise HTTPException(409, busy)
     meta = _read_json(d / "meta.json") or {}
     if not (meta.get("matrix") and meta.get("W") and meta.get("C") and meta.get("R")):
         raise HTTPException(422, "meta.json has no matrix, W, C and R (result built by an older pipeline)")

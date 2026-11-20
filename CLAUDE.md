@@ -30,11 +30,15 @@ The owner (K) is a textile student. Define new technical concepts explicitly, us
 
 \- Restart the web service only when main.py changed AND no job is running. Check job\_stage.json or the /state endpoint first.
 
+\- The web service unit is auxetic\_webui.service. The restart command is: ssh -t server "sudo systemctl restart auxetic\_webui.service". Only K runs it; Claude never runs any systemctl command, it gives K this command.
+
 
 
 \## Hard rules
 
 \- Never run git commit, git push, or any delete (rm, Remove-Item, rm -rf) without asking K first.
+
+\- Never use rm or any other delete, even on Claude's own scratch files; ask K first.
 
 \- Never read, print or commit .env, tokens or keys. .env is not in git and must stay that way.
 
