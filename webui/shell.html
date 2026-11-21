@@ -1,0 +1,60 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pure shell runs</title>
+<style>
+:root{color-scheme:light dark;--bg:#fcfcfb;--fg:#0b0b0b;--mut:#52514e;--line:#8884;--card:#8881;--s1:#2a78d6;--warn:#eb6834;--crit:#e34948;--gray:#8a8984;--ok:#1b8a5a;--paused:#b87400;--yelbg:#eda10033}
+@media (prefers-color-scheme:dark){:root:not([data-theme=light]){--bg:#1a1a19;--fg:#f0efec;--mut:#c3c2b7;--s1:#3987e5;--warn:#d95926;--crit:#e66767;--ok:#2fb344;--paused:#eda100}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font-family:system-ui,sans-serif;font-size:15px}
+header{padding:.6rem 1rem;border-bottom:1px solid var(--line);display:flex;gap:1rem;align-items:center;flex-wrap:wrap}
+header h1{font-size:1.1rem;margin:0;flex:1}a{color:var(--s1)}
+main{max-width:1300px;margin:0 auto;padding:1rem}
+section{margin:0 0 1.4rem}h2{font-size:1rem;margin:0 0 .5rem}h3{font-size:.95rem;margin:.2rem 0}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:.8rem 1rem}
+.tabs{display:flex;gap:.4rem;flex-wrap:wrap;margin-bottom:.8rem}.tabs button{padding:.3rem .8rem;border:1px solid var(--line);background:transparent;color:var(--fg);border-radius:8px;cursor:pointer}.tabs button.on{background:#4a90e233;font-weight:600}
+.pill{display:inline-block;padding:.1rem .7rem;border-radius:12px;font-weight:700;color:#fff}.pill.running{background:var(--ok)}.pill.paused{background:var(--paused)}.pill.idle{background:var(--gray)}
+.row{display:flex;gap:1rem;flex-wrap:wrap;align-items:flex-start}.act{flex:1;min-width:200px}
+button.big{padding:.45rem 1.1rem;font-size:.95rem;cursor:pointer}button:disabled{opacity:.45;cursor:not-allowed}
+.exp{color:var(--mut);font-size:.82rem;margin:.25rem 0 .7rem}.mut{color:var(--mut)}.small{font-size:.82rem}
+#msg{margin:.5rem 0;min-height:1.2em;font-size:.88rem}#msg.err{color:var(--crit)}
+.tw{overflow:auto;border:1px solid var(--line);border-radius:8px;max-height:430px}
+table{border-collapse:collapse;width:100%;font-size:.82rem}th,td{padding:.3rem .5rem;border-bottom:1px solid var(--line);text-align:right;white-space:nowrap}
+th{position:sticky;top:0;background:var(--bg);cursor:pointer;user-select:none}th:first-child,td:first-child,td.l,th.l{text-align:left}
+tbody tr{cursor:pointer}tbody tr:hover{background:var(--card)}tbody tr.sel{background:#4a90e233}
+td.diff{background:var(--yelbg)}.tag{font-size:.7rem;border:1px solid var(--line);border-radius:6px;padding:0 .3rem;margin-right:.2rem}.tag.ctl{border-color:var(--paused);color:var(--paused)}
+.charts svg{width:100%;height:auto;display:block}svg text{fill:var(--mut);font-size:10px;font-family:system-ui,sans-serif}svg .ax{stroke:var(--line);stroke-width:1}svg .gd{stroke:var(--line);stroke-width:.5;opacity:.5}
+.leg{display:flex;gap:1rem;flex-wrap:wrap;font-size:.8rem;color:var(--mut);margin:.3rem 0}.leg span::before{content:"";display:inline-block;width:.6rem;height:.6rem;margin-right:.3rem;background:var(--c);border-radius:50%}
+pre{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:.6rem;overflow:auto;font-size:.76rem;max-height:240px;margin:.4rem 0}
+dl{display:grid;grid-template-columns:max-content 1fr;gap:.2rem .8rem;margin:.3rem 0;font-size:.85rem}dt{color:var(--mut)}dd{margin:0}code{font-size:.85em}
+select,input[type=number]{font-size:.85rem}
+</style></head><body>
+<header><h1>Pure shell runs <span class="mut small">thin-shell fold only, no yarn mesh</span></h1><a href="/campaigns">&larr; Campaigns</a><a href="/">Simulator and 3D viewer</a></header>
+<main>
+<div id="tabs" class="tabs"></div>
+<div id="empty" class="mut small" hidden>No shell campaigns yet. Create one on the server with <code>campaign.py shell-plan &lt;name&gt; --policy campaigns/shell_policy.json</code>.</div>
+<div id="cur" hidden>
+ <section class="card">
+  <div class="row"><h2 id="cname" style="margin:0"></h2><span id="pill" class="pill idle">idle</span><span id="pdetail" class="mut small"></span></div>
+  <div class="row" style="margin-top:.7rem">
+   <div class="act"><button id="bStart" class="big">Start</button><div class="exp">Starts the runner in the background from the campaign's frozen code (survives closing this page or the SSH tunnel). If a runner is alive it only sets <b>run</b>.</div></div>
+   <div class="act"><button id="bPause" class="big">Pause</button><div class="exp">The run in progress finishes, then the runner waits. Nothing is killed.</div></div>
+   <div class="act"><button id="bCont" class="big">Continue</button><div class="exp">Takes the next queued run again.</div></div>
+   <div class="act"><button id="bStop" class="big">Stop after current run</button><div class="exp">The run in progress finishes, then the runner exits.</div></div>
+  </div>
+  <div id="msg"></div><div class="small" id="stat"></div><div class="small mut" id="code" style="margin-top:.3rem"></div>
+ </section>
+ <section><h2>Runs <span class="mut small">click a header to sort, a row for the detail; tick finished runs to compare or delete their 3D data</span></h2>
+  <div class="row small" style="align-items:center;margin-bottom:.4rem"><label>show <select id="fStatus"><option value="">all</option><option>done</option><option>queued</option><option>failed</option><option>timeout</option><option>rejected</option></select></label>
+   <label>source <select id="fSource"><option value="">all</option><option>seed</option><option>control</option><option>variant</option><option>filler</option><option>proposer</option></select></label>
+   <button id="bCompare" disabled>Compare selected</button><button id="bView" disabled>Open 3D and strain map</button>
+   <button id="bDel" disabled>Delete heavy files of the selected runs</button></div>
+  <div class="tw"><table id="tbl"></table></div><div class="exp">Delete removes only <code>shell.npz</code> and <code>shell.bin</code> (the 3D data). Settings, descriptors and the log stay, so the same settings are not proposed again. A typed confirmation is required.</div>
+  <div id="detail"></div></section>
+ <section><h2>Comparison graph <span class="mut small">any two columns, coloured by source or seed</span></h2>
+  <div class="row small" style="align-items:center"><label>x <select id="gx"></select></label><label>y <select id="gy"></select></label><label>colour <select id="gc"><option value="src">source</option><option value="seed">seed pattern</option><option value="tiles">tiles</option></select></label></div>
+  <div class="leg" id="gleg"></div><div class="card charts" id="gr"></div></section>
+ <section id="cmpsec" hidden><h2>Comparison of the selected runs <span class="mut small">settings that differ are shaded</span></h2><div class="tw"><table id="cmp"></table></div></section>
+</div>
+</main>
+<script src="/shell.js"></script>
+</body></html>

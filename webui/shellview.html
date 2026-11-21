@@ -1,0 +1,39 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Shell viewer</title>
+<style>
+:root{color-scheme:light dark;--bg:#fcfcfb;--fg:#0b0b0b;--mut:#52514e;--line:#8884;--card:#8881;--s1:#2a78d6}
+@media (prefers-color-scheme:dark){:root:not([data-theme=light]){--bg:#1a1a19;--fg:#f0efec;--mut:#c3c2b7;--s1:#3987e5}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font-family:system-ui,sans-serif;font-size:15px}
+header{padding:.6rem 1rem;border-bottom:1px solid var(--line);display:flex;gap:1rem;align-items:center;flex-wrap:wrap}
+header h1{font-size:1.1rem;margin:0;flex:1}a{color:var(--s1)}
+main{max-width:1400px;margin:0 auto;padding:1rem}
+section{margin:0 0 1.2rem}h2{font-size:1rem;margin:0 0 .4rem}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:.7rem .9rem}
+.row{display:flex;gap:.8rem;flex-wrap:wrap;align-items:center;margin:.3rem 0}
+button{padding:.35rem .8rem;font-size:.9rem;cursor:pointer}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:.8rem}@media (max-width:900px){.grid{grid-template-columns:1fr}}
+.view{position:relative;height:56vh;min-height:300px;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.view canvas{display:block;width:100%;height:100%}
+.legend{position:absolute;left:10px;bottom:10px;z-index:2;background:Canvas;color:CanvasText;border:1px solid #8888;border-radius:6px;padding:.4rem .6rem;font-size:.78rem;max-width:80%}
+.legend .bar{height:.7rem;border:1px solid #8886;margin:.25rem 0}.legend .tk{display:flex;justify-content:space-between;gap:1rem;font-variant-numeric:tabular-nums}
+.status{position:absolute;right:10px;top:8px;z-index:2;font-size:.8rem;color:var(--mut)}
+.mut{color:var(--mut)}.small{font-size:.82rem}.err{color:#d33}
+dl{display:grid;grid-template-columns:max-content 1fr;gap:.2rem .8rem;margin:.3rem 0;font-size:.85rem}dt{color:var(--mut)}dd{margin:0}
+select,input[type=number]{font-size:.85rem}
+</style></head><body>
+<header><h1>Shell viewer <span id="rname" class="mut"></span></h1><a id="back" href="/shell">&larr; Pure shell runs</a></header>
+<main>
+<div id="err" class="err"></div>
+<p class="small mut">The sheet is the folded thin shell (mm). Colours are <b>membrane</b> quantities computed from the saved vertices (deformation gradient of every triangle against the flat sheet): the folds are bending and cost no stretch, so strain shows where the sheet stretches or compresses while folding. Strain colour range is a display choice (UNSOURCED).</p>
+<div class="row card"><label>left: field <select id="fA"></select></label><label>right: field <select id="fB"></select></label><label>right: run <select id="rB"></select></label>
+ <label class="small">strain range = &plusmn; <input id="clip" type="number" min="50" max="100" step="1" value="98" style="width:4rem">-th percentile of |value|</label>
+ <label><input type="checkbox" id="sync" checked> keep the two cameras synchronised</label></div>
+<div class="grid"><section><h2 id="tA"></h2><div class="view" id="vA"><div class="status" id="sA"></div><div class="legend" id="lA" hidden></div></div></section>
+<section><h2 id="tB"></h2><div class="view" id="vB"><div class="status" id="sB"></div><div class="legend" id="lB" hidden></div></div></section></div>
+<section class="card"><div id="info" class="small"></div></section>
+</main>
+<script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"}}</script>
+<script type="module" src="/shellview.js"></script>
+</body></html>

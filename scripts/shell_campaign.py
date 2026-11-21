@@ -279,9 +279,32 @@ class Camp:
             counts[st] = counts.get(st, 0) + 1
         walls = [x.get('wall_s') for x in last.values() if x.get('status') == 'done' and isinstance(x.get('wall_s'), (int, float))]
         mean = sum(walls) / len(walls) if walls else None
-        du = shutil.disk_usage(s.d if os.path.isdir(s.d) else SHELL_ROOT)
+        man = s.manifest() or {}; du = shutil.disk_usage(s.d if os.path.isdir(s.d) else SHELL_ROOT)
         return dict(name=s.name, control=s.get_control(), runner_alive=s.runner_alive(), runner=rn, counts=counts, mean_wall_s=mean, eta_s=(mean * counts['queued'] if mean else None),
-                    progress=(s.progress(rn['current']) if rn.get('current') and s.runner_alive() else {}), free_gb=round(du.free / 1e9, 2), total_gb=round(dir_size(s.d) / 1e9, 4), limits=lim)
+                    progress=(s.progress(rn['current']) if rn.get('current') and s.runner_alive() else {}), code=dict(git_commit=man.get('git_commit'), git_dirty=man.get('git_dirty'), shell_sim_sha256=man.get('shell_sim_sha256'), frozen=man.get('frozen')), free_gb=round(du.free / 1e9, 2), total_gb=round(dir_size(s.d) / 1e9, 4), limits=lim)
+
+    # -- one run (read only; used by the page)
+    def run_path(s, rid):
+        """Real path of a FINISHED run folder runs/<id>. Guard: id must be S + 6 digits, a real directory (no symlink) directly inside runs/, inside the shell-runs root. ValueError otherwise."""
+        if not isinstance(rid, str) or not ID_RE.match(rid): raise ValueError('bad run id')
+        p = os.path.join(s.runs, rid)
+        if os.path.islink(p) or not os.path.isdir(p): raise ValueError('run %s is not a finished run' % rid)
+        rp = os.path.realpath(p); root = os.path.realpath(SHELL_ROOT)
+        if os.path.dirname(rp) != os.path.realpath(s.runs) or os.path.commonpath([root, rp]) != root: raise ValueError('run %s resolves outside the runs folder' % rid)
+        return rp
+    def seed_info(s, source):
+        """The seed a run descends from, with the real-fold text of K's report (seeds.json): source 'seed:seed03', 'seed:pattern1:tiles4', 'variant:seed03', 'filler:seed03'."""
+        parts = (source or '').split(':'); kind = parts[0]; sid = parts[1] if len(parts) > 1 else ''; f = (s.spec_().get('plan') or {}).get('seeds_file')
+        try: ent = next(x for x in json.load(open(f, encoding='utf8'))['seeds'] if x['id'] == sid)
+        except Exception: return {}
+        return dict(kind=kind, seed=sid, sample=ent.get('sample'), real_tm_axis=ent.get('real_tm_axis'), real_fold=ent.get('real_fold'), report_sections=[ent.get('report_section_prep'), ent.get('report_section_result')])
+    def run_detail(s, rid):
+        rp = s.run_path(rid); q = next((x for x in s.queue_items() if x['id'] == rid), {}); ix = s.index_last().get(rid, {})
+        try: tail = [l.rstrip() for l in open(os.path.join(rp, 'shell.log'), errors='replace')][-25:]
+        except OSError: tail = []
+        return dict(run=rid, campaign=s.name, source=q.get('source', ''), tier=q.get('tier'), label=q.get('label', ''), control=q.get('control'), settings=q.get('settings') or cm.rjson(os.path.join(rp, 'settings.json')),
+                    status=ix.get('status', 'done'), heavy_deleted=bool(ix.get('heavy_deleted')), wall_s=ix.get('wall_s'), metrics=cm.rjson(os.path.join(rp, 'metrics.json'), {}), provenance=cm.rjson(os.path.join(rp, 'provenance.json'), {}),
+                    files={f: os.path.isfile(os.path.join(rp, f)) for f in HEAVY}, seed=s.seed_info(q.get('source', '')), log_tail=tail)
 
     # -- finishing runs
     def publish(s, tmp, rid, status_extra):

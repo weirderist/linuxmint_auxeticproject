@@ -69,9 +69,9 @@ async function vertexNormals(pos, idx, nv, onProgress) {
 }
 
 // The heavy arrays of a tube mesh: position, index, normal. Loaded once per (run, variant).
-export async function loadTubeBase(id, variant, onProgress) {
+export async function loadTubeBase(id, variant, onProgress, url) {
   onProgress && onProgress('preparing mesh…');
-  const r = await fetch('/api/results/' + id + '/mesh' + (variant === 'relaxed' ? '?v=relaxed' : ''));
+  const r = await fetch(url || ('/api/results/' + id + '/mesh' + (variant === 'relaxed' ? '?v=relaxed' : '')));          // url: another source of the same KMSH mesh (the shell viewer)
   if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error('mesh: ' + (e.detail || 'HTTP ' + r.status)); }
   const buf = await readWithProgress(r, onProgress), hd = new DataView(buf);
   if (hd.getUint32(0, false) !== 0x4b4d5348) throw new Error('mesh: bad header');

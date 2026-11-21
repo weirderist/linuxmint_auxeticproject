@@ -52,7 +52,7 @@ details{border:1px solid var(--line);border-radius:8px;padding:.4rem .8rem;margi
 .cols td:first-child{white-space:normal}.cols td{white-space:normal;text-align:left;vertical-align:top}
 @media (max-width:700px){main{padding:.6rem}}
 </style></head><body>
-<header><h1>Campaigns</h1><a href="/">&larr; Simulator and 3D viewer</a></header>
+<header><h1>Campaigns</h1><a href="/shell">Pure shell runs &rarr;</a><a href="/">&larr; Simulator and 3D viewer</a></header>
 <main>
 <div id="tabs" class="tabs"></div>
 <div id="empty" class="mut" hidden>No campaign folders found.</div>
@@ -83,24 +83,6 @@ details{border:1px solid var(--line);border-radius:8px;padding:.4rem .8rem;margi
   <div class="charts" id="order" style="grid-template-columns:1fr"></div></section>
  <section><details><summary>What the columns mean</summary><div id="help" class="small"></div></details></section>
 </div>
-<section id="shellsec"><h2>Pure shell only runs <span class="mut small">thin-shell fold only (no yarn mesh); about 5 min per run at tiles 3; goes on until paused</span></h2>
- <div id="shtabs" class="tabs"></div>
- <div id="shempty" class="mut small" hidden>No shell campaigns yet. Create one on the server with <code>campaign.py shell-plan &lt;name&gt;</code>.</div>
- <div id="shcur" class="card" hidden>
-  <div class="row"><h3 id="shname" style="margin:0"></h3><span id="shpill" class="pill idle">idle</span><span id="shdetail" class="mut small"></span></div>
-  <div class="row" style="margin-top:.7rem">
-   <div class="act"><button id="shStart" class="big">Start</button><div class="exp">Starts the runner in the background (survives closing this page). If a runner is alive it only sets <b>run</b>.</div></div>
-   <div class="act"><button id="shPause" class="big">Pause</button><div class="exp">The run in progress finishes, then the runner waits. Nothing is killed.</div></div>
-   <div class="act"><button id="shCont" class="big">Continue</button><div class="exp">Takes the next queued run again.</div></div>
-   <div class="act"><button id="shStop" class="big">Stop after current run</button><div class="exp">The run in progress finishes, then the runner exits.</div></div>
-  </div>
-  <div id="shmsg"></div>
-  <div class="small" id="shstat" style="margin:.3rem 0"></div>
-  <div class="tw"><table id="shtbl"></table></div>
-  <div class="row" style="margin-top:.6rem;align-items:center"><button id="shDel" class="big" disabled>Delete heavy files of the selected runs</button>
-   <span class="exp" style="margin:0">Removes only <code>shell.npz</code> and <code>shell.bin</code> (the 3D data) of finished runs. Settings, descriptors and the log stay, so the same settings are never proposed again. Asks for a typed confirmation.</span></div>
- </div>
-</section>
 <section><h2>Datasets <span class="mut small">read only</span></h2><div class="tw"><table id="dst" class="cols"></table></div></section>
 </main>
 <script src="/campaigns.js"></script>

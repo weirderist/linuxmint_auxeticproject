@@ -10,7 +10,7 @@ Paths: CAMPAIGN_DIR / CAMPAIGN_SCRIPTS (same variables as campaign.py), AUX_DATA
 import csv, hashlib, importlib.util, json, math, os, re, subprocess, sys, threading, time
 from pathlib import Path
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import HTMLResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, Response
 from pydantic import BaseModel
 
 HERE = Path(__file__).parent
@@ -396,6 +396,51 @@ def shell_delete_preview(name: str, ids: str = ""):
     sc, c = _shell(name)
     try: return sc.delete_heavy(c, [i for i in ids.split(",") if i], dry=True)
     except ValueError as e: raise HTTPException(422, str(e))
+
+
+# ------------------------------------------------------------------ pure shell runs: one run (detail, 3D mesh, strain colours) and the pages
+@router.get("/api/shell/{name}/runs/{rid}")
+def shell_run(name: str, rid: str):
+    sc, c = _shell(name)
+    try: return c.run_detail(rid)
+    except ValueError as e: raise HTTPException(404, str(e))
+
+@router.get("/api/shell/{name}/runs/{rid}/mesh")
+def shell_mesh(name: str, rid: str):
+    """The folded sheet as the KMSH v1 mesh of the viewer (shell.bin)."""
+    sc, c = _shell(name)
+    try: f = Path(c.run_path(rid)) / "shell.bin"
+    except ValueError as e: raise HTTPException(404, str(e))
+    if not f.is_file(): raise HTTPException(404, "the 3D data of this run was deleted")
+    return FileResponse(f, media_type="application/octet-stream", headers={"Content-Encoding": "identity"})
+
+@router.get("/api/shell/{name}/runs/{rid}/colors")
+def shell_colors(name: str, rid: str, field: str = "area_strain", clip: float = 98.0):
+    """Uint8 RGB per vertex (same order as the mesh) plus the legend in X-Legend, as /api/results/<id>/colors."""
+    sc, c = _shell(name)
+    if not (50.0 <= clip <= 100.0): raise HTTPException(422, "clip must be 50 to 100")
+    try: f = Path(c.run_path(rid)) / "shell.npz"
+    except ValueError as e: raise HTTPException(404, str(e))
+    if not f.is_file(): raise HTTPException(404, "the 3D data of this run was deleted")
+    ss = _load("shell_strain", SCRIPTS / "shell_strain.py")
+    try: X, W, C, sub = ss.load(f); rgb, legend = ss.colours(field, ss.vertex_field(X, W, C, sub, field), clip)
+    except ValueError as e: raise HTTPException(422, str(e))
+    return Response(rgb.tobytes(), media_type="application/octet-stream", headers={"Content-Encoding": "identity", "X-Count": str(len(rgb)), "X-Legend": json.dumps(legend)})
+
+def _page(name, media):
+    return Response((HERE / name).read_text(encoding="utf8"), media_type=media, headers={"Cache-Control": "no-cache"})
+
+@router.get("/shell", response_class=HTMLResponse)
+def page_shell(): return _page("shell.html", "text/html; charset=utf-8")
+
+@router.get("/shell.js")
+def page_shell_js(): return _page("shell.js", "application/javascript")
+
+@router.get("/shellview", response_class=HTMLResponse)
+def page_shellview(): return _page("shellview.html", "text/html; charset=utf-8")
+
+@router.get("/shellview.js")
+def page_shellview_js(): return _page("shellview.js", "application/javascript")
 
 
 # ------------------------------------------------------------------ datasets (read only) and the column help

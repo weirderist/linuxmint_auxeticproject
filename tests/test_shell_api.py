@@ -46,10 +46,26 @@ r = cl.post('/api/shell/demo/delete', json=dict(ids=['S000001', 'S000002'], conf
 check('delete with the right confirmation removes the heavy files of exactly those runs', r.status_code == 200 and j['files'] == 4 and not os.path.exists(os.path.join(c.runs, 'S000001', 'shell.npz')) and os.path.exists(os.path.join(c.runs, 'S000003', 'shell.npz')) and os.path.exists(os.path.join(c.runs, 'S000001', 'metrics.json')))
 check('the deletion is logged with the client address', len(sc.read_lines(c.delog)) == 1 and sc.read_lines(c.delog)[0]['ids'] == ['S000001', 'S000002'] and sc.read_lines(c.delog)[0]['client'] != None)
 d = cl.get('/api/shell/demo').json(); check('detail marks heavy_deleted rows', [r['heavy_deleted'] for r in d['rows']] == [True, True, False])
+# ---- one run: detail, 3D mesh, strain colours (stub shell.npz), and the separate pages
+import struct
+d3 = cl.get('/api/shell/demo/runs/S000003').json()
+check('run detail: settings, descriptors, provenance, files', d3['run'] == 'S000003' and d3['settings']['cpi'] == 22.0 and d3['metrics']['plan_x'] and d3['provenance']['shell_sim_sha256'] and d3['files'] == {'shell.npz': True, 'shell.bin': True} and 'log_tail' in d3)
+r = cl.get('/api/shell/demo/runs/S000003/mesh'); nv, nf = struct.unpack_from('<II', r.content, 8)
+check('mesh endpoint returns the KMSH v1 file of the run', r.status_code == 200 and r.content[:4] == b'KMSH' and r.content == open(os.path.join(c.runs, 'S000003', 'shell.bin'), 'rb').read() and nv > 0)
+for fld in ('area_strain', 'stretch_max', 'stretch_min', 'z', 'tilt'):
+    r = cl.get('/api/shell/demo/runs/S000003/colors?field=' + fld); lg = json.loads(r.headers['X-Legend'])
+    check('colors %s: one RGB triple per mesh vertex, legend with label, range and 3 ticks' % fld, r.status_code == 200 and len(r.content) == 3 * nv == 3 * int(r.headers['X-Count']) and lg['field'] == fld and len(lg['ticks']) == 3 and lg['label'] and lg['vmax'] >= lg['vmin'])
+check('colors: unknown field 422, clip out of range 422', cl.get('/api/shell/demo/runs/S000003/colors?field=bogus').status_code == 422 and cl.get('/api/shell/demo/runs/S000003/colors?field=z&clip=10').status_code == 422)
+for bad_id in ('S000099', '%2e%2e', 'S000003%2f..', '..%2fS000003', 'S3'):
+    check('run endpoints refuse %s' % bad_id, all(cl.get('/api/shell/demo/runs/%s%s' % (bad_id, suf)).status_code in (404, 422) for suf in ('', '/mesh', '/colors')))
+check('after the delete of S000001 its mesh and colours say the 3D data was deleted (404), detail still works', cl.get('/api/shell/demo/runs/S000001/mesh').status_code == 404 and cl.get('/api/shell/demo/runs/S000001/colors').status_code == 404 and cl.get('/api/shell/demo/runs/S000001').json()['heavy_deleted'] is True)
+check('status carries the frozen code (commit, dirty flag, shell_sim hash)', 'git_commit' in cl.get('/api/shell/demo').json()['code'] and cl.get('/api/shell/demo').json()['code']['shell_sim_sha256'])
 check('runner_busy (used by the Simulate endpoint) is empty with no live runner', api.runner_busy() == '')
-html = cl.get('/campaigns').text; js = cl.get('/campaigns.js').text
-check('page has the Pure shell only runs section and the controls', 'Pure shell only runs' in html and all(k in html for k in ('shStart', 'shPause', 'shCont', 'shStop', 'shDel')) and 'api/shell' in js)
+html = cl.get('/campaigns').text; js = cl.get('/campaigns.js').text; sh = cl.get('/shell').text; shjs = cl.get('/shell.js').text; sv = cl.get('/shellview').text; svjs = cl.get('/shellview.js').text
+check('the Pure shell section is gone from the Campaigns page and replaced by a link to /shell', 'shellsec' not in html and 'api/shell' not in js and 'href="/shell"' in html)
+check('/shell is its own page with the controls, table, comparison and graph', all(k in sh for k in ('bStart', 'bPause', 'bCont', 'bStop', 'bDel', 'bCompare', 'gx')) and 'api/shell' in shjs and 'shellview' in shjs)
+check('/shellview is the viewer page (importmap, viewer_core, two views)', 'viewer_core' in svjs and 'vA' in sv and 'vB' in sv and 'importmap' in sv and 'colors?field=' in svjs)
 try:
-    import esprima; esprima.parseScript(js); check('campaigns.js parses (esprima)', True)
+    import esprima; [esprima.parseScript(x) for x in (js, shjs)]; esprima.parseModule(svjs); check('campaigns.js, shell.js (script) and shellview.js (module) parse (esprima)', True)
 except ImportError: print('SKIP  esprima not installed')
 print('\n' + ('ALL OK' if not bad else 'FAILURES: ' + ', '.join(bad))); sys.exit(1 if bad else 0)
