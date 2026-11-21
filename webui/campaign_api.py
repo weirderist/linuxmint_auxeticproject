@@ -203,8 +203,8 @@ def _read_results(d, man, th, spec=None):
         try:                                                                                # nominal S and TF_rel from this run's CPI, WPI and Ne (build settings: fixed values + run parameters); display only
             b, _ = cm.merged(spec, r.get("params", {})) if (spec or {}).get("fabric") and (spec or {}).get("relax") is not None else (dict(r.get("params", {})), None)
             tr = _tight().record(b, b.get("ne") or None)
-        except Exception: tr = {"stitch_density": None, "tf_rel": None}
-        row["stitch_density"], row["tf_rel"] = tr["stitch_density"], tr["tf_rel"]
+        except Exception: tr = {"stitch_density": None, "tf_rel": None, "tf_c_rel": None, "tf_w_rel": None}
+        row["stitch_density"], row["tf_rel"], row["tf_c_rel"], row["tf_w_rel"] = tr["stitch_density"], tr["tf_rel"], tr["tf_c_rel"], tr["tf_w_rel"]
         row["flags"] = _flags(row, th)
         rows.append(row)
     return pcols, mcols, rows
@@ -278,7 +278,7 @@ def run_detail(name: str, rid: str):
     return {"run": rid, "campaign": name, "status": st.get("status", "queued"), "stage": st.get("stage", ""), "reason": st.get("reason", ""), "exit_code": st.get("exit_code"),
             "wall_s": st.get("wall_s"), "interrupted": st.get("interrupted_count", 0), "attempts": len(atts), "last_command": " ".join(atts[-1].get("cmd") or []) if atts and isinstance(atts[-1], dict) else "",
             "params": run.get("params", {}), "metrics": {k: (None if v == "" else v) for k, v in met.items()}, "flags": row.get("flags", {}),
-            "nominal": {"stitch_density": row.get("stitch_density"), "tf_rel": row.get("tf_rel")},
+            "nominal": {"stitch_density": row.get("stitch_density"), "tf_rel": row.get("tf_rel"), "tf_c_rel": row.get("tf_c_rel"), "tf_w_rel": row.get("tf_w_rel")},
             "history": (st.get("history") or [])[-8:], "log_tail": _tail(rd / "relax.log", 40)}
 
 
@@ -343,7 +343,7 @@ def shell_detail(name: str):
     sc, c = _shell(name); st = c.status(); rows = c.rows(); sco = _load("shell_score", SCRIPTS / "shell_score.py")
     for r in rows: r["score"] = sco.score(r)          # similarity out of 100 where a measured reference exists (Pattern 1), else None
     tg = _tight()
-    for r in rows: tr = tg.record(r); r["stitch_density"], r["tf_rel"] = tr["stitch_density"], tr["tf_rel"]          # display only, computed on read (Ne fixed at 12); nothing is written to the runs
+    for r in rows: tr = tg.record(r); r["stitch_density"], r["tf_rel"], r["tf_c_rel"], r["tf_w_rel"] = tr["stitch_density"], tr["tf_rel"], tr["tf_c_rel"], tr["tf_w_rel"]          # display only, computed on read (Ne fixed at 12); nothing is written to the runs
     st["tightness"] = tg.campaign_info([r["stitch_density"] for r in rows], c.policy())
     st["n_rows"] = len(rows); st["rows"] = rows[-1500:]
     return st
@@ -416,7 +416,7 @@ def shell_run(name: str, rid: str):
     sc, c = _shell(name)
     try: d = c.run_detail(rid)
     except ValueError as e: raise HTTPException(404, str(e))
-    tg = _tight(); d["tightness"] = dict(tg.record(d.get("settings") or {}), label_stitch_density=tg.LABEL_S, label_tf_rel=tg.LABEL_TF, note=tg.NOTE)          # display only, computed on read
+    tg = _tight(); d["tightness"] = dict(tg.record(d.get("settings") or {}), label_stitch_density=tg.LABEL_S, label_tf_rel=tg.LABEL_TF, label_tf_c_rel=tg.LABEL_TF_C, label_tf_w_rel=tg.LABEL_TF_W, note=tg.NOTE)          # display only, computed on read
     d["tightness"]["constant_note"] = tg.campaign_info([tg.record(q.get("settings") or {})["stitch_density"] for q in c.queue_items()], c.policy())["constant_note"]
     return d
 

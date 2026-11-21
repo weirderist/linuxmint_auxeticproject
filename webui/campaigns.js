@@ -7,8 +7,8 @@ let cur = null, data = null, sortKey = "run", sortDir = 1, selRun = null, busyAc
 const SHOW = ["exit_code", "rel_dE_last", "min_dist_over_2R_end", "fold_direction", "fold_amplitude_mm", "fold_local_amplitude_mm", "wall_s"];
 const FOLD_Y = "fold_amplitude_mm";
 // display-only tightness columns, computed by the server from each run's CPI, WPI and Ne (definitions in the note under the table)
-const TIGHT = ["stitch_density", "tf_rel"], HEAD = { stitch_density: "S", tf_rel: "TF_rel" }, hname = h => HEAD[h] || h;
-function tnote() { const t = data.tightness; $("#tnote").innerHTML = t ? "<b>S</b>: " + esc(t.label_stitch_density) + ". <b>TF_rel</b>: " + esc(t.label_tf_rel) + (t.constant_note ? ". Both are " + esc(t.constant_note) : "") + ". " + esc(t.note) + " The yarn-level tightness factor recorded in meta.json (from the as-built loop length) is a separate value." : ""; }
+const TIGHT = ["stitch_density", "tf_rel", "tf_c_rel", "tf_w_rel"], HEAD = { stitch_density: "S", tf_rel: "TF_rel", tf_c_rel: "TF_c_rel", tf_w_rel: "TF_w_rel" }, hname = h => HEAD[h] || h;
+function tnote() { const t = data.tightness; $("#tnote").innerHTML = t ? "<b>S</b>: " + esc(t.label_stitch_density) + ". <b>TF_rel</b>: " + esc(t.label_tf_rel) + (t.constant_note ? ". S and TF_rel are " + esc(t.constant_note) : "") + ". <b>TF_c_rel</b>: " + esc(t.label_tf_c_rel) + ". <b>TF_w_rel</b>: " + esc(t.label_tf_w_rel) + (t.constant_note ? ". TF_c_rel and TF_w_rel are NOT constant: they change with CPI and WPI separately (in opposite directions at constant S)" : "") + ". " + esc(t.note) + " The yarn-level tightness factor recorded in meta.json (from the as-built loop length) is a separate value." : ""; }
 
 async function api(path, opt) {
   const r = await fetch(path, opt);
@@ -115,7 +115,7 @@ async function openRun(id) {
       (j.reason ? '<div class="small"><b>Reason:</b> ' + esc(j.reason) + "</div>" : "") +
       '<div class="small links">' + [["/?run=", "Open in viewer"], ["/strain?run=", "Strain page"], ["/run?run=", "Run graphs"]].map(l => '<a href="' + l[0] + encodeURIComponent(j.campaign) + "/" + encodeURIComponent(j.run) + '" target="_blank" rel="noopener">' + l[1] + "</a>").join(" &middot; ") + "</div>" +
       '<div class="small mut">attempts ' + j.attempts + ", interruptions " + j.interrupted + ", exit code " + esc(j.exit_code == null ? "-" : j.exit_code) + ", wall time " + esc(j.wall_s == null ? "-" : dur(j.wall_s)) + "</div>" +
-      '<div class="row"><div class="col"><b>Parameters</b>' + kv(j.params) + (j.nominal ? '<b>Nominal tightness (display only)</b>' + kv({ "S (stitches per square inch)": j.nominal.stitch_density, "TF_rel (tex^0.5 per inch)": j.nominal.tf_rel }) : "") + '</div><div class="col col2"><b>Metrics</b>' + kv(j.metrics) + "</div></div>" +
+      '<div class="row"><div class="col"><b>Parameters</b>' + kv(j.params) + (j.nominal ? '<b>Nominal tightness (display only)</b>' + kv({ "S (stitches per square inch)": j.nominal.stitch_density, "TF_rel (tex^0.5 per inch)": j.nominal.tf_rel, "TF_c_rel = sqrt(tex) x CPI": j.nominal.tf_c_rel, "TF_w_rel = sqrt(tex) x WPI": j.nominal.tf_w_rel }) : "") + '</div><div class="col col2"><b>Metrics</b>' + kv(j.metrics) + "</div></div>" +
       "<b>Last 40 lines of relax.log</b><pre>" + esc(j.log_tail || "(no log yet)") + "</pre></div>";
     el.scrollIntoView({ block: "nearest", behavior: "smooth" });
   } catch (e) { el.innerHTML = '<div class="card mt"><b>Error:</b> ' + esc(e.message) + "</div>"; }
@@ -128,7 +128,7 @@ function pt(r, x, y, tip) { const k = cls(r); return { x, y, cls: "cl-" + k, sha
 function charts() {
   $("#cleg").innerHTML = Object.keys(CLS).map(k => '<span class="cl-' + k + '">' + esc(CLS[k].n) + "</span>").join("");
   let vary = data.varied.length ? data.varied : data.params.map(p => ({ name: p, scale: "linear" })), S = ChartKit.size($("#order"));
-  if (data.tightness && data.tightness.constant === false) vary = vary.concat(TIGHT.map(k => ({ name: k, scale: "linear" })));          // only when S differs between runs (otherwise every point sits at one x)
+  if (data.tightness) vary = vary.concat(TIGHT.filter(k => data.tightness.constant === false || k === "tf_c_rel" || k === "tf_w_rel").map(k => ({ name: k, scale: "linear" })));          // S and TF_rel only when S differs between runs (otherwise every point sits at one x); TF_c_rel and TF_w_rel always (they change with CPI and WPI separately)
   let h = "";
   for (const v of vary) {
     const pts = data.runs.filter(r => r[v.name] != null && r[FOLD_Y] != null && (v.scale !== "log" || r[v.name] > 0)).map(r => pt(r, r[v.name], r[FOLD_Y], "run " + r.run + ": " + v.name + " " + fmt(r[v.name]) + ", " + FOLD_Y + " " + fmt(r[FOLD_Y])));

@@ -31,10 +31,13 @@ c.set_control('run'); sc.serve(c, poll_s=0.2, stop_when_empty=True, lock=False, 
 before = tree_hash(c.runs); d = cl.get('/api/shell/pol').json(); rows = {r['run']: r for r in d['rows']}
 check('two runs finished in stub mode', d['counts']['done'] == 2, str(d['counts']))
 check('run list: S = 352 and TF_rel = 131.6105 for CPI 22, WPI 16 (hand value)', rows[ids[0]]['stitch_density'] == 352.0 and abs(rows[ids[0]]['tf_rel'] - HAND) < 1e-5, str((rows[ids[0]]['stitch_density'], rows[ids[0]]['tf_rel'])))
+TFC, TFW = 7.014866 * 22.0, 7.014866 * 16.0          # sqrt(tex) x CPI and x WPI, hand values 154.327 and 112.238
+check('run list: TF_c_rel 154.327 and TF_w_rel 112.238 for CPI 22, WPI 16 (hand values)', abs(rows[ids[0]]['tf_c_rel'] - TFC) < 1e-3 and abs(rows[ids[0]]['tf_w_rel'] - TFW) < 1e-3)
+check('the run at R 1.6 (same S) differs in both: TF_c_rel larger, TF_w_rel smaller, while TF_rel stays within 0.25 %', rows[ids[1]]['tf_c_rel'] > rows[ids[0]]['tf_c_rel'] * 1.05 and rows[ids[1]]['tf_w_rel'] < rows[ids[0]]['tf_w_rel'] * 0.95 and abs(rows[ids[1]]['tf_rel'] / rows[ids[0]]['tf_rel'] - 1) < 0.0025, str((rows[ids[1]]['tf_c_rel'], rows[ids[1]]['tf_w_rel'])))
 check('R 1.6 at the same density: S within 0.5 % of 352 (CPI, WPI rounded to 4 decimals), TF_rel within 0.25 %', abs(rows[ids[1]]['stitch_density'] / 352 - 1) < 0.005 and abs(rows[ids[1]]['tf_rel'] / HAND - 1) < 0.0025)
 t = d['tightness']; check('campaign info: constant with the policy, note "constant in this campaign (CPI x WPI fixed)", labels say nominal and UNSOURCED', t['constant'] is True and t['constant_note'] == 'constant in this campaign (CPI x WPI fixed)' and 'UNSOURCED' in t['label_tf_rel'] and 'nominal' in t['label_stitch_density'], str(t)[:200])
 rd = cl.get('/api/shell/pol/runs/' + ids[0]).json()['tightness']
-check('run detail (shellview panel): S, TF_rel, Ne 12, the note and the constant note', rd['stitch_density'] == 352.0 and abs(rd['tf_rel'] - HAND) < 1e-5 and rd['ne'] == 12.0 and rd['constant_note'] and 'UNSOURCED' in rd['label_tf_rel'])
+check('run detail (shellview panel): S, TF_rel, TF_c_rel, TF_w_rel, Ne 12, the labels, the note and the constant note', abs(rd['tf_c_rel'] - TFC) < 1e-3 and abs(rd['tf_w_rel'] - TFW) < 1e-3 and 'UNSOURCED' in rd['label_tf_c_rel'] and 'UNSOURCED' in rd['label_tf_w_rel'] and rd['stitch_density'] == 352.0 and abs(rd['tf_rel'] - HAND) < 1e-5 and rd['ne'] == 12.0 and rd['constant_note'] and 'UNSOURCED' in rd['label_tf_rel'])
 check('reading wrote nothing into any run folder (sha256 of the runs tree unchanged) and no settings gained a tightness key', tree_hash(c.runs) == before and all('tf_rel' not in q['settings'] and 'stitch_density' not in q['settings'] for q in c.queue_items()))
 
 # ---- shell campaign without a policy and two densities: not constant
@@ -52,6 +55,6 @@ yb = tree_hash(yd); y = cl.get('/api/campaigns/yarn1'); yj = y.json() if y.statu
 check('campaigns page: run 0001 (fabric CPI 22, WPI 16, Ne 12) gets S 352 and TF_rel 131.6105', y.status_code == 200 and yr['0001']['stitch_density'] == 352.0 and abs(yr['0001']['tf_rel'] - HAND) < 1e-5, y.text[:200])
 check('campaigns page: run 0002 uses its own CPI 11 and Ne 590.5 (tex 1): S 176, TF_rel sqrt(176)', yr['0002']['stitch_density'] == 176.0 and abs(yr['0002']['tf_rel'] - math.sqrt(176)) < 1e-9)
 check('campaigns page: S differs between runs, so not constant (the charts then add S and TF_rel as x axes)', yj['tightness']['constant'] is False)
-rj = cl.get('/api/campaigns/yarn1/runs/0002').json(); check('campaigns run detail carries the nominal values', rj['nominal']['stitch_density'] == 176.0)
+rj = cl.get('/api/campaigns/yarn1/runs/0002').json(); check('campaigns run detail carries the nominal values, including TF_c_rel = 1 x 11 (tex 1) and TF_w_rel = 1 x 16', rj['nominal']['stitch_density'] == 176.0 and abs(rj['nominal']['tf_c_rel'] - 11.0) < 1e-9 and abs(rj['nominal']['tf_w_rel'] - 16.0) < 1e-9)
 check('reading the yarn campaign wrote nothing', tree_hash(yd) == yb)
 print('\n' + ('ALL OK' if not bad else 'FAILURES: ' + ', '.join(bad))); sys.exit(1 if bad else 0)

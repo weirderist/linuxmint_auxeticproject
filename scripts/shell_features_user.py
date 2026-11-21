@@ -27,3 +27,13 @@ SETTING_DEFAULTS = {}
 # def feat_tf_rel(T, ctx):
 #     import shell_tightness
 #     return shell_tightness.tf_rel(ctx['cpi'], ctx['wpi'])
+
+# Also prepared but OFF: TF_c_rel = sqrt(tex) x CPI and TF_w_rel = sqrt(tex) x WPI (scripts/shell_tightness.py). Unlike TF_rel these change from run to run in shell1, but at constant CPI x WPI each is a fixed
+# function of CPI / WPI alone (CPI = sqrt(352 R), WPI = sqrt(352 / R)), and log_ratio = ln(CPI / WPI) is already a feature, so they add no information to the search; switching them on only changes the names
+# in which a rule can be written. They are most useful in a campaign in which CPI x WPI varies.
+# def feat_tf_c_rel(T, ctx):
+#     import shell_tightness
+#     return shell_tightness.tf_c_rel(ctx['cpi'])
+# def feat_tf_w_rel(T, ctx):
+#     import shell_tightness
+#     return shell_tightness.tf_w_rel(ctx['wpi'])
