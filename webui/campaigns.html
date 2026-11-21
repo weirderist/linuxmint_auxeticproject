@@ -1,89 +1,44 @@
 <!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Campaigns</title>
-<style>
-:root{color-scheme:light dark;--bg:#fcfcfb;--fg:#0b0b0b;--mut:#52514e;--line:#8884;--card:#8881;--s1:#2a78d6;--warn:#eb6834;--crit:#e34948;--gray:#8a8984;--ok:#1b8a5a;--paused:#b87400;--flagbg:#e3494822;--yelbg:#eda10033}
-@media (prefers-color-scheme:dark){:root:not([data-theme=light]){--bg:#1a1a19;--fg:#f0efec;--mut:#c3c2b7;--s1:#3987e5;--warn:#d95926;--crit:#e66767;--ok:#2fb344;--paused:#eda100}}
-*{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--fg);font-family:system-ui,sans-serif;font-size:15px}
-header{padding:.6rem 1rem;border-bottom:1px solid var(--line);display:flex;gap:1rem;align-items:center;flex-wrap:wrap}
-header h1{font-size:1.1rem;margin:0;flex:1}
-a{color:var(--s1)}
-main{max-width:1250px;margin:0 auto;padding:1rem}
-section{margin:0 0 1.4rem}
-h2{font-size:1rem;margin:0 0 .5rem}
-.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:.8rem 1rem}
-.tabs{display:flex;gap:.4rem;flex-wrap:wrap;margin-bottom:.8rem}
-.tabs button{padding:.3rem .8rem;border:1px solid var(--line);background:transparent;color:var(--fg);border-radius:8px;cursor:pointer}
-.tabs button.on{background:#4a90e233;font-weight:600}
-.pill{display:inline-block;padding:.1rem .7rem;border-radius:12px;font-weight:700;color:#fff}
-.pill.running{background:var(--ok)}.pill.paused{background:var(--paused)}.pill.idle{background:var(--gray)}
-.row{display:flex;gap:1rem;flex-wrap:wrap;align-items:flex-start}
-.act{flex:1;min-width:260px}
-button.big{padding:.45rem 1.1rem;font-size:.95rem;cursor:pointer}
-button:disabled{opacity:.45;cursor:not-allowed}
-.exp{color:var(--mut);font-size:.82rem;margin:.25rem 0 .7rem}
-.bar{height:.9rem;background:var(--line);border-radius:6px;overflow:hidden;display:flex}
-.bar i{display:block;height:100%}
-.mut{color:var(--mut)}.small{font-size:.82rem}
-#msg{margin:.5rem 0;min-height:1.2em;font-size:.88rem}
-#msg.err{color:var(--crit)}
-ul.sum{margin:.2rem 0 0;padding-left:1.1rem}
-ul.sum li{margin:.2rem 0}ul.sum li.warn{color:var(--crit)}ul.sum li.warn::marker{color:var(--crit)}
-.tw{overflow:auto;border:1px solid var(--line);border-radius:8px;max-height:420px}
-table{border-collapse:collapse;width:100%;font-size:.82rem}
-th,td{padding:.3rem .5rem;border-bottom:1px solid var(--line);text-align:right;white-space:nowrap}
-th{position:sticky;top:0;background:var(--bg);cursor:pointer;user-select:none;text-align:right}
-th:first-child,td:first-child,td.l,th.l{text-align:left}
-tbody tr{cursor:pointer}tbody tr:hover{background:var(--card)}tbody tr.sel{background:#4a90e233}
-td.f-ns{background:var(--yelbg)}td.f-ip{background:var(--flagbg)}td.f-nf{background:var(--yelbg)}td.f-fail{background:var(--flagbg)}
-.tag{font-size:.7rem;border:1px solid var(--line);border-radius:6px;padding:0 .3rem;margin-right:.2rem}
-.tag.ns{border-color:var(--warn);color:var(--warn)}.tag.ip{border-color:var(--crit);color:var(--crit)}.tag.nf{border-color:var(--paused);color:var(--paused)}.tag.fail{border-color:var(--crit);color:var(--crit)}
-.charts{display:grid;grid-template-columns:repeat(auto-fill,minmax(290px,1fr));gap:.8rem}
-.charts svg{width:100%;height:auto;display:block}
-svg text{fill:var(--mut);font-size:10px;font-family:system-ui,sans-serif}
-svg .ax{stroke:var(--line);stroke-width:1}svg .gd{stroke:var(--line);stroke-width:.5;opacity:.5}
-.leg{display:flex;gap:1rem;flex-wrap:wrap;font-size:.8rem;color:var(--mut);margin:.3rem 0}
-.leg span::before{content:"";display:inline-block;width:.6rem;height:.6rem;margin-right:.3rem;background:var(--c);border-radius:var(--r,50%)}
-pre{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:.6rem;overflow:auto;font-size:.76rem;max-height:340px;margin:.4rem 0}
-dl{display:grid;grid-template-columns:max-content 1fr;gap:.2rem .8rem;margin:.3rem 0;font-size:.85rem}dt{color:var(--mut)}dd{margin:0}
-code{font-size:.85em}
-details{border:1px solid var(--line);border-radius:8px;padding:.4rem .8rem;margin:.4rem 0}summary{cursor:pointer;font-weight:600}
-.cols td:first-child{white-space:normal}.cols td{white-space:normal;text-align:left;vertical-align:top}
-@media (max-width:700px){main{padding:.6rem}}
-</style></head><body>
-<header><h1>Campaigns</h1><a href="/shell">Pure shell runs &rarr;</a><a href="/">&larr; Simulator and 3D viewer</a></header>
+<link rel="stylesheet" href="/theme.css">
+</head><body>
+<header class="topbar"><h1>Campaigns</h1><a href="/shell">Pure shell runs</a><a href="/">Simulator and 3D viewer</a></header>
 <main>
 <div id="tabs" class="tabs"></div>
 <div id="empty" class="mut" hidden>No campaign folders found.</div>
-<div id="cur" hidden>
+<div id="cur" class="stack" hidden>
  <section class="card">
-  <div class="row"><h2 id="cname" style="margin:0"></h2><span id="pill" class="pill idle">idle</span><span id="pdetail" class="mut small"></span></div>
-  <div class="row" style="margin-top:.7rem">
-   <div class="act"><button id="bStart" class="big">Start / Resume</button>
-    <div class="exp">Starts the runner (the same command as <code>campaign.py run &lt;name&gt; --detach</code>). Runs already finished are never repeated; queued runs continue, and a run cut off by a power failure resumes from its checkpoint.</div>
-    <div class="exp" id="bgNote">Runs in the background. Closing this page or the terminal will not stop it.</div></div>
-   <div class="act"><button id="bStop" class="big">Pause</button>
-    <div class="exp">Asks the runner to stop after the run in progress finishes (it creates the STOP file). Nothing is killed, so this can take as long as one run.</div></div>
+  <div class="card-h">
+   <div class="titlerow"><h2 id="cname"></h2><span id="pill" class="pill idle">idle</span><span id="pdetail" class="mut small"></span></div>
+   <div class="btnrow"><button id="bStart" class="primary">Start / Resume</button><button id="bStop">Pause</button></div>
+  </div>
+  <div class="hints">
+   <p class="hint">Start / Resume runs <code>campaign.py run &lt;name&gt; --detach</code> in the background; finished runs are never repeated, and a run cut off by a power failure resumes from its checkpoint. <span id="bgNote">Closing this page or the terminal does not stop it.</span></p>
+   <p class="hint">Pause asks the runner to stop after the run in progress finishes (it creates the STOP file). Nothing is killed, so it can take as long as one run.</p>
   </div>
   <div id="msg"></div>
   <div class="bar" id="bar" title=""></div>
-  <div class="small mut" id="barTxt" style="margin-top:.3rem"></div>
-  <div class="small" id="eta" style="margin-top:.3rem"></div>
+  <div class="counts" id="barTxt"></div>
+  <div class="small mut" id="eta"></div>
  </section>
- <section><h2>Summary (generated from the numbers by fixed rules)</h2><div class="card"><ul class="sum" id="sum"></ul></div></section>
- <section><h2>Runs <span class="mut small">click a header to sort, click a row for the detail</span></h2>
-  <div class="leg"><span style="--c:var(--warn);--r:2px">did not settle</span><span style="--c:var(--crit);--r:2px">closest yarn approach below 0.97</span><span style="--c:var(--paused);--r:2px">no fold above the threshold</span></div>
+ <section class="card"><div class="card-h"><span class="card-t">Summary</span><span class="mut small">generated from the numbers by fixed rules</span></div><ul class="sum" id="sum"></ul></section>
+ <section class="card">
+  <div class="card-h"><span class="card-t">Runs</span><span class="mut small">click a header to sort, a row for the detail</span></div>
+  <p class="legend-text" id="rleg">Flags: <b>failed</b> the run ended in failure; <b>not settled</b> the iteration limit was reached before the energy stopped changing; <b>interpenetration</b> the closest yarn approach is below 0.97 of the contact distance; <b>no fold</b> no fold above the threshold.</p>
   <div class="tw"><table id="tbl"></table></div>
-  <div id="detail"></div></section>
- <section><h2>Charts</h2>
+  <div id="detail"></div>
+ </section>
+ <section>
   <div class="leg" id="cleg"></div>
-  <div class="charts" id="scat"></div>
-  <div style="margin-top:.8rem"><label class="small">Metric against run order: <select id="ymet"></select></label></div>
-  <div class="charts" id="order" style="grid-template-columns:1fr"></div></section>
- <section><details><summary>What the columns mean</summary><div id="help" class="small"></div></details></section>
+  <div class="charts" id="charts">
+   <div id="scat" style="display:contents"></div>
+   <div class="card chart" id="ordercard"><div class="card-h"><span class="card-t">Metric against run order</span><select id="ymet" aria-label="metric"></select></div><div id="order"></div></div>
+  </div>
+ </section>
+ <section><details class="box"><summary>What the columns mean</summary><div id="help" class="small"></div></details></section>
 </div>
-<section><h2>Datasets <span class="mut small">read only</span></h2><div class="tw"><table id="dst" class="cols"></table></div></section>
+<section class="card"><div class="card-h"><span class="card-t">Datasets</span><span class="mut small">read only</span></div><div class="tw"><table id="dst" class="cols ds"></table></div></section>
 </main>
 <script src="/campaigns.js"></script>
 </body></html>

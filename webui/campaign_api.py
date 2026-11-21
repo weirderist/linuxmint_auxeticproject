@@ -496,3 +496,8 @@ def page():
 @router.get("/campaigns.js")
 def page_js():
     return Response((HERE / "campaigns.js").read_text(encoding="utf8"), media_type="application/javascript")
+
+@router.get("/theme.css")
+def page_theme():
+    """The shared stylesheet of the pages (webui/theme.css): the one place where the colours, sizes and spacing are defined."""
+    return Response((HERE / "theme.css").read_text(encoding="utf8"), media_type="text/css", headers={"Cache-Control": "no-cache"})
