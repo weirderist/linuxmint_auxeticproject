@@ -106,6 +106,91 @@ async function rules() {
         '<div class="tw"><table><thead><tr><th class="l">feature</th><th>per unit</th><th>standardised</th><th>selected in bootstrap refits</th></tr></thead><tbody>' + la.coefficients.map(c => '<tr><td class="l">' + esc(c.feature) + "</td><td>" + fmt(c.per_unit) + "</td><td>" + fmt(c.coefficient_std) + "</td><td>" + Math.round(100 * c.stability) + " %</td></tr>").join("") + "</tbody></table></div><pre>" + esc(t.tree.rules.join("\n")) + "</pre>"; }).join("");
   } catch (e) { box.textContent = e.message; }
 }
+// ---- scheduled analysis panel (read only: /api/shell/<c>/analysis and /analysis/<run count>; it starts nothing). Thresholds in the definitions come from the result's own parameters.
+let anSel = null;
+const GUARD_TEXT = { enough_runs: "fewer runs than the minimum carry this descriptor", stable: "no term reached the stability threshold", support: "no stable term had enough supporting runs",
+  beats_linear: "the candidate did not beat the existing linear rules on the held-out runs (95 % interval not above zero)", permutation: "the false-discovery estimate was above its limit, or no term was found" };
+function anDefs(p) {
+  p = p || {}; const pi = p.pi_thr != null ? Math.round(100 * p.pi_thr) + " %" : "the stability threshold", fdr = p.max_fdr != null ? p.max_fdr : "its limit", sup = p.min_support != null ? p.min_support : "the minimum";
+  const D = [["Held-out runs", "finished runs set aside by a fixed rule on the run id (a run never changes sides); they are never used to choose or fit anything, only to measure errors."],
+    ["Held-out RMSE", "root-mean-square error of a model's predictions on the held-out runs, in the units of the predicted descriptor; lower is better."],
+    ["Budget", "the number of runs a model is trained on: a random start of 10 runs, grown either by the proposer's selection rule or by random picking."],
+    ["Standard error (SE)", "the uncertainty of a mean over repeated trials: the standard deviation of the trials divided by the square root of their number. The error bars show one SE above and below the mean."],
+    ["Verdict", "the mean difference proposer minus random, in units of each descriptor's held-out standard deviation: better than random if the difference plus 2 SE is below zero, worse if the difference minus 2 SE is above zero, otherwise no different."],
+    ["Stability selection", "the term selection (a sparse regression) is repeated on many random halves of the runs; the stability of a term is the share of halves in which it is selected. Only terms with a stability of at least " + pi + " count (Meinshausen and Buehlmann 2010)."],
+    ["False-discovery estimate", "the whole search is repeated with the descriptor values shuffled between runs, which removes any real relation; the mean number of terms found then, divided by the number found in the real data, estimates the share of found terms that are chance. A rule is reported only if it is at most " + fdr + " (UNSOURCED limit)."],
+    ["Held-out improvement", "the mean squared error of the existing linear rules minus that of the new rule on the held-out runs, with its 95 % bootstrap interval; a rule is reported only if the whole interval is above zero."],
+    ["Supporting runs", "the number of runs in which a term differs from its most common value; stable terms with fewer than " + sup + " are removed and listed (UNSOURCED threshold)."],
+    ["Linear-only", "the rule uses only features of the existing linear rules; it can beat them only through an unshrunk least-squares refit, not through a new term."]];
+  $("#andefs").innerHTML = D.map(d => "<dt>" + esc(d[0]) + "</dt><dd>" + esc(d[1]) + "</dd>").join("");
+}
+function anToolText(a, ms, t) {
+  if (!ms) return "waiting (" + a.finished + " of " + a.next_milestone + " finished runs)";
+  const v = ms.tools[t] || {}, prev = (v.attempts || []).filter(x => x.status === "interrupted").length, more = prev ? " (" + prev + " earlier attempt" + (prev > 1 ? "s" : "") + " interrupted)" : "";
+  if (v.status === "done") return "done at " + esc(v.finished || "") + ", on " + esc(ms.n_used) + " finished runs" + more;
+  if (v.status === "running") return "running since " + esc(v.started || "") + more;
+  if (v.status === "failed" || v.status === "interrupted") return esc(v.status) + ": " + esc(v.reason || "no reason recorded") + more;
+  return "queued (the run count " + esc(ms.milestone) + " is reached; the tool starts at the next check of the scheduled job)";
+}
+function anStatus(a, ms) {
+  const sch = a.scheduler || {}, due = (a.due || []).filter(m => !a.milestones.some(x => x.milestone === m));
+  let h = "<div>Finished runs counted: <b>" + a.finished + "</b> (status done, control runs excluded, as the tools count them). Next analysis at " + a.next_milestone + " finished runs." +
+    (due.length ? " Reached but not yet started: " + due.join(", ") + "." : "") + '</div><div class="mut">Scheduled job: ' +
+    (sch.alive ? "running (pid " + esc(sch.pid) + "), last check " + esc(sch.last_check || "") : sch.last_check ? "not running; last check " + esc(sch.last_check) : "not running and never run (it is installed on the server; this page cannot start it)") + "</div>";
+  h += '<div class="an-tools">' + ["proposer_eval", "rules_sr"].map(t => '<div class="an-tool"><b>' + esc(a.tools[t]) + "</b><br>" + (ms ? "run count " + esc(ms.milestone) + ": " : "") + anToolText(a, ms, t) + "</div>").join("") + "</div>";
+  $("#anstat").innerHTML = h;
+}
+function anProposer(r) {
+  const box = $("#anpe"), ch = $("#ancharts"); ch.innerHTML = ""; $("#anleg").innerHTML = "";
+  if (!r) { box.innerHTML = '<span class="mut">No result for this run count yet.</span>'; return; }
+  if (r.status !== "ok") { box.innerHTML = '<span class="mut">' + esc(r.note || r.status) + "</span>"; return; }
+  box.innerHTML = '<div class="an-verdict">Verdict: the proposer&#39;s selection is ' + esc(r.verdict_short) + ".</div><div>" + esc(r.verdict) + ". " + esc(r.n_test) + " held-out runs, " + esc(r.n_pool) + " runs to pick from, " + esc(r.repeats) +
+    ' trials.</div><div class="note">' + esc(r.limits) + ".</div>";
+  ch.innerHTML = r.targets.map((t, i) => '<div class="chart" id="anc' + i + '"></div>').join("");
+  r.targets.forEach((t, i) => {
+    const el = $("#anc" + i), P = [];
+    for (const b of r.per_budget) for (const [k, cls, shape, name] of [["proposer", "g0", "circle", "proposer's rule"], ["random", "g1", "diamond", "random picking"]]) {
+      const v = b[k][t]; P.push({ x: b.budget, y: v.mean_rmse, err: v.se, cls, shape, tip: name + ", budget " + b.budget + ": held-out RMSE " + fmt(v.mean_rmse) + " (SE " + fmt(v.se) + ")" }); }
+    el.innerHTML = ChartKit.scatter(P, { xlabel: "budget (runs trained on)", ylabel: "held-out RMSE of " + t, line: "cls" }, ChartKit.size(el));
+  });
+  $("#anleg").innerHTML = '<span class="g0">proposer&#39;s selection rule</span><span class="g1">random picking</span><span>error bars: one standard error</span>';
+}
+function anRules(r) {
+  const box = $("#ansr");
+  if (!r) { box.innerHTML = '<span class="mut">No result for this run count yet.</span>'; return; }
+  let h = '<div><span class="bold">' + esc(r.label) + "</span>. " + esc(r.n_finished) + " finished runs, computed at " + esc(r.generated) + ".</div>";
+  for (const t of r.targets || []) {
+    h += "<h3>" + esc(t.target) + "</h3>";
+    if (t.status === "waiting") { h += '<div class="mut">' + esc(t.note) + "</div>"; continue; }
+    const ru = t.rule || null, cand = t.candidate || null, perm = t.permutation || {};
+    if (ru) {
+      h += '<div class="an-formula">' + esc(ru.formula) + "</div>" + (ru.only_existing_features ? '<div><span class="tag">linear-only</span>' + esc(ru.note || "") + "</div>" : "") +
+        '<div class="tw"><table><thead><tr><th class="l">term</th><th>coefficient</th><th>stability</th><th>supporting runs</th><th>complexity</th></tr></thead><tbody>' +
+        ru.terms.map(x => '<tr><td class="l">' + esc(x.term) + "</td><td>" + esc(fmt(x.coefficient)) + "</td><td>" + Math.round(100 * x.stability) + " %</td><td>" + esc(x.supporting_runs) + "</td><td>" + esc(x.complexity) + "</td></tr>").join("") + "</tbody></table></div>" +
+        "<div>Held-out mean squared error: rule " + esc(fmt(ru.heldout_mse)) + ", existing linear rules " + esc(fmt(t.heldout_mse_linear_rules)) + ", mean of the runs " + esc(fmt(t.heldout_mse_mean)) +
+        ". Held-out improvement over the linear rules: 95 % interval " + esc(fmt(ru.improvement_over_linear_ci95[0])) + " to " + esc(fmt(ru.improvement_over_linear_ci95[1])) + ".</div>";
+    } else {
+      h += "<div><b>No rule met the criteria.</b> " + esc((t.failed_guards || []).map(g => GUARD_TEXT[g] || g).join("; ")) + ".</div>" +
+        (cand ? '<div class="mut">Best candidate, not reported: <span class="an-formula">' + esc(cand.formula) + "</span></div>" : "");
+    }
+    h += "<div>False-discovery estimate: " + (perm.fdr_estimate == null ? "not defined (no term found)" : esc(fmt(perm.fdr_estimate))) + " (" + esc(perm.perms) + " shuffled repetitions, mean " + esc(fmt(perm.mean_stable_terms_by_chance)) + " terms found by chance).</div>";
+    const rem = t.stable_terms_without_support || [];
+    if (rem.length) h += '<div class="mut">Stable terms removed for too few supporting runs: ' + rem.map(x => esc(x.term) + " (" + esc(x.supporting_runs) + " runs)").join(", ") + ".</div>";
+  }
+  box.innerHTML = h;
+}
+async function analysis() {
+  try {
+    const a = await api("/api/shell/" + encodeURIComponent(cur) + "/analysis"), pick = $("#anpick"), ms = a.milestones.slice().reverse();
+    const opts = ms.map(m => String(m.milestone)), keep = anSel && opts.includes(anSel) ? anSel : (opts[0] || null);
+    if (pick.options.length !== opts.length) { pick.innerHTML = ms.map(m => '<option value="' + esc(m.milestone) + '">' + esc(m.milestone) + " finished runs</option>").join(""); pick.onchange = () => { anSel = pick.value; analysis(); }; }
+    pick.disabled = !opts.length; if (keep) pick.value = keep; anSel = keep;
+    const sel = ms.find(m => String(m.milestone) === keep) || null; anStatus(a, sel);
+    if (!sel) { anProposer(null); anRules(null); anDefs(null); return; }
+    const one = await api("/api/shell/" + encodeURIComponent(cur) + "/analysis/" + encodeURIComponent(keep));
+    anProposer(one.results.proposer_eval); anRules(one.results.rules_sr); anDefs(one.results.rules_sr && one.results.rules_sr.params);
+  } catch (e) { $("#anstat").textContent = e.message; }
+}
 async function act(kindName) { busy = true; msg("Working"); try { const j = await api("/api/shell/" + encodeURIComponent(cur) + "/" + kindName, { method: "POST" }); msg(j.message || "Done.", false); } catch (e) { msg(e.message, true); } busy = false; setTimeout(refresh, 1500); refresh(); }
 $("#bStart").onclick = () => { if (confirm("Start shell campaign '" + cur + "'? It goes on until you pause; finished runs are never repeated.")) act("start"); };
 $("#bPause").onclick = () => act("pause"); $("#bCont").onclick = () => act("continue");
@@ -124,7 +209,7 @@ $("#bDel").onclick = async () => {
   } catch (e) { msg(e.message, true); }
   refresh();
 };
-async function refresh() { try { await loadList(); if (!cur) return; data = await api("/api/shell/" + encodeURIComponent(cur)); header(); table(); charts(); rules(); if (openRun && !$("#detail").firstChild) showDetail(openRun); } catch (e) { msg(e.message, true); } }
+async function refresh() { try { await loadList(); if (!cur) return; data = await api("/api/shell/" + encodeURIComponent(cur)); header(); table(); charts(); rules(); analysis(); if (openRun && !$("#detail").firstChild) showDetail(openRun); } catch (e) { msg(e.message, true); } }
 let resizeTimer = null;
-window.addEventListener("resize", () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(() => { if (data) charts(); }, 150); });
+window.addEventListener("resize", () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(() => { if (data) { charts(); analysis(); } }, 150); });
 refresh(); setInterval(() => { if (!document.hidden) refresh(); }, 15000);

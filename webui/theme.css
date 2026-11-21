@@ -159,6 +159,15 @@ details.box > summary { cursor: pointer; font-weight: 600; }
 .cl-ok, .g0 { --c: var(--chart-1); } .cl-ns, .g1 { --c: var(--chart-2); } .cl-ip, .g2 { --c: var(--chart-3); } .cl-fail, .g3 { --c: var(--chart-4); }
 .g4 { --c: var(--chart-5); } .g5 { --c: var(--chart-6); } .g6 { --c: var(--chart-7); } .g7 { --c: var(--chart-8); }
 .chart .mk { fill: var(--c); } .chart .mk.cross { fill: none; stroke: var(--c); stroke-width: 2; }
+/* series lines and error bars (analysis panel): drawn in the colour of their class */
+.chart .dl.ser { stroke: var(--c); } .chart .eb { fill: none; stroke: var(--c); stroke-width: 1.5; }
+/* analysis panel */
+.an-tools { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px var(--gap); margin: 6px 0 4px; }
+@media (max-width: 760px) { .an-tools { grid-template-columns: minmax(0, 1fr); } }
+.an-tool { border: 1px solid var(--line); border-radius: var(--radius-s); padding: 8px 12px; font-size: var(--fs-sm); }
+.an-verdict { font-weight: 600; margin: 6px 0; }
+.an-formula { font-family: var(--mono); font-size: var(--fs-sm); margin: 4px 0; }
+.an-defs dt { font-weight: 600; color: var(--fg); } .an-defs dd { margin: 0 0 6px; color: var(--mut); font-size: var(--fs-xs); }
 .leg { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: var(--fs-sm); color: var(--mut); }
 .leg span::before { content: ""; display: inline-block; width: 8px; height: 8px; margin-right: 7px; border-radius: 50%; background: var(--c, var(--dot-idle)); }
 

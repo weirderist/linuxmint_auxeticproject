@@ -43,6 +43,13 @@
  </section>
  <section class="card" id="cmpsec" hidden><div class="card-h"><span class="card-t">Comparison of the selected runs</span><span class="mut small">settings that differ are shaded</span></div><div class="tw"><table id="cmp"></table></div></section>
  <section class="card"><div class="card-h"><span class="card-t">Rules framed from the finished runs</span><span class="mut small">offline job, numpy only, not shown below 100 runs</span></div><div class="small rules" id="rules">loading</div></section>
+ <section class="card" id="ansec"><div class="card-h"><span class="card-t">Analysis</span><span class="mut small">scheduled offline job, every 100 finished runs; this panel only displays results and starts nothing</span><label>results of <select id="anpick" aria-label="run count"></select></label></div>
+  <div id="anstat" class="small"></div>
+  <h3>Proposer evaluation against random picking</h3><div id="anpe" class="small"></div>
+  <div class="charts" id="ancharts"></div><div class="leg" id="anleg"></div>
+  <h3>Open-ended rule search</h3><div id="ansr" class="small rules"></div>
+  <details class="box mt"><summary>Definitions</summary><dl class="an-defs" id="andefs"></dl></details>
+ </section>
 </div>
 </main>
 <script src="/chartkit.js"></script>

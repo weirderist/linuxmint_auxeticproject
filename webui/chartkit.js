@@ -21,12 +21,13 @@ const ChartKit = (() => {
     if (p.shape === "cross") return '<path class="' + c + ' cross" d="M' + (x - r) + " " + (y - r) + "l" + (2 * r) + " " + (2 * r) + "m0 -" + (2 * r) + "l-" + (2 * r) + " " + (2 * r) + '">' + t + "</path>";
     return '<circle class="' + c + '" cx="' + x + '" cy="' + y + '" r="' + r + '">' + t + "</circle>";
   }
-  // pts: [{x, y, cls, shape, tip}]; o: {xlog, xlabel, ylabel, line}; S: {W, H} from size()
+  // pts: [{x, y, cls, shape, tip, err}]; o: {xlog, xlabel, ylabel, line}; S: {W, H} from size()
+  // optional: err = half-length of a vertical error bar (drawn in the point's colour); line: true = one line through all points, "cls" = one line per class (series)
   function scatter(pts, o, S) {
     const { W, H } = S, L = CH.L, R = CH.R, T = CH.T, B = CH.B;
     if (!pts.length) return '<svg class="nodata" width="' + W + '" height="' + H + '" role="img" aria-label="no data yet"><rect x="0.5" y="0.5" width="' + (W - 1) + '" height="' + (H - 1) + '" rx="6"/><text x="' + (W / 2) + '" y="' + (H / 2) + '" text-anchor="middle">no data yet for ' + esc(o.xlabel) + "</text></svg>";
     const fx = o.xlog ? Math.log : (v => v);
-    const xs = pts.map(p => fx(p.x)), ys = pts.map(p => p.y);
+    const xs = pts.map(p => fx(p.x)), ys = pts.flatMap(p => p.err > 0 ? [p.y - p.err, p.y + p.err] : [p.y]);
     let x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(0, ...ys), y1 = Math.max(...ys);
     if (x1 === x0) { x0 -= 1; x1 += 1; } if (y1 === y0) y1 = y0 + 1;
     const pad = (x1 - x0) * 0.05; x0 -= pad; x1 += pad; y1 += (y1 - y0) * 0.06;
@@ -37,7 +38,9 @@ const ChartKit = (() => {
     for (const v of xt) s += '<line class="ax" x1="' + half(X(v)) + '" x2="' + half(X(v)) + '" y1="' + (H - B) + '" y2="' + (H - B + 5) + '"/><text x="' + f1(X(v)) + '" y="' + (H - B + 20) + '" text-anchor="middle">' + esc(num(+v.toPrecision(3))) + "</text>";
     s += '<line class="ax" x1="' + L + '" x2="' + (W - R) + '" y1="' + half(H - B) + '" y2="' + half(H - B) + '"/><line class="ax" x1="' + half(L) + '" x2="' + half(L) + '" y1="' + T + '" y2="' + (H - B) + '"/>';
     s += '<text x="' + L + '" y="16" text-anchor="start">' + esc(o.ylabel) + '</text><text x="' + f1(L + (W - L - R) / 2) + '" y="' + (H - 8) + '" text-anchor="middle">' + esc(o.xlabel + (o.xlog ? " (log scale)" : "")) + "</text>";
-    if (o.line) { const q = pts.slice().sort((a, b) => a.x - b.x); s += '<polyline class="dl" points="' + q.map(p => f1(X(p.x)) + "," + f1(Y(p.y))).join(" ") + '"/>'; }
+    if (o.line === "cls") { for (const c of Array.from(new Set(pts.map(p => p.cls)))) { const q = pts.filter(p => p.cls === c).sort((a, b) => a.x - b.x); s += '<polyline class="dl ser ' + esc(c) + '" points="' + q.map(p => f1(X(p.x)) + "," + f1(Y(p.y))).join(" ") + '"/>'; } }
+    else if (o.line) { const q = pts.slice().sort((a, b) => a.x - b.x); s += '<polyline class="dl" points="' + q.map(p => f1(X(p.x)) + "," + f1(Y(p.y))).join(" ") + '"/>'; }
+    for (const p of pts) if (p.err > 0) { const x = half(X(p.x)), a = f1(Y(p.y - p.err)), b = f1(Y(p.y + p.err)); s += '<path class="eb ' + esc(p.cls || "g0") + '" d="M' + x + " " + a + "V" + b + "M" + (x - 4) + " " + a + "h8M" + (x - 4) + " " + b + 'h8"/>'; }
     for (const p of pts) s += mark(p, +X(p.x).toFixed(1), +Y(p.y).toFixed(1));
     return s + "</svg>";
   }

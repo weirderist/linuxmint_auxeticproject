@@ -449,6 +449,48 @@ def shell_rules(name: str):
     if r is None: return {"status": "not run yet", "min_runs": 100, "n_finished": sum(1 for x in c.index_last().values() if x.get("status") == "done"), "label": "learned from the shell, not confirmed on real fabric"}
     return r
 
+# ------------------------------------------------------------------ scheduled analysis (scripts/shell_analysis_job.py): READ ONLY. Nothing here starts, stops or changes a tool; it reads analysis/scheduled/.
+MILESTONE_RE = re.compile(r"^[0-9]{1,6}$")
+def _aj(): return _load("shell_analysis_job", SCRIPTS / "shell_analysis_job.py")
+
+def _milestones(c):
+    aj = _aj(); d = Path(aj.adir(c)); out = []
+    if d.is_dir():
+        for p in sorted((p for p in d.iterdir() if p.is_dir() and MILESTONE_RE.match(p.name)), key=lambda p: int(p.name)):
+            st = _rjson(p / "status.json")
+            if st: out.append(st)
+    return out
+
+def _tool_view(st, t):
+    tt = (st.get("tools") or {}).get(t) or {}; atts = tt.get("attempts") or []; last = atts[-1] if atts else {}
+    return {"status": tt.get("status", "queued"), "reason": tt.get("reason") or last.get("reason", ""), "started": last.get("started"), "finished": last.get("finished"), "attempts": [{k: a.get(k) for k in ("status", "started", "finished", "reason")} for a in atts]}
+
+@router.get("/api/shell/{name}/analysis")
+def shell_analysis(name: str):
+    """Status of the two scheduled tools for every run count, the scheduler heartbeat, and the latest complete result of each tool."""
+    sc, c = _shell(name); aj = _aj(); n = len(aj.finished_order(c)); state = _rjson(Path(aj.adir(c)) / "state.json") or {}
+    loop = state.get("loop") or {}
+    try: alive = bool(loop) and aj.holder_alive(loop)
+    except Exception: alive = False
+    ms = _milestones(c); latest = {}
+    for t in aj.TOOLS:
+        for st in reversed(ms):
+            f = Path(aj.mdir(c, st["milestone"])) / (t + ".json")
+            if (st["tools"].get(t) or {}).get("status") == "done" and f.is_file(): latest[t] = dict(_rjson(f) or {}, milestone=st["milestone"]); break
+    return {"campaign": name, "every": aj.EVERY, "finished": n, "next_milestone": aj.next_milestone(n), "due": aj.due(n),
+            "scheduler": {"last_check": state.get("last_check"), "alive": alive, "pid": loop.get("pid")},
+            "milestones": [{"milestone": st["milestone"], "n_used": st.get("n_used"), "created": st.get("created"), "tools": {t: _tool_view(st, t) for t in aj.TOOLS}} for st in ms],
+            "tools": {t: aj.TOOL_TEXT[t] for t in aj.TOOLS}, "latest": latest, "label": "learned from the shell, not confirmed on real fabric"}
+
+@router.get("/api/shell/{name}/analysis/{milestone}")
+def shell_analysis_one(name: str, milestone: str):
+    """Status and both results of one run count (history)."""
+    sc, c = _shell(name); aj = _aj()
+    if not MILESTONE_RE.match(milestone): raise HTTPException(404, "bad run count")
+    d = Path(aj.mdir(c, int(milestone))); st = _rjson(d / "status.json")
+    if not st: raise HTTPException(404, "no analysis for this run count")
+    return {"milestone": st["milestone"], "n_used": st.get("n_used"), "tools": {t: _tool_view(st, t) for t in aj.TOOLS}, "results": {t: _rjson(d / (t + ".json")) for t in aj.TOOLS}}
+
 def _page(name, media):
     return Response((HERE / name).read_text(encoding="utf8"), media_type=media, headers={"Cache-Control": "no-cache"})
 
