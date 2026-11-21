@@ -1,4 +1,6 @@
-# PREPARED, NOT INSTALLED. Alternative to deploy/shell_runner@.service (choose one). K installs it with:  crontab -e   and pastes the line below (replace shell1 by the campaign name).
-# It starts the runner from the campaign's FROZEN copy (code/). A cron job runs outside any service cgroup, so restarting auxetic_webui.service does not touch it.
-# 90 s after boot it starts the detached runner (own session, survives closing the terminal). The runner holds a flock, so a second start is harmless; it continues only if control.json says "run".
+# PREPARED, NOT INSTALLED. Alternative to deploy/shell_runner@.service (choose one for the runner). K appends these lines with:  crontab -e  (keep the existing lines) or the one-line install in the setup instructions.
+# Line 1: 90 s after boot, start the detached runner of campaign shell1 from its FROZEN copy (own session, SIGHUP ignored, flock: a second start is harmless). It continues only if control.json says "run"; Pause keeps it idle, Stop makes it exit.
+# Lines 2 and 3: the offline rule job and the proposer, at nice 19 (the @reboot of line 1 does not restart them). They are stateless: after a reboot they simply start again. No pgrep guard is used on purpose: pgrep -f would match the cron shell itself.
 @reboot sleep 90 && /home/sarvesh/auxetic_project/venv/bin/python /home/sarvesh/auxetic_project/campaigns/shell_runs/shell1/code/campaign.py shell-run shell1 --detach
+@reboot sleep 150 && /usr/bin/setsid /usr/bin/nice -n 19 /home/sarvesh/auxetic_project/venv/bin/python /home/sarvesh/auxetic_project/scripts/shell_rules.py shell1 --every 25 --poll-s 300 >> /home/sarvesh/shell_logs/rules_shell1.log 2>&1 &
+@reboot sleep 180 && /usr/bin/setsid /usr/bin/nice -n 19 /home/sarvesh/auxetic_project/venv/bin/python /home/sarvesh/auxetic_project/scripts/shell_proposer.py shell1 --poll-s 600 >> /home/sarvesh/shell_logs/proposer_shell1.log 2>&1 &
