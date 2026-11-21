@@ -6,6 +6,9 @@ const code = s => esc(s).replace(/`([^`]+)`/g, "<code>$1</code>");
 let cur = null, data = null, sortKey = "run", sortDir = 1, selRun = null, busyAction = false;
 const SHOW = ["exit_code", "rel_dE_last", "min_dist_over_2R_end", "fold_direction", "fold_amplitude_mm", "fold_local_amplitude_mm", "wall_s"];
 const FOLD_Y = "fold_amplitude_mm";
+// display-only tightness columns, computed by the server from each run's CPI, WPI and Ne (definitions in the note under the table)
+const TIGHT = ["stitch_density", "tf_rel"], HEAD = { stitch_density: "S", tf_rel: "TF_rel" }, hname = h => HEAD[h] || h;
+function tnote() { const t = data.tightness; $("#tnote").innerHTML = t ? "<b>S</b>: " + esc(t.label_stitch_density) + ". <b>TF_rel</b>: " + esc(t.label_tf_rel) + (t.constant_note ? ". Both are " + esc(t.constant_note) : "") + ". " + esc(t.note) + " The yarn-level tightness factor recorded in meta.json (from the as-built loop length) is a separate value." : ""; }
 
 async function api(path, opt) {
   const r = await fetch(path, opt);
@@ -87,8 +90,8 @@ function flagTags(f) {
   return s;
 }
 function table() {
-  const cols = ["run", "status"].concat(data.params, SHOW), runs = sortedRuns(data.runs);
-  let h = "<thead><tr>" + cols.map(c => '<th data-k="' + esc(c) + '"' + (c === "fold_direction" || c === "status" ? ' class="l"' : "") + ">" + esc(c) + (c === sortKey ? (sortDir > 0 ? " ▲" : " ▼") : "") + "</th>").join("") + '<th class="l" data-k="">flags</th></tr></thead><tbody>';
+  const cols = ["run", "status"].concat(data.params, TIGHT, SHOW), runs = sortedRuns(data.runs);
+  let h = "<thead><tr>" + cols.map(c => '<th data-k="' + esc(c) + '"' + (c === "fold_direction" || c === "status" ? ' class="l"' : "") + ">" + esc(hname(c)) + (c === sortKey ? (sortDir > 0 ? " ▲" : " ▼") : "") + "</th>").join("") + '<th class="l" data-k="">flags</th></tr></thead><tbody>';
   for (const r of runs) {
     const f = r.flags || {};
     h += '<tr data-run="' + esc(r.run) + '"' + (r.run === selRun ? ' class="sel"' : "") + ">";
@@ -100,7 +103,7 @@ function table() {
   }
   const t = $("#tbl"); t.innerHTML = h + "</tbody>";
   t.querySelectorAll("th[data-k]").forEach(th => th.onclick = () => { const k = th.dataset.k; if (!k) return; if (k === sortKey) sortDir = -sortDir; else { sortKey = k; sortDir = 1; } table(); });
-  t.querySelectorAll("tbody tr").forEach(tr => tr.onclick = () => openRun(tr.dataset.run));
+  t.querySelectorAll("tbody tr").forEach(tr => tr.onclick = () => openRun(tr.dataset.run)); tnote();
 }
 async function openRun(id) {
   selRun = id; table();
@@ -112,7 +115,7 @@ async function openRun(id) {
       (j.reason ? '<div class="small"><b>Reason:</b> ' + esc(j.reason) + "</div>" : "") +
       '<div class="small links">' + [["/?run=", "Open in viewer"], ["/strain?run=", "Strain page"], ["/run?run=", "Run graphs"]].map(l => '<a href="' + l[0] + encodeURIComponent(j.campaign) + "/" + encodeURIComponent(j.run) + '" target="_blank" rel="noopener">' + l[1] + "</a>").join(" &middot; ") + "</div>" +
       '<div class="small mut">attempts ' + j.attempts + ", interruptions " + j.interrupted + ", exit code " + esc(j.exit_code == null ? "-" : j.exit_code) + ", wall time " + esc(j.wall_s == null ? "-" : dur(j.wall_s)) + "</div>" +
-      '<div class="row"><div class="col"><b>Parameters</b>' + kv(j.params) + '</div><div class="col col2"><b>Metrics</b>' + kv(j.metrics) + "</div></div>" +
+      '<div class="row"><div class="col"><b>Parameters</b>' + kv(j.params) + (j.nominal ? '<b>Nominal tightness (display only)</b>' + kv({ "S (stitches per square inch)": j.nominal.stitch_density, "TF_rel (tex^0.5 per inch)": j.nominal.tf_rel }) : "") + '</div><div class="col col2"><b>Metrics</b>' + kv(j.metrics) + "</div></div>" +
       "<b>Last 40 lines of relax.log</b><pre>" + esc(j.log_tail || "(no log yet)") + "</pre></div>";
     el.scrollIntoView({ block: "nearest", behavior: "smooth" });
   } catch (e) { el.innerHTML = '<div class="card mt"><b>Error:</b> ' + esc(e.message) + "</div>"; }
@@ -124,11 +127,12 @@ function cls(r) { const f = r.flags || {}; return f.failed ? "fail" : f.interpen
 function pt(r, x, y, tip) { const k = cls(r); return { x, y, cls: "cl-" + k, shape: CLS[k].shape, tip }; }
 function charts() {
   $("#cleg").innerHTML = Object.keys(CLS).map(k => '<span class="cl-' + k + '">' + esc(CLS[k].n) + "</span>").join("");
-  const vary = data.varied.length ? data.varied : data.params.map(p => ({ name: p, scale: "linear" })), S = ChartKit.size($("#order"));
+  let vary = data.varied.length ? data.varied : data.params.map(p => ({ name: p, scale: "linear" })), S = ChartKit.size($("#order"));
+  if (data.tightness && data.tightness.constant === false) vary = vary.concat(TIGHT.map(k => ({ name: k, scale: "linear" })));          // only when S differs between runs (otherwise every point sits at one x)
   let h = "";
   for (const v of vary) {
     const pts = data.runs.filter(r => r[v.name] != null && r[FOLD_Y] != null && (v.scale !== "log" || r[v.name] > 0)).map(r => pt(r, r[v.name], r[FOLD_Y], "run " + r.run + ": " + v.name + " " + fmt(r[v.name]) + ", " + FOLD_Y + " " + fmt(r[FOLD_Y])));
-    h += '<div class="card chart"><div class="card-h"><span class="card-t">' + esc(FOLD_Y) + " against " + esc(v.name) + "</span></div>" + ChartKit.scatter(pts, { xlog: v.scale === "log", xlabel: v.name, ylabel: "fold amplitude (mm)" }, S) + "</div>";
+    h += '<div class="card chart"><div class="card-h"><span class="card-t">' + esc(FOLD_Y) + " against " + esc(hname(v.name)) + "</span></div>" + ChartKit.scatter(pts, { xlog: v.scale === "log", xlabel: hname(v.name), ylabel: "fold amplitude (mm)" }, S) + "</div>";
   }
   $("#scat").innerHTML = h;
   const sel = $("#ymet"), keep = sel.value || "min_dist_over_2R_end";

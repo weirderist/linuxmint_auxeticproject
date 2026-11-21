@@ -14,9 +14,12 @@ function fmt(v, k) {
 }
 function dur(s) { if (s == null) return ""; s = Math.round(s); const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60); return h ? h + " h " + m + " min" : m ? m + " min" : s + " s"; }
 let cur = null, data = null, busy = false, sortKey = "run", sortDir = 1, openRun = null; const sel = new Set();
-const COLS = ["status", "source", "label", "tiles", "cpi", "wpi", "ratio", "matrix", "knit_fraction", "plan_x", "plan_y", "thickness", "shrink_x", "shrink_y", "wave_k", "wave_amp_median_mm", "mid_over_end", "steps_at_cap", "score", "wall_s", "git_commit"];
-const NUM = ["tiles", "cpi", "wpi", "ratio", "knit_fraction", "plan_x", "plan_y", "thickness", "shrink_x", "shrink_y", "fold_kx_per_mm", "fold_ky_per_mm", "wave_k", "wave_amp_median_mm", "mid_over_end", "steps_at_cap", "iterations_total", "wall_s", "solver_seconds", "tier", "score"];
+const COLS = ["status", "source", "label", "tiles", "cpi", "wpi", "ratio", "stitch_density", "tf_rel", "matrix", "knit_fraction", "plan_x", "plan_y", "thickness", "shrink_x", "shrink_y", "wave_k", "wave_amp_median_mm", "mid_over_end", "steps_at_cap", "score", "wall_s", "git_commit"];
+const NUM = ["tiles", "cpi", "wpi", "ratio", "stitch_density", "tf_rel", "knit_fraction", "plan_x", "plan_y", "thickness", "shrink_x", "shrink_y", "fold_kx_per_mm", "fold_ky_per_mm", "wave_k", "wave_amp_median_mm", "mid_over_end", "steps_at_cap", "iterations_total", "wall_s", "solver_seconds", "tier", "score"];
 const TEXTCOL = ["run", "label", "source", "status", "matrix", "git_commit"];
+// display-only tightness columns (computed by the server from the recorded CPI and WPI; definitions in the note under the table)
+const HEAD = { stitch_density: "S", tf_rel: "TF_rel" }, hname = h => HEAD[h] || h;
+function tnote() { const t = data.tightness; $("#tnote").innerHTML = t ? "<b>S</b>: " + esc(t.label_stitch_density) + ". <b>TF_rel</b>: " + esc(t.label_tf_rel) + (t.constant_note ? ". Both are " + esc(t.constant_note) : "") + ". " + esc(t.note) : ""; }
 const SETT = ["tiles", "cpi", "wpi", "kappa_scale", "h_scale", "sub", "steps", "iter", "nu", "springs", "seed", "ne", "matrix"];
 function msg(t, err) { const m = $("#msg"); m.textContent = t ? (err ? "Error: " : "") + t : ""; m.className = err ? "err" : ""; }
 const kind = r => (r.source || "").split(":")[0], seedOf = r => (r.source || "").split(":")[1] || "";
@@ -51,13 +54,13 @@ function rowsView() {
 }
 function table() {
   const rows = rowsView(), head = ["run"].concat(COLS), left = h => TEXTCOL.includes(h) ? ' class="l"' : "";
-  $("#tbl").innerHTML = "<thead><tr><th></th>" + head.map(h => '<th data-k="' + h + '"' + left(h) + ">" + esc(h) + (h === sortKey ? (sortDir > 0 ? " &uarr;" : " &darr;") : "") + "</th>").join("") + "</tr></thead><tbody>" +
+  $("#tbl").innerHTML = "<thead><tr><th></th>" + head.map(h => '<th data-k="' + h + '"' + left(h) + ">" + esc(hname(h)) + (h === sortKey ? (sortDir > 0 ? " &uarr;" : " &darr;") : "") + "</th>").join("") + "</tr></thead><tbody>" +
     rows.slice(0, 1500).map(r => '<tr data-r="' + esc(r.run) + '" class="' + (r.run === openRun ? "sel" : "") + '"><td><input type="checkbox" data-c="' + esc(r.run) + '"' + (sel.has(r.run) ? " checked" : "") + (r.status === "done" ? "" : " disabled") + "></td>" +
     head.map(h => "<td" + left(h) + ">" + (h === "status" ? esc(r.status) + (r.heavy_deleted ? " (3D deleted)" : "") + (r.control ? ' <span class="tag">control</span>' : "") : esc(fmt(r[h], h))) + "</td>").join("") + "</tr>").join("") + "</tbody>";
   $("#tbl").querySelectorAll("th[data-k]").forEach(th => th.onclick = () => { const k = th.dataset.k; if (sortKey === k) sortDir = -sortDir; else { sortKey = k; sortDir = 1; } table(); });
   $("#tbl").querySelectorAll("tbody tr").forEach(tr => tr.onclick = ev => { if (ev.target.tagName === "INPUT") return; openRun = tr.dataset.r; table(); showDetail(openRun); });
   $("#tbl").querySelectorAll("input[data-c]").forEach(i => i.onchange = () => { i.checked ? sel.add(i.dataset.c) : sel.delete(i.dataset.c); buttons(); });
-  buttons();
+  buttons(); tnote();
 }
 function buttons() { const n = sel.size; $("#bDel").disabled = n === 0; $("#bDel").textContent = "Delete heavy files of the selected runs (" + n + ")"; $("#bCompare").disabled = n < 2; $("#bView").disabled = n < 1 || n > 2; }
 async function showDetail(rid) {
@@ -72,11 +75,12 @@ async function showDetail(rid) {
     box.innerHTML = '<div class="card"><h3>' + esc(rid) + " " + esc(d.label || "") + ' <span class="mut small">' + esc(d.source) + " | tier " + esc(d.tier) + '</span></h3><div class="row"><div class="col"><span class="bold">settings</span>' + dl(sett) + '</div><div class="col"><span class="bold">descriptors</span>' + dl(met) + '</div><div class="col"><span class="bold">code provenance</span>' + dl(prov) + "</div></div>" +
       (d.control ? '<p class="note"><span class="tag">control</span> ' + esc(d.control.reason) + " (changes: " + esc((d.control.keys || []).join(", ")) + ")</p>" : "") +
       (sd.real_fold ? '<p class="note"><span class="bold">' + (sd.kind === "seed" ? "Real fold of this pattern" : "Real fold of the pattern it was edited from (" + esc(sd.seed) + ")") + "</span> (" + esc(sd.sample || "") + "; TM axis: " + esc(sd.real_tm_axis || "") + "; K's report): " + esc(sd.real_fold) + "</p>" : "") +
+      (d.tightness ? '<p class="note"><span class="bold">Nominal tightness (display only):</span> S = ' + esc(fmt(d.tightness.stitch_density)) + ' stitches per square inch, TF_rel = ' + esc(fmt(d.tightness.tf_rel)) + ' tex^0.5 per inch (Ne ' + esc(d.tightness.ne) + ')' + (d.tightness.constant_note ? '; ' + esc(d.tightness.constant_note) : '') + '. ' + esc(d.tightness.label_tf_rel) + '.</p>' : '') +
       '<p class="note">' + link + '</p><details class="msgs"><summary>log (last lines)</summary><pre>' + esc((d.log_tail || []).join("\n")) + "</pre></details></div>";
   } catch (e) { box.innerHTML = '<div class="card"><b>Error:</b> ' + esc(e.message) + "</div>"; }
 }
 function compare() {
-  const rows = data.rows.filter(r => sel.has(r.run)), keys = ["label", "source"].concat(SETT.filter(k => k !== "matrix"), ["matrix", "knit_fraction", "plan_x", "plan_y", "thickness", "shrink_x", "shrink_y", "wave_k", "wave_amp_median_mm", "mid_over_end", "steps_at_cap", "score", "wall_s"]);
+  const rows = data.rows.filter(r => sel.has(r.run)), keys = ["label", "source"].concat(SETT.filter(k => k !== "matrix"), ["stitch_density", "tf_rel", "matrix", "knit_fraction", "plan_x", "plan_y", "thickness", "shrink_x", "shrink_y", "wave_k", "wave_amp_median_mm", "mid_over_end", "steps_at_cap", "score", "wall_s"]);
   $("#cmpsec").hidden = rows.length < 2;
   $("#cmp").innerHTML = '<thead><tr><th class="l">quantity</th>' + rows.map(r => "<th>" + esc(r.run) + "</th>").join("") + "</tr></thead><tbody>" + keys.map(k => { const vals = rows.map(r => r[k]), diff = new Set(vals.map(v => String(v))).size > 1;
     return '<tr><td class="l">' + esc(k) + "</td>" + vals.map(v => '<td class="' + (diff ? "diff" : "") + '">' + esc(fmt(v, k)) + "</td>").join("") + "</tr>"; }).join("") + "</tbody>";
@@ -85,12 +89,12 @@ function compare() {
 // ---- comparison graph: any two columns, coloured by source / seed pattern / tiles (same renderer, size and rules as every other chart)
 function charts() {
   const rows = data.rows.filter(r => r.status === "done").map(r => Object.assign({ ratio: (r.cpi && r.wpi) ? r.cpi / r.wpi : null }, r)); const gx = $("#gx"), gy = $("#gy");
-  if (!gx.options.length) { for (const k of NUM) { gx.add(new Option(k, k)); gy.add(new Option(k, k)); } gx.value = "ratio"; gy.value = "thickness"; gx.onchange = gy.onchange = $("#gc").onchange = charts; }
+  if (!gx.options.length) { for (const k of NUM) { gx.add(new Option(hname(k), k)); gy.add(new Option(hname(k), k)); } gx.value = "ratio"; gy.value = "thickness"; gx.onchange = gy.onchange = $("#gc").onchange = charts; }
   const xk = gx.value, yk = gy.value, ck = $("#gc").value, pts = rows.filter(r => typeof r[xk] === "number" && typeof r[yk] === "number");
   const grp = r => ck === "src" ? kind(r) : ck === "seed" ? (seedOf(r) || "-") : "tiles " + r.tiles, names = Array.from(new Set(pts.map(grp))).sort();
   $("#gleg").innerHTML = names.map((n, i) => '<span class="g' + (i % 8) + '">' + esc(n) + "</span>").join("");
-  const P = pts.map(p => { const i = names.indexOf(grp(p)); return { x: p[xk], y: p[yk], cls: "g" + (i % 8), shape: "circle", tip: p.run + " " + (p.label || "") + ": " + xk + " " + fmt(p[xk]) + ", " + yk + " " + fmt(p[yk]), run: p.run }; });
-  $("#gr").innerHTML = ChartKit.scatter(P, { xlabel: xk, ylabel: yk }, ChartKit.size($("#gr")));
+  const P = pts.map(p => { const i = names.indexOf(grp(p)); return { x: p[xk], y: p[yk], cls: "g" + (i % 8), shape: "circle", tip: p.run + " " + (p.label || "") + ": " + hname(xk) + " " + fmt(p[xk]) + ", " + hname(yk) + " " + fmt(p[yk]), run: p.run }; });
+  $("#gr").innerHTML = ChartKit.scatter(P, { xlabel: hname(xk), ylabel: hname(yk) }, ChartKit.size($("#gr")));
   $("#gr").querySelectorAll(".mk").forEach((c, i) => c.onclick = () => { openRun = P[i].run; table(); showDetail(openRun); });
 }
 async function rules() {

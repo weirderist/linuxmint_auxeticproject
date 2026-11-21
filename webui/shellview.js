@@ -41,6 +41,7 @@ async function info() {
     const rows = [await (await fetch(url(runA))).json()]; if (runBsel !== runA) rows.push(await (await fetch(url(runBsel))).json());
     $('#info').innerHTML = rows.map(d => { const s = d.settings || {}, m = d.metrics || {}, sd = d.seed || {};
       return '<p><b>' + esc(d.run) + '</b> ' + esc(d.label || '') + ' <span class="mut">(' + esc(d.source) + ')</span>: ' + (s.matrix ? s.matrix.length + ' x ' + s.matrix[0].length + ' per tile, ' : '') + 'tiles ' + esc(s.tiles) + ', CPI ' + esc(s.cpi) + ', WPI ' + esc(s.wpi) + ' (R ' + (s.cpi / s.wpi).toFixed(3) + '); plan ' + (+m.plan_x).toFixed(1) + ' x ' + (+m.plan_y).toFixed(1) + ' mm, thickness ' + (+m.thickness).toFixed(1) + ' mm, waves ' + esc(m.wave_k) +
+        (d.tightness ? '<br>Nominal tightness (display only): S = CPI x WPI = ' + esc(d.tightness.stitch_density == null ? 'n/a' : (+d.tightness.stitch_density).toFixed(1)) + ' stitches per square inch; TF_rel = sqrt(tex x S) = ' + esc(d.tightness.tf_rel == null ? 'n/a' : (+d.tightness.tf_rel).toFixed(2)) + ' tex^0.5 per inch (Ne ' + esc(d.tightness.ne) + ')' + (d.tightness.constant_note ? ', ' + esc(d.tightness.constant_note) : '') + '. <span class="mut">TF_rel is proportional to the tightness factor TF = sqrt(tex)/l (l = loop length); the scale constant is UNSOURCED, so TF itself is not shown.</span>' : '') +
         (sd.real_fold ? '<br><span class="mut">Real fold (K\'s report, ' + esc(sd.sample || '') + '): ' + esc(sd.real_fold) + '</span>' : '') + '</p>'; }).join('');
   } catch (e) { $('#info').textContent = ''; }
 }

@@ -45,6 +45,7 @@ def _load(name, path):
     return _mods[name]
 
 def _cm(): return _load("campaign_cli", SCRIPTS / "campaign.py")
+def _tight(): return _load("shell_tightness", SCRIPTS / "shell_tightness.py")          # display-only tightness values, computed on read from the recorded CPI and WPI
 
 
 # ------------------------------------------------------------------ small helpers
@@ -175,7 +176,7 @@ def _flags(row, th):
     else: f["no_fold"] = None
     return f
 
-def _read_results(d, man, th):
+def _read_results(d, man, th, spec=None):
     cm = _cm(); mcols = list(cm.METRIC_COLS)
     csvrows = {}
     try:
@@ -199,6 +200,11 @@ def _read_results(d, man, th):
             if raw in ("", None): raw = met.get(k, "")
             row[k] = (raw if raw != "" else None) if k in TEXT_COLS else _num(raw)
         if not row.get("reason") and st.get("reason"): row["reason"] = st["reason"]          # status.json is the newer record
+        try:                                                                                # nominal S and TF_rel from this run's CPI, WPI and Ne (build settings: fixed values + run parameters); display only
+            b, _ = cm.merged(spec, r.get("params", {})) if (spec or {}).get("fabric") and (spec or {}).get("relax") is not None else (dict(r.get("params", {})), None)
+            tr = _tight().record(b, b.get("ne") or None)
+        except Exception: tr = {"stitch_density": None, "tf_rel": None}
+        row["stitch_density"], row["tf_rel"] = tr["stitch_density"], tr["tf_rel"]
         row["flags"] = _flags(row, th)
         rows.append(row)
     return pcols, mcols, rows
@@ -254,9 +260,9 @@ def campaign_detail(name: str):
     d = _cdir(name); man = _manifest(d); spec = _rjson(d / "spec.json") or {}
     th = _num((spec.get("thresholds") or {}).get("fold_min_turn_rad"))
     th = th if th is not None else 0.0
-    pcols, mcols, rows = _read_results(d, man, th); ov = overview(d)
+    pcols, mcols, rows = _read_results(d, man, th, spec); ov = overview(d)
     return {"overview": ov, "params": pcols, "metrics": mcols, "runs": rows, "eta": _eta(rows), "summary": summarize(rows, th, ov["counts"]),
-            "thresholds": {"fold_min_turn_rad": th, "min_dist_over_2R": MIN_DIST_FLAG},
+            "thresholds": {"fold_min_turn_rad": th, "min_dist_over_2R": MIN_DIST_FLAG}, "tightness": _tight().campaign_info([r.get("stitch_density") for r in rows]),
             "varied": [{"name": v.get("name"), "scale": v.get("scale"), "min": v.get("min"), "max": v.get("max")} for v in spec.get("vary") or []]}
 
 @router.get("/api/campaigns/{name}/runs/{rid}")
@@ -268,10 +274,11 @@ def run_detail(name: str, rid: str):
     atts = st.get("attempts") or []
     spec = _rjson(d / "spec.json") or {}
     th = _num((spec.get("thresholds") or {}).get("fold_min_turn_rad")) or 0.0
-    _, _, rows = _read_results(d, man, th); row = next((x for x in rows if x["run"] == rid), {})
+    _, _, rows = _read_results(d, man, th, spec); row = next((x for x in rows if x["run"] == rid), {})
     return {"run": rid, "campaign": name, "status": st.get("status", "queued"), "stage": st.get("stage", ""), "reason": st.get("reason", ""), "exit_code": st.get("exit_code"),
             "wall_s": st.get("wall_s"), "interrupted": st.get("interrupted_count", 0), "attempts": len(atts), "last_command": " ".join(atts[-1].get("cmd") or []) if atts and isinstance(atts[-1], dict) else "",
             "params": run.get("params", {}), "metrics": {k: (None if v == "" else v) for k, v in met.items()}, "flags": row.get("flags", {}),
+            "nominal": {"stitch_density": row.get("stitch_density"), "tf_rel": row.get("tf_rel")},
             "history": (st.get("history") or [])[-8:], "log_tail": _tail(rd / "relax.log", 40)}
 
 
@@ -335,6 +342,9 @@ def shell_list():
 def shell_detail(name: str):
     sc, c = _shell(name); st = c.status(); rows = c.rows(); sco = _load("shell_score", SCRIPTS / "shell_score.py")
     for r in rows: r["score"] = sco.score(r)          # similarity out of 100 where a measured reference exists (Pattern 1), else None
+    tg = _tight()
+    for r in rows: tr = tg.record(r); r["stitch_density"], r["tf_rel"] = tr["stitch_density"], tr["tf_rel"]          # display only, computed on read (Ne fixed at 12); nothing is written to the runs
+    st["tightness"] = tg.campaign_info([r["stitch_density"] for r in rows], c.policy())
     st["n_rows"] = len(rows); st["rows"] = rows[-1500:]
     return st
 
@@ -404,8 +414,11 @@ def shell_delete_preview(name: str, ids: str = ""):
 @router.get("/api/shell/{name}/runs/{rid}")
 def shell_run(name: str, rid: str):
     sc, c = _shell(name)
-    try: return c.run_detail(rid)
+    try: d = c.run_detail(rid)
     except ValueError as e: raise HTTPException(404, str(e))
+    tg = _tight(); d["tightness"] = dict(tg.record(d.get("settings") or {}), label_stitch_density=tg.LABEL_S, label_tf_rel=tg.LABEL_TF, note=tg.NOTE)          # display only, computed on read
+    d["tightness"]["constant_note"] = tg.campaign_info([tg.record(q.get("settings") or {})["stitch_density"] for q in c.queue_items()], c.policy())["constant_note"]
+    return d
 
 @router.get("/api/shell/{name}/runs/{rid}/mesh")
 def shell_mesh(name: str, rid: str):
