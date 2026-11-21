@@ -497,6 +497,11 @@ def page():
 def page_js():
     return Response((HERE / "campaigns.js").read_text(encoding="utf8"), media_type="application/javascript")
 
+@router.get("/chartkit.js")
+def page_chartkit():
+    """The scatter-chart renderer shared by the Campaigns page and the pure-shell page (webui/chartkit.js)."""
+    return Response((HERE / "chartkit.js").read_text(encoding="utf8"), media_type="application/javascript", headers={"Cache-Control": "no-cache"})
+
 @router.get("/theme.css")
 def page_theme():
     """The shared stylesheet of the pages (webui/theme.css): the one place where the colours, sizes and spacing are defined."""
