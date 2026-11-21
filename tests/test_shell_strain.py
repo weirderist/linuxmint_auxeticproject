@@ -26,4 +26,20 @@ rgb, lg = ss.colours('area_strain', np.array([-1.0, 0.0, 1.0]))
 check('strain colours: zero is the neutral colour, compression blue, tension red', tuple(rgb[1]) == tuple(ss.NEUTRAL.astype(np.uint8)) and rgb[0][2] > rgb[0][0] and rgb[2][0] > rgb[2][2])
 try: ss.vertex_field(flat, W, C, sub, 'bogus'); check('unknown field is refused', False)
 except ValueError: check('unknown field is refused', True)
+
+# ---- one fold descriptor definition: shell_metrics.describe uses the same quadratic fit as scripts/fold_metric.py (K's definition of kx, ky)
+import shell_metrics as sm, fold_metric as fm
+rng = np.random.default_rng(3); Xr = cy + 0.05 * rng.standard_normal(cy.shape); d = sm.describe(Xr, W, C, sub); fit = fm.fit(Xr.reshape(-1, 3))
+check('describe() curvatures equal fold_metric.fit (kx, ky) on the same vertices', abs(d['fold_kx_per_mm'] - fit['kx']) < 1e-12 and abs(d['fold_ky_per_mm'] - fit['ky']) < 1e-12, '%.6f vs %.6f' % (d['fold_kx_per_mm'], fit['kx']))
+check('plan extents equal fold_metric Lx, Ly', abs(d['plan_x'] - fit['Lx']) < 1e-12 and abs(d['plan_y'] - fit['Ly']) < 1e-12)
+
+# ---- similarity score (only where a measured reference exists)
+import shell_score as sco
+ref = dict(status='done', source='seed:pattern1', tiles=3, cpi=22.0, wpi=16.0, plan_x=26.0, plan_y=58.0, thickness=14.0, wave_k=2.5, mid_over_end=1.2)
+check('score is 100 for the reference values', sco.score(ref) == 100.0)
+a = dict(ref, plan_x=25.383, plan_y=56.243, thickness=12.797, wave_k=3.0, mid_over_end=0.672)
+check('score of the 13 Nov shell (plan 25.38 x 56.24, thickness 12.80, 3 waves, middle/ends 0.67) is about 72', 70 <= sco.score(a) <= 75, str(sco.score(a)))
+check('controls (Pattern 1, tiles 3, only the iteration cap differs) are scored', sco.score(dict(a, source='control:iter800')) == sco.score(a))
+check('no score for other patterns, other tiles, other CPI/WPI, unfinished runs or missing descriptors', sco.score(dict(a, source='seed:seed02')) is None and sco.score(dict(a, tiles=4)) is None and sco.score(dict(a, cpi=20.0)) is None and sco.score(dict(a, status='queued')) is None and sco.score(dict(a, wave_k=None)) is None)
+check('a fold twice as thick (28 mm) loses the thickness sub-score', sco.parts(dict(ref, thickness=28.0))['thickness'] == 0.0)
 print('\n' + ('ALL OK' if not bad else 'FAILURES: ' + ', '.join(bad))); sys.exit(1 if bad else 0)

@@ -232,3 +232,12 @@ Campaigns of thin-shell folds only (`scripts/shell_sim.py`), about 5 min per run
 `shell-plan` (or `shell-freeze <name>` for an older campaign) copies the five code files into `<campaign>/code/` with `MANIFEST.json` (git commit, uncommitted-changes flag, sha256 of every file, library versions). The runner and every worker run from that copy (`shell-run` re-executes into it; the page's Start does too), the hashes are checked before every run (mismatch: the runner stops itself), and every run folder holds `provenance.json` (commit, sha256 of `shell_sim.py`, versions), copied into `status.json`, the index and `results.csv`. New code = new campaign. Not frozen: the Python libraries (versions are recorded only).
 
 Per-run timeout = max(900 s, 4 x 285 s x vertices / 11,737) (UNSOURCED). The runner stops itself (control = stop) when free disk is below 20 GB or `campaigns/shell_runs` exceeds 50 GB (UNSOURCED). Run folders appear only by renaming a finished `.tmp` folder; an interrupted attempt goes to `quarantine/` and runs again from the start (3 interruptions, then `needs_approval`). The page's delete removes only `shell.npz` and `shell.bin` of chosen runs and logs it first (`deletions.log`). Restart after a reboot: `deploy/shell_runner@.service` or `deploy/crontab_shell.txt` (prepared, not installed).
+
+### Offline jobs on a shell campaign (read the campaign, never change a run)
+
+| Job (numpy only, low priority) | What it does |
+|---|---|
+| `venv/bin/python scripts/shell_rules.py <name> --every 25` | frames rules from the finished runs: sparse regression (cross-validated) and a depth-3 tree of scale-free fold descriptors on pattern features; writes `<campaign>/analysis/rules.json`, shown on the /shell page. Nothing is reported below 100 finished runs. Label: learned from the shell, not confirmed on real fabric |
+| `venv/bin/python scripts/shell_proposer.py <name>` | after 100 results adds runs at tier 5 (ahead of the filler) chosen by a Gaussian process (largest predictive uncertainty), only through the policy-enforcing queue; `--dry-run` shows what it would add |
+
+The similarity score out of 100 (`scripts/shell_score.py`) exists only for the one measured reference (Pattern 1 at the success settings); its tolerances are UNSOURCED.

@@ -14,8 +14,8 @@ function fmt(v, k) {
 }
 function dur(s) { if (s == null) return ""; s = Math.round(s); const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60); return h ? h + " h " + m + " min" : m ? m + " min" : s + " s"; }
 let cur = null, data = null, busy = false, sortKey = "run", sortDir = 1, openRun = null; const sel = new Set();
-const COLS = ["status", "source", "label", "tiles", "cpi", "wpi", "ratio", "matrix", "knit_fraction", "plan_x", "plan_y", "thickness", "shrink_x", "shrink_y", "wave_k", "wave_amp_median_mm", "mid_over_end", "steps_at_cap", "wall_s", "git_commit"];
-const NUM = ["tiles", "cpi", "wpi", "ratio", "knit_fraction", "plan_x", "plan_y", "thickness", "shrink_x", "shrink_y", "fold_kx_per_mm", "fold_ky_per_mm", "wave_k", "wave_amp_median_mm", "mid_over_end", "steps_at_cap", "iterations_total", "wall_s", "solver_seconds", "tier"];
+const COLS = ["status", "source", "label", "tiles", "cpi", "wpi", "ratio", "matrix", "knit_fraction", "plan_x", "plan_y", "thickness", "shrink_x", "shrink_y", "wave_k", "wave_amp_median_mm", "mid_over_end", "steps_at_cap", "score", "wall_s", "git_commit"];
+const NUM = ["tiles", "cpi", "wpi", "ratio", "knit_fraction", "plan_x", "plan_y", "thickness", "shrink_x", "shrink_y", "fold_kx_per_mm", "fold_ky_per_mm", "wave_k", "wave_amp_median_mm", "mid_over_end", "steps_at_cap", "iterations_total", "wall_s", "solver_seconds", "tier", "score"];
 const SETT = ["tiles", "cpi", "wpi", "kappa_scale", "h_scale", "sub", "steps", "iter", "nu", "springs", "seed", "ne", "matrix"];
 function msg(t, err) { const m = $("#msg"); m.textContent = t || ""; m.className = err ? "err" : ""; }
 const kind = r => (r.source || "").split(":")[0], seedOf = r => (r.source || "").split(":")[1] || "";
@@ -98,6 +98,15 @@ function charts() {
     '<text x="' + (W / 2) + '" y="' + (H - 4) + '" text-anchor="middle">' + esc(xk) + '</text><text transform="translate(12 ' + (H / 2) + ') rotate(-90)" text-anchor="middle">' + esc(yk) + "</text></svg>";
   $("#gr").querySelectorAll("circle[data-r]").forEach(c => c.onclick = () => { openRun = c.dataset.r; table(); showDetail(openRun); });
 }
+async function rules() {
+  const box = $("#rules"); try {
+    const r = await api("/api/shell/" + encodeURIComponent(cur) + "/rules"); if (!r.targets) { box.innerHTML = "No rules yet: the job has not run (" + esc(r.n_finished) + " finished runs; rules are shown from " + esc(r.min_runs) + ")."; return; }
+    box.innerHTML = '<div><b>' + esc(r.label) + "</b>. " + esc(r.n_finished) + " finished runs at " + esc(r.generated) + ". " + esc(r.method) + ".</div>" + r.targets.map(t => {
+      if (t.status !== "ok") return "<h3>" + esc(t.target) + '</h3><div class="mut">' + esc(t.note || t.status) + " (" + esc(t.n_runs) + " runs)</div>";
+      const la = t.lasso; return "<h3>" + esc(t.target) + "</h3><div>sparse regression: cross-validated R&sup2; " + (+la.cv_r2).toFixed(3) + " against the mean predictor, " + la.n_selected + " features selected, support " + la.support + " runs; tree cross-check R&sup2; " + (+t.tree.cv_r2).toFixed(3) + "</div>" +
+        '<div class="tw"><table><thead><tr><th class="l">feature</th><th>per unit</th><th>standardised</th><th>selected in bootstrap refits</th></tr></thead><tbody>' + la.coefficients.map(c => '<tr><td class="l">' + esc(c.feature) + "</td><td>" + fmt(c.per_unit) + "</td><td>" + fmt(c.coefficient_std) + "</td><td>" + Math.round(100 * c.stability) + " %</td></tr>").join("") + "</tbody></table></div><pre>" + esc(t.tree.rules.join("\n")) + "</pre>"; }).join("");
+  } catch (e) { box.textContent = e.message; }
+}
 async function act(kindName) { busy = true; msg("…"); try { const j = await api("/api/shell/" + encodeURIComponent(cur) + "/" + kindName, { method: "POST" }); msg(j.message || "Done.", false); } catch (e) { msg(e.message, true); } busy = false; setTimeout(refresh, 1500); refresh(); }
 $("#bStart").onclick = () => { if (confirm("Start shell campaign '" + cur + "'? It goes on until you pause; finished runs are never repeated.")) act("start"); };
 $("#bPause").onclick = () => act("pause"); $("#bCont").onclick = () => act("continue");
@@ -116,5 +125,5 @@ $("#bDel").onclick = async () => {
   } catch (e) { msg(e.message, true); }
   refresh();
 };
-async function refresh() { try { await loadList(); if (!cur) return; data = await api("/api/shell/" + encodeURIComponent(cur)); header(); table(); charts(); if (openRun && !$("#detail").firstChild) showDetail(openRun); } catch (e) { msg(e.message, true); } }
+async function refresh() { try { await loadList(); if (!cur) return; data = await api("/api/shell/" + encodeURIComponent(cur)); header(); table(); charts(); rules(); if (openRun && !$("#detail").firstChild) showDetail(openRun); } catch (e) { msg(e.message, true); } }
 refresh(); setInterval(() => { if (!document.hidden) refresh(); }, 15000);

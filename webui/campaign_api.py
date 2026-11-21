@@ -333,7 +333,9 @@ def shell_list():
 
 @router.get("/api/shell/{name}")
 def shell_detail(name: str):
-    sc, c = _shell(name); st = c.status(); rows = c.rows(); st["n_rows"] = len(rows); st["rows"] = rows[-400:]
+    sc, c = _shell(name); st = c.status(); rows = c.rows(); sco = _load("shell_score", SCRIPTS / "shell_score.py")
+    for r in rows: r["score"] = sco.score(r)          # similarity out of 100 where a measured reference exists (Pattern 1), else None
+    st["n_rows"] = len(rows); st["rows"] = rows[-1500:]
     return st
 
 def _shell_guard(name):
@@ -426,6 +428,13 @@ def shell_colors(name: str, rid: str, field: str = "area_strain", clip: float = 
     try: X, W, C, sub = ss.load(f); rgb, legend = ss.colours(field, ss.vertex_field(X, W, C, sub, field), clip)
     except ValueError as e: raise HTTPException(422, str(e))
     return Response(rgb.tobytes(), media_type="application/octet-stream", headers={"Content-Encoding": "identity", "X-Count": str(len(rgb)), "X-Legend": json.dumps(legend)})
+
+@router.get("/api/shell/{name}/rules")
+def shell_rules(name: str):
+    """What the offline rule job (scripts/shell_rules.py) last wrote; nothing is computed here."""
+    sc, c = _shell(name); r = _rjson(Path(c.d) / "analysis" / "rules.json")
+    if r is None: return {"status": "not run yet", "min_runs": 100, "n_finished": sum(1 for x in c.index_last().values() if x.get("status") == "done"), "label": "learned from the shell, not confirmed on real fabric"}
+    return r
 
 def _page(name, media):
     return Response((HERE / name).read_text(encoding="utf8"), media_type=media, headers={"Cache-Control": "no-cache"})

@@ -68,4 +68,9 @@ check('/shellview is the viewer page (importmap, viewer_core, two views)', 'view
 try:
     import esprima; [esprima.parseScript(x) for x in (js, shjs)]; esprima.parseModule(svjs); check('campaigns.js, shell.js (script) and shellview.js (module) parse (esprima)', True)
 except ImportError: print('SKIP  esprima not installed')
+r0 = cl.get('/api/shell/demo/rules').json()
+check('rules endpoint before the job has run: status not run yet, minimum 100 runs, the label', r0['status'] == 'not run yet' and r0['min_runs'] == 100 and 'not confirmed on real fabric' in r0['label'])
+os.makedirs(os.path.join(c.d, 'analysis')); json.dump(dict(label='learned from the shell, not confirmed on real fabric', targets=[]), open(os.path.join(c.d, 'analysis', 'rules.json'), 'w'))
+check('rules endpoint returns what the job wrote (and computes nothing itself)', cl.get('/api/shell/demo/rules').json()['targets'] == [])
+check('/shell page has the rules section', 'id="rules"' in cl.get('/shell').text and '/rules' in cl.get('/shell.js').text)
 print('\n' + ('ALL OK' if not bad else 'FAILURES: ' + ', '.join(bad))); sys.exit(1 if bad else 0)
