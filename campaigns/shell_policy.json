@@ -1,0 +1,33 @@
+{
+ "version": 1,
+ "approved_by_K": "2026-11-21",
+ "note": "Policy of the pure-shell campaign. ESSENTIAL settings are the verified 13 Nov success values: never varied by a sampler, variant generator or proposer; an automated queue entry that differs is refused by code (scripts/shell_policy.py). The only exceptions are explicitly labelled control runs (key 'iter' only).",
+ "essential": {"kappa_scale": 1.0, "h_scale": 1.0, "nu": 0.4, "springs": 0.0, "sub": 2, "steps": 15, "iter": 400, "seed": 0},
+ "no_effect": {"ne": 12.0},
+ "no_effect_note": "Ne does not enter the shell (only W = 25.4/WPI and C = 25.4/CPI do); it is recorded as 12 (K's fabric).",
+ "free": ["matrix", "cpi", "wpi", "tiles"],
+ "ranges": {
+  "ratio_cpi_over_wpi": [0.7, 1.6],
+  "density_cpi_x_wpi": 352.0,
+  "density_tolerance": 0.005,
+  "tiles": [3, 6],
+  "max_stitches": 12000,
+  "knit_fraction_max_delta": 0.10,
+  "max_edit_operations": 3,
+  "max_rectangle_side": 3,
+  "max_boundary_shift": 2
+ },
+ "controls": {"allowed_keys": ["iter"], "max_per_campaign": 2},
+ "sources": [
+  {"claim": "K's fabric CPI 22, WPI 16 (R 1.375)", "source": "K's own measurement (project data); not a published value"},
+  {"claim": "Plain single jersey relaxed courses/cm : wales/cm = 18.9:11.8 (R 1.60), 16.5:11.8 (1.40), 16.5:11.8 (1.40); other structures 0.81 to 1.89", "source": "Hasani, Ajeli, Kheirkhah, Pasandidehpour 2014, p. 2, Tables 3 and 4 (reference folder 'Auxetic Work'); the ratios are computed here from the tabulated values"},
+  {"claim": "Stitch 1.4 x 1.2 (W/C = 1.17 = CPI/WPI) 'based on the stitch aspect ratio from knit samples'", "source": "Niu, Dion, Kamien 2025 (PNAS 122(7) e2416536122), p. 4"},
+  {"claim": "'the aspect ratio of a stitch is rarely 1:1'; fabric gauges measured at stitch values 22, 28, 40 (Table 2, numbers not extracted)", "source": "Amanatides, Ghita, Evans et al., Textile Research Journal (deposited 2022), pp. 10, 11, 16"},
+  {"claim": "The aspect ratio of the knitted loop is crucial for the curling morphology (no number extracted)", "source": "Tajiri, Murakami, Kobayashi, Tarumi, Sano (year not found in the extracted text), pp. 2, 3, 6"},
+  {"claim": "Loop shape factor about 1.27 to 1.3 for relaxed single jersey; definition and direction not verified", "source": "teaching material found by web search, not in the reference folder: UNSOURCED-grade"},
+  {"claim": "Lower bound R 0.7 (WPI above CPI)", "source": "UNSOURCED: K's wish; Hasani Table 4 has 0.81 for a tuck structure, no knit/purl source below 1.17"},
+  {"claim": "Upper bound R 1.6", "source": "Hasani 2014 plain jersey 1.60; miss structures reach 1.89 (outside the range)"},
+  {"claim": "Constant stitch density CPI x WPI = 352, tiles 3 to 6, 12000 stitch cap, edit limits", "source": "UNSOURCED design choices (density = K's fabric; cap = run time: 285 s measured for 2880 stitches at tiles 3)"},
+  {"claim": "Measured: at the same R, half and double absolute CPI/WPI changed folded plan and thickness by 0.3 to 1.5 % (wave count 1 vs 2 on a short sheet)", "source": "this project, 2026-11-21, ~/shell_cmp/ratio (tiles 1, Pattern 1)"}
+ ]
+}

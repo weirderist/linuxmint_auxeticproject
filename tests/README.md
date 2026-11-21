@@ -72,3 +72,4 @@ Needs the fixtures: the finished fidelity runs 0001 (Pattern 1, tiles 1) and 000
 |---|---|
 | `python tests/test_shell_campaign.py` | settings validation, ids, queue, duplicates, runner end to end, pause / continue / stop, per-run timeout, disk guard, power-cut recovery (quarantine, publish of finished attempts), no overwrite, delete path guard and log, descriptors, KMSH export, `shell_run.py` stub. Two tests (symlink, in-progress delete) skip on Windows |
 | `python tests/test_shell_api.py` | `/api/shell/...`: list, detail, controls, start guards, delete with typed confirmation, page and script |
+| `python tests/test_shell_policy.py` | the approved policy (`campaigns/shell_policy.json`): ESSENTIAL settings enforced at enqueue and by the runner, labelled controls, ratio / density / tiles / stitch-cap limits, slight pattern edits, the deterministic seeded plan (11 seed runs, 2 controls, 91 variants, filler) and `shell-plan --policy` |

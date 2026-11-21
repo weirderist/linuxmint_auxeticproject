@@ -82,3 +82,7 @@ campaigns/*/cache/
 
 # pure shell campaigns: runs, queue, index (scripts/shell_campaign.py)
 campaigns/shell_runs/
+
+# K report (private): not in git
+data/ten_patterns_pure_shell/chapters.docx
+data/ten_patterns_pure_shell/*.png

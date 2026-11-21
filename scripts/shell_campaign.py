@@ -19,7 +19,7 @@ ROOT = os.path.dirname(HERE)
 FROZEN = os.path.basename(HERE) == 'code' and os.path.isfile(os.path.join(os.path.dirname(HERE), 'spec.json'))      # this file runs from the FROZEN COPY inside a campaign folder (<root>/<campaign>/code/)
 CAMPAIGNS = os.environ.get('CAMPAIGN_DIR') or os.path.join(ROOT, 'campaigns')
 SHELL_ROOT = os.environ.get('SHELL_RUNS_DIR') or (os.path.dirname(os.path.dirname(HERE)) if FROZEN else os.path.join(CAMPAIGNS, 'shell_runs'))
-FROZEN_FILES = ('campaign.py', 'shell_campaign.py', 'shell_run.py', 'shell_metrics.py', 'shell_sim.py')            # everything the runner and its worker execute from scripts/
+FROZEN_FILES = ('campaign.py', 'shell_campaign.py', 'shell_run.py', 'shell_metrics.py', 'shell_sim.py', 'shell_policy.py')            # everything the runner and its worker execute from scripts/
 NAME_RE = re.compile(r'^[0-9A-Za-z_-]{1,64}$'); ID_RE = re.compile(r'^S[0-9]{6}$')
 HEAVY = ('shell.npz', 'shell.bin')
 # Limits. Every number is UNSOURCED (K approved them on 2026-11-21): the reference time is ONE measurement (tiles 3, 11,737 vertices, 285 s); linear scaling with vertices is not verified.
@@ -28,7 +28,7 @@ DEFAULTS = dict(kappa_scale=1.0, h_scale=1.0, sub=2, steps=15, iter=400, nu=0.4,
 METRIC_COLS = ['plan_x', 'plan_y', 'thickness', 'shrink_x', 'shrink_y', 'fold_kx_per_mm', 'fold_ky_per_mm', 'fold_turn_x_rad', 'fold_turn_y_rad', 'fold_direction',
                'wave_k', 'wave_power_fraction', 'wave_amp_median_mm', 'mid_over_end', 'steps_at_cap', 'iterations_total', 'U_final', 'solver_seconds']
 SETTING_COLS = ['tiles', 'cpi', 'wpi', 'ne', 'kappa_scale', 'h_scale', 'sub', 'steps', 'iter', 'nu', 'springs', 'seed']
-TERMINAL = ('done', 'failed', 'timeout', 'needs_approval')
+TERMINAL = ('done', 'failed', 'timeout', 'needs_approval', 'rejected')
 
 
 # ------------------------------------------------------------------ settings
@@ -37,7 +37,7 @@ def matrix_from_text(text):
     rows = [[int(ch) for ch in r if ch in '12'] for r in text.strip().split('/')]
     return rows
 
-def normalise(s):
+def normalise(s, max_stitches=6000):
     """Validated copy of a settings dict with every default filled in (so equal settings hash equally). Raises ValueError. Checks structure only; the proposer's ranges are a separate, later, K-approved file."""
     s = dict(s); M = s.get('matrix')
     if isinstance(M, str): M = matrix_from_text(M)
@@ -51,7 +51,7 @@ def normalise(s):
     if not (1 <= out['tiles'] <= 8 and 1 <= out['sub'] <= 4 and 1 <= out['steps'] <= 60 and 10 <= out['iter'] <= 5000): raise ValueError('tiles 1-8, sub 1-4, steps 1-60, iter 10-5000')
     if not (5 <= out['cpi'] <= 80 and 5 <= out['wpi'] <= 80): raise ValueError('cpi and wpi must be between 5 and 80')
     if not (math.isfinite(out['kappa_scale']) and out['kappa_scale'] != 0 and out['h_scale'] > 0 and 0 <= out['nu'] < 0.5 and out['springs'] >= 0): raise ValueError('kappa_scale != 0, h_scale > 0, 0 <= nu < 0.5, springs >= 0')
-    if len(out['matrix']) * len(out['matrix'][0]) * out['tiles'] ** 2 > 6000: raise ValueError('more than 6000 stitches per sheet: refused (run time)')
+    if len(out['matrix']) * len(out['matrix'][0]) * out['tiles'] ** 2 > max_stitches: raise ValueError('more than %d stitches per sheet: refused (run time)' % max_stitches)
     return out
 
 def sha(s): return hashlib.sha1(json.dumps(s, sort_keys=True).encode()).hexdigest()
@@ -218,26 +218,39 @@ class Camp:
         return d
     def known_sha(s): return {x.get('sha1') for x in s.queue_items()}
 
-    def enqueue(s, settings, source='manual', allow_duplicate=False):
-        """Append one run to the queue. Returns the new id, or None if the same settings are already queued or run (the shell is deterministic: give another seed to repeat)."""
-        st = normalise(settings); h = sha(st)
+    def policy(s): return s.spec_().get('policy')
+    def policy_problems(s, st, control=None):
+        pol = s.policy()
+        if not pol: return []
+        import shell_policy as sp
+        return sp.violations(st, pol, control)
+    def enqueue(s, settings, source='manual', allow_duplicate=False, tier=5, control=None, label=''):
+        """Append one run to the queue. Returns the new id, or None if the same settings are already queued or run (the shell is deterministic: give another seed to repeat). If the campaign has a policy
+        (spec.json 'policy', approved ranges and ESSENTIAL settings), an entry that breaks it is REFUSED (ValueError) - except a labelled control run that changes only the allowed keys. tier: lower runs first
+        (0 seeds, 1 controls, 2 variants, 5 proposer, 9 filler)."""
+        pol = s.policy(); st = normalise(settings, (pol or {}).get('ranges', {}).get('max_stitches', 6000)); h = sha(st); bad = s.policy_problems(st, control)
+        if bad: raise ValueError('refused by the campaign policy: ' + '; '.join(bad))
+        if control and pol and sum(1 for x in s.queue_items() if x.get('control')) >= pol['controls']['max_per_campaign']: raise ValueError('refused by the campaign policy: at most %d control runs per campaign' % pol['controls']['max_per_campaign'])
         with xlock(os.path.join(s.d, 'queue.lock')):
             if not allow_duplicate and h in s.known_sha(): return None
-            rid = s.next_id(); append_line(s.queue, dict(id=rid, t=cm.now(), source=source, settings=st, sha1=h))
+            rid = s.next_id(); line = dict(id=rid, t=cm.now(), source=source, settings=st, sha1=h, tier=tier)
+            if control: line['control'] = control
+            if label: line['label'] = label
+            append_line(s.queue, line)
         return rid
 
     def finished_ids(s):
         ids = {x for x in (os.listdir(s.runs) if os.path.isdir(s.runs) else []) if ID_RE.match(x)}
         return ids | {i for i, x in s.index_last().items() if x.get('status') in TERMINAL}
     def pending(s):
-        fin = s.finished_ids(); return [x for x in s.queue_items() if x['id'] not in fin]
+        fin = s.finished_ids(); return sorted([x for x in s.queue_items() if x['id'] not in fin], key=lambda x: (x.get('tier', 5), x['id']))
 
     # -- results
     def rows(s):
         last = s.index_last(); out = []
         for q in s.queue_items():
             x = last.get(q['id'], {}); st = q['settings']; m = x.get('metrics') or {}
-            r = dict(run=q['id'], status=x.get('status', 'queued'), source=q.get('source', ''), heavy_deleted=bool(x.get('heavy_deleted')), wall_s=x.get('wall_s'), reason=x.get('reason', ''),
+            r = dict(run=q['id'], status=x.get('status', 'queued'), source=q.get('source', ''), tier=q.get('tier', 5), control=bool(q.get('control')), label=q.get('label', ''), heavy_deleted=bool(x.get('heavy_deleted')), wall_s=x.get('wall_s'), reason=x.get('reason', ''),
                      matrix='%dx%d' % (len(st['matrix']), len(st['matrix'][0])), knit_fraction=round(sum(v == 1 for r_ in st['matrix'] for v in r_) / (len(st['matrix']) * len(st['matrix'][0])), 4))
             r.update({k: st.get(k) for k in SETTING_COLS}); r.update({k: m.get(k) for k in METRIC_COLS}); cd = x.get('code') or {}
             r.update(git_commit=(cd.get('git_commit') or '')[:10], git_dirty=cd.get('git_dirty'), shell_sim_sha256=(cd.get('shell_sim_sha256') or '')[:12], frozen=cd.get('frozen')); out.append(r)
@@ -259,7 +272,7 @@ class Camp:
             except OSError: pass
         return {}
     def status(s):
-        lim = s.limits(); rn = cm.rjson(s.runner, {}) or {}; last = s.index_last(); fin = s.finished_ids(); counts = dict(queued=0, running=0, done=0, failed=0, timeout=0, needs_approval=0)
+        lim = s.limits(); rn = cm.rjson(s.runner, {}) or {}; last = s.index_last(); fin = s.finished_ids(); counts = dict(queued=0, running=0, done=0, failed=0, timeout=0, needs_approval=0, rejected=0)
         for q in s.queue_items():
             st = (last.get(q['id']) or {}).get('status', 'done' if q['id'] in fin else 'queued')
             if st == 'queued' and rn.get('current') == q['id'] and s.runner_alive(): st = 'running'
@@ -380,6 +393,8 @@ def serve(c, poll_s=5.0, stop_when_empty=False, lock=True, run_poll=1.0):
             c.set_runner(state='idle', current=None); time.sleep(poll_s); continue
         g = disk_guard(c)
         if g: c.set_runner(state='guard_stopped', current=None, reason=g); c.set_control('stop', why='disk guard: ' + g); cm.say('guard: ' + g); break
+        item = pend[0]; viol = c.policy_problems(item['settings'], item.get('control'))
+        if viol: append_line(c.index, dict(id=item['id'], status='rejected', t=cm.now(), reason='policy: ' + '; '.join(viol))); c.write_results(); cm.say('run %s rejected by the policy: %s' % (item['id'], viol[0])); continue
         bad = c.verify_code()
         if bad: c.set_runner(state='guard_stopped', current=None, reason='frozen code: ' + bad); c.set_control('stop', why='frozen code check: ' + bad); cm.say('guard: frozen code: ' + bad); break
         why = cm.busy_reason()
@@ -448,13 +463,26 @@ def launch_detached(name, poll_s=5):
 # ------------------------------------------------------------------ command line (called from campaign.py: shell-plan, shell-enqueue, shell-run, shell-status, shell-control)
 def cli(cmd, argv):
     ap = argparse.ArgumentParser(prog='campaign.py ' + cmd); ap.add_argument('name')
-    if cmd == 'shell-plan': ap.add_argument('--pattern1-file', default=os.path.join(CAMPAIGNS, 'pattern1_matrix.txt'), help='matrix file of the control run S000001 (13 Nov success shell: Ne 12, CPI 22, WPI 16, tiles 3, defaults)')
+    if cmd == 'shell-plan':
+        ap.add_argument('--pattern1-file', default=os.path.join(CAMPAIGNS, 'pattern1_matrix.txt'), help='matrix file of the control run S000001 (13 Nov success shell: Ne 12, CPI 22, WPI 16, tiles 3, defaults)')
+        ap.add_argument('--policy', help='policy JSON (campaigns/shell_policy.json): builds the full seeded queue (seeds, controls, variants, filler) and enforces the policy')
+        ap.add_argument('--seeds', default=os.path.join(CAMPAIGNS, 'shell_seeds', 'seeds.json')); ap.add_argument('--variants', type=int, default=91); ap.add_argument('--filler', type=int, default=0); ap.add_argument('--rng-seed', type=int, default=20261121)
     if cmd == 'shell-enqueue': ap.add_argument('file', help='JSON file: one settings object or a list of them')
     if cmd == 'shell-run': ap.add_argument('--detach', action='store_true'); ap.add_argument('--poll-s', type=float, default=5.0); ap.add_argument('--stop-when-empty', action='store_true'); ap.add_argument('--allow-unfrozen', action='store_true', help='run a campaign that has no code/ folder from the live scripts (not recommended)')
     if cmd == 'shell-control': ap.add_argument('state', choices=['run', 'pause', 'stop'])
     a = ap.parse_args(argv)
     if FROZEN and cmd in ('shell-run', 'shell-plan', 'shell-freeze') and os.path.basename(os.path.dirname(HERE)) != a.name: sys.exit('this is the frozen copy of campaign %s; it refuses to run campaign %s' % (os.path.basename(os.path.dirname(HERE)), a.name))
     if cmd == 'shell-plan':
+        if a.policy:
+            import shell_policy as sp
+            pol = sp.load(a.policy); sj = json.load(open(a.seeds, encoding='utf8')); base = os.path.dirname(os.path.abspath(a.seeds))
+            seeds = [dict(id=x['id'], matrix=matrix_from_text(open(os.path.join(base, x['file']), encoding='utf8').read())) for x in sj['seeds']]
+            plan = sp.build_plan(pol, seeds, a.rng_seed, a.variants, a.filler)
+            c = Camp.create(a.name, dict(policy=pol, plan=dict(rng_seed=a.rng_seed, variants=a.variants, filler=a.filler, seeds_file=os.path.abspath(a.seeds), n_entries=len(plan), seeds_sha1=hashlib.sha1(open(a.seeds, 'rb').read()).hexdigest())))
+            n = 0
+            for e in plan:
+                if c.enqueue(e['settings'], source=e['source'], tier=e['tier'], control=e['control'], label=e['label']): n += 1
+            print('created %s with policy; %d runs queued (paused: shell-control %s run, then shell-run %s --detach)' % (c.d, n, a.name, a.name)); return
         c = Camp.create(a.name); rid = c.enqueue(dict(matrix=open(a.pattern1_file).read(), tiles=3, cpi=22, wpi=16, ne=12), source='seed:13Nov-success')
         print('created %s; control run %s queued (paused: use shell-control %s run, then shell-run %s --detach)' % (c.d, rid, a.name, a.name)); return
     c = Camp(a.name)

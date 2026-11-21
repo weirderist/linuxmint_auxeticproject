@@ -22,7 +22,7 @@ def wjson(path, obj):
     os.replace(tmp, path)
 
 
-FILES = ('campaign.py', 'shell_campaign.py', 'shell_run.py', 'shell_metrics.py', 'shell_sim.py')
+FILES = ('campaign.py', 'shell_campaign.py', 'shell_run.py', 'shell_metrics.py', 'shell_sim.py', 'shell_policy.py')
 
 
 def provenance():
