@@ -65,3 +65,10 @@ Needs the fixtures: the finished fidelity runs 0001 (Pattern 1, tiles 1) and 000
 - That the drive produces a persistent chain or the loop-length gradient, how the sign of the feedback comes out, or that any value of `mu_n`, `e` or `N` is right: all are UNSOURCED.
 - That the fold descriptor equals `campaign.py`'s on real data (same definition, not compared).
 - Anything in a browser or on the server.
+
+## Pure shell only runs (no solver; the shell is replaced by a stub)
+
+| Command | What it checks |
+|---|---|
+| `python tests/test_shell_campaign.py` | settings validation, ids, queue, duplicates, runner end to end, pause / continue / stop, per-run timeout, disk guard, power-cut recovery (quarantine, publish of finished attempts), no overwrite, delete path guard and log, descriptors, KMSH export, `shell_run.py` stub. Two tests (symlink, in-progress delete) skip on Windows |
+| `python tests/test_shell_api.py` | `/api/shell/...`: list, detail, controls, start guards, delete with typed confirmation, page and script |

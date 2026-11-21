@@ -1,0 +1,24 @@
+# PREPARED, NOT INSTALLED. K chooses between this unit and deploy/crontab_shell.txt (never both), and installs it (Claude never runs systemctl).
+# Template unit: the instance name is the shell campaign, e.g.  shell_runner@shell1.service  runs  campaign.py shell-run shell1.
+# Install (as K, one command at a time):
+#   sudo cp ~/auxetic_project/deploy/shell_runner@.service /etc/systemd/system/shell_runner@.service
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now shell_runner@shell1.service
+# After a power cut the runner starts again at boot. It continues only if campaigns/shell_runs/<name>/control.json says "run" (Pause keeps it idle, Stop and the disk guard make it exit at once).
+# A run cut off by the power failure is moved to quarantine/ and runs again from the start; at most one run is lost. No campaign-wide time limit: it runs until paused.
+# The unit starts the runner from the campaign's FROZEN copy (campaigns/shell_runs/<name>/code/, made by shell-plan or shell-freeze), so a git pull never changes a running campaign.
+# Own unit = own cgroup: restarting auxetic_webui.service does not touch it. KillMode=process: stopping this unit never kills a shell run in progress (it finishes and is published by the next runner). One runner per campaign (flock); one job at a time on the machine.
+[Unit]
+Description=Auxetic pure-shell campaign runner (%i)
+After=local-fs.target
+
+[Service]
+Type=simple
+User=sarvesh
+WorkingDirectory=/home/sarvesh/auxetic_project/scripts
+ExecStart=/home/sarvesh/auxetic_project/venv/bin/python /home/sarvesh/auxetic_project/campaigns/shell_runs/%i/code/campaign.py shell-run %i
+Restart=no
+KillMode=process
+
+[Install]
+WantedBy=multi-user.target

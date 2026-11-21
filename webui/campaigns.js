@@ -222,3 +222,58 @@ async function refresh() {
   } catch (e) { msg(e.message, true); }
 }
 loadHelp(); loadDatasets(); refresh(); setInterval(() => { if (!document.hidden) refresh(); }, 20000);
+
+// ---------------------------------------------------------------- Pure shell only runs (thin-shell fold only; /api/shell/..., scripts/shell_campaign.py). Separate from the yarn campaign code above.
+let shCur = null, shData = null, shBusy = false; const shSel = new Set();
+const SH_COLS = ["status", "tiles", "cpi", "wpi", "kappa_scale", "h_scale", "matrix", "knit_fraction", "plan_x", "plan_y", "thickness", "wave_k", "wave_amp_median_mm", "mid_over_end", "steps_at_cap", "wall_s"];
+function shMsg(t, err) { const m = $("#shmsg"); m.textContent = t || ""; m.className = err ? "err" : ""; }
+async function shLoadList() {
+  const j = await api("/api/shell"); const t = $("#shtabs"); t.innerHTML = ""; $("#shempty").hidden = j.campaigns.length > 0;
+  if (!j.campaigns.some(c => c.name === shCur)) shCur = j.campaigns.length ? j.campaigns[0].name : null;
+  for (const c of j.campaigns) {
+    const b = document.createElement("button"); b.textContent = c.name + " (" + (c.runner_alive ? (c.state || "alive") : "no runner") + ", " + c.control + ")"; b.className = c.name === shCur ? "on" : "";
+    b.onclick = () => { shCur = c.name; shSel.clear(); shMsg(""); shRefresh(); }; t.appendChild(b);
+  }
+  $("#shcur").hidden = !shCur;
+}
+function shRender() {
+  const d = shData, rn = d.runner || {}, alive = d.runner_alive, state = alive ? (rn.state || "alive") : (rn.state === "guard_stopped" ? "guard_stopped" : "no runner");
+  $("#shname").textContent = d.name; const p = $("#shpill"); p.textContent = state; p.className = "pill " + (alive && rn.state === "running" ? "running" : alive && rn.state === "paused" ? "paused" : "idle");
+  $("#shdetail").textContent = "control: " + d.control + (rn.reason ? " | " + rn.reason : "");
+  $("#shStart").disabled = shBusy || (alive && d.control === "run"); $("#shPause").disabled = shBusy || !alive || d.control === "pause"; $("#shCont").disabled = shBusy || !alive || d.control === "run"; $("#shStop").disabled = shBusy || !alive;
+  const c = d.counts, pr = d.progress || {}, cur = rn.current ? d.rows.find(r => r.run === rn.current) : null;
+  const parts = [];
+  if (alive && rn.current) parts.push("current run " + esc(rn.current) + (pr.growth_steps_done != null ? ": growth step " + pr.growth_steps_done + (cur && cur.steps ? " of " + cur.steps : "") : ": starting") + (rn.timeout_s ? " (timeout " + dur(rn.timeout_s) + ")" : ""));
+  parts.push("queued " + c.queued + ", done " + c.done + ", failed " + c.failed + ", timeout " + c.timeout + (c.needs_approval ? ", needs approval " + c.needs_approval : ""));
+  parts.push("mean run " + (d.mean_wall_s ? dur(d.mean_wall_s) : "n/a") + (d.eta_s ? ", queue about " + dur(d.eta_s) : ""));
+  parts.push("free disk " + d.free_gb + " GB (stops below " + d.limits.min_free_gb + " GB), this folder " + d.total_gb + " GB (limit " + d.limits.max_total_gb + " GB)");
+  $("#shstat").innerHTML = parts.map(s => "<div>" + s + "</div>").join("");
+  const head = ["run"].concat(SH_COLS), rows = d.rows.slice().reverse();
+  $("#shtbl").innerHTML = "<thead><tr><th></th>" + head.map(h => "<th" + (h === "run" ? ' class="l"' : "") + ">" + esc(h) + "</th>").join("") + "</tr></thead><tbody>" + rows.map(r =>
+    '<tr><td><input type="checkbox" data-r="' + esc(r.run) + '"' + (shSel.has(r.run) ? " checked" : "") + (r.status === "done" ? "" : " disabled") + "></td>" +
+    head.map(h => "<td" + (h === "run" ? ' class="l"' : "") + ">" + esc(fmt(h === "status" ? (r.status + (r.heavy_deleted ? " (3D data deleted)" : "")) : r[h], h)) + "</td>").join("") + "</tr>").join("") + "</tbody>";
+  $("#shtbl").querySelectorAll("input[data-r]").forEach(i => i.onchange = () => { i.checked ? shSel.add(i.dataset.r) : shSel.delete(i.dataset.r); $("#shDel").disabled = shSel.size === 0; });
+  $("#shDel").disabled = shSel.size === 0; $("#shDel").textContent = "Delete heavy files of the selected runs (" + shSel.size + ")";
+}
+async function shAct(kind) {
+  shBusy = true; shMsg("…"); try { const j = await api("/api/shell/" + encodeURIComponent(shCur) + "/" + kind, { method: "POST" }); shMsg(j.message || "Done.", false); } catch (e) { shMsg(e.message, true); }
+  shBusy = false; setTimeout(shRefresh, 1500); shRefresh();
+}
+$("#shStart").onclick = () => { if (confirm("Start shell campaign '" + shCur + "'? Runs go on until you pause; finished runs are never repeated.")) shAct("start"); };
+$("#shPause").onclick = () => shAct("pause"); $("#shCont").onclick = () => shAct("continue");
+$("#shStop").onclick = () => { if (confirm("Stop the runner after the run in progress?")) shAct("stop"); };
+$("#shDel").onclick = async () => {
+  const ids = Array.from(shSel); if (!ids.length) return;
+  try {
+    const pv = await api("/api/shell/" + encodeURIComponent(shCur) + "/delete-preview?ids=" + encodeURIComponent(ids.join(",")));
+    const word = "DELETE " + pv.ids.length, ans = prompt("This removes shell.npz and shell.bin of " + pv.ids.length + " run(s): " + pv.ids.join(", ") + " (" + (pv.bytes / 1e6).toFixed(1) + " MB, " + pv.files + " files). Settings, descriptors and the log stay.\n\nType " + word + " to confirm:");
+    if (ans !== word) { shMsg("Delete cancelled.", false); return; }
+    const j = await api("/api/shell/" + encodeURIComponent(shCur) + "/delete", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ids: pv.ids, confirm: ans }) });
+    shSel.clear(); shMsg("Removed " + j.files + " files (" + (j.bytes / 1e6).toFixed(1) + " MB) of " + j.ids.length + " run(s). Logged in deletions.log.", false);
+  } catch (e) { shMsg(e.message, true); }
+  shRefresh();
+};
+async function shRefresh() {
+  try { await shLoadList(); if (!shCur) return; shData = await api("/api/shell/" + encodeURIComponent(shCur)); shRender(); } catch (e) { shMsg(e.message, true); }
+}
+shRefresh(); setInterval(() => { if (!document.hidden) shRefresh(); }, 5000);

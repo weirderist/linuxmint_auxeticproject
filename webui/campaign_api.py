@@ -1,5 +1,7 @@
 """Campaigns control page: read-only views of campaigns/ and datasets, plus two guarded actions (start = the same detached command as
-`campaign.py run <name> --detach`, pause = create the STOP file). Nothing is ever killed and nothing is deleted from here.
+`campaign.py run <name> --detach`, pause = create the STOP file). Nothing is ever killed from here. The YARN campaigns are never deleted from here; the only delete is the one of the
+"Pure shell only runs" section (below, /api/shell/...): it removes the heavy files shell.npz and shell.bin of chosen shell runs, inside campaigns/shell_runs only, with a path guard, a typed
+confirmation and a log written first (scripts/shell_campaign.py delete_heavy).
 
 Wired into webui/main.py with   campaign_api.setup(app, _any_running)   and   campaign_api.runner_busy()   (used by the Simulate endpoint).
 Reuses scripts/campaign.py (alive(), the lock-file format, METRIC_COLS) and scripts/check_dataset.py by loading them from SCRIPTS.
@@ -7,8 +9,9 @@ Paths: CAMPAIGN_DIR / CAMPAIGN_SCRIPTS (same variables as campaign.py), AUX_DATA
 """
 import csv, hashlib, importlib.util, json, math, os, re, subprocess, sys, threading, time
 from pathlib import Path
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, Response
+from pydantic import BaseModel
 
 HERE = Path(__file__).parent
 ROOT = HERE.parent
@@ -99,7 +102,14 @@ def _job_alive(d, runs):
     return False
 
 def runner_busy():
-    """'' if no campaign runner or run job is alive, otherwise a plain sentence saying which."""
+    """'' if no campaign runner, run job or shell run is alive, otherwise a plain sentence saying which."""
+    return _yarn_busy() or _shell_busy()
+
+def _shell_busy():
+    try: return _sc().busy_message()
+    except Exception: return ""
+
+def _yarn_busy():
     try:
         for d in sorted(p for p in CAMPAIGNS.iterdir() if p.is_dir() and (p / "manifest.json").exists()):
             alive, pid = _runner(d)
@@ -301,6 +311,91 @@ def stop(name: str):
     if p.exists(): return {"stop": name, "message": "A pause was already requested; the run in progress is finishing."}
     with open(p, "w") as f: f.write(time.strftime("%Y-%m-%dT%H:%M:%S") + "\n")                  # exactly what campaign.py stop writes; nothing is killed
     return {"stop": name, "message": "Pause requested. The run in progress finishes, then the runner stops. Nothing is killed."}
+
+
+# ------------------------------------------------------------------ pure shell runs (scripts/shell_campaign.py; design of 2026-11-21)
+def _sc(): return _load("shell_campaign", SCRIPTS / "shell_campaign.py")
+
+def _shell(name):
+    sc = _sc()
+    try: c = sc.Camp(name)
+    except ValueError: raise HTTPException(404, "unknown shell campaign")
+    if not c.exists(): raise HTTPException(404, "unknown shell campaign")
+    return sc, c
+
+@router.get("/api/shell")
+def shell_list():
+    sc = _sc(); root = Path(sc.SHELL_ROOT); out = []
+    if root.is_dir():
+        for d in sorted(p for p in root.iterdir() if p.is_dir() and NAME_RE.match(p.name) and (p / "spec.json").exists()):
+            st = sc.Camp(d.name).status(); out.append({"name": d.name, "control": st["control"], "runner_alive": st["runner_alive"], "state": (st["runner"] or {}).get("state", ""), "counts": st["counts"]})
+    return {"campaigns": out}
+
+@router.get("/api/shell/{name}")
+def shell_detail(name: str):
+    sc, c = _shell(name); st = c.status(); rows = c.rows(); st["n_rows"] = len(rows); st["rows"] = rows[-400:]
+    return st
+
+def _shell_guard(name):
+    why = _yarn_busy()
+    if why: raise HTTPException(409, "Not started: " + why)
+    if _any_web_job(): raise HTTPException(409, "Not started: a simulation started from the web page is running. Wait for it to finish.")
+
+@router.post("/api/shell/{name}/start")
+def shell_start(name: str):
+    """Start (or, if the runner is alive, continue): control = run; starts the detached runner (the FROZEN copy's campaign.py shell-run --detach, own session, SIGHUP ignored, project interpreter) when none is alive."""
+    sc, c = _shell(name)
+    if c.runner_alive():
+        c.set_control("run", why="page: start"); return {"started": name, "message": "The runner is already alive; control set to run."}
+    _shell_guard(name)
+    script = Path(c.code_dir()) / "campaign.py"          # the runner always starts from the campaign's FROZEN copy of the code, so a later git pull cannot change it
+    if not script.is_file(): raise HTTPException(409, "Not started: this shell campaign has no frozen code folder (code/). Run  campaign.py shell-freeze %s  on the server first." % name)
+    with _start_lock:
+        if time.time() - _last_start.get("shell:" + name, 0) < START_GUARD_S: raise HTTPException(409, "Not started: a start for this campaign was requested a moment ago. Reload in a few seconds.")
+        _last_start["shell:" + name] = time.time()
+    c.set_control("run", why="page: start")
+    py = str(PROJECT_PY) if PROJECT_PY.exists() else sys.executable
+    cmd = [py, str(script), "shell-run", name, "--detach"]
+    try: p = subprocess.run(cmd, capture_output=True, text=True, timeout=60, cwd=str(SCRIPTS))
+    except Exception as e: raise HTTPException(500, "could not run the start command: %s" % e)
+    if p.returncode != 0: raise HTTPException(500, "the start command failed (exit %s): %s" % (p.returncode, (p.stderr or p.stdout).strip()[-300:]))
+    return {"started": name, "message": p.stdout.strip(), "command": " ".join(cmd)}
+
+@router.post("/api/shell/{name}/pause")
+def shell_pause(name: str):
+    sc, c = _shell(name); c.set_control("pause", why="page: pause")
+    return {"control": "pause", "message": "Pause requested: the run in progress finishes, then the runner waits. Nothing is killed."}
+
+@router.post("/api/shell/{name}/continue")
+def shell_continue(name: str):
+    sc, c = _shell(name)
+    if not c.runner_alive(): raise HTTPException(409, "No runner of this campaign is alive: use Start.")
+    c.set_control("run", why="page: continue"); return {"control": "run", "message": "Continuing."}
+
+@router.post("/api/shell/{name}/stop")
+def shell_stop(name: str):
+    sc, c = _shell(name); c.set_control("stop", why="page: stop after current run")
+    return {"control": "stop", "message": "Stop requested: the run in progress finishes, then the runner exits. Nothing is killed."}
+
+class ShellDelete(BaseModel):
+    ids: list[str]
+    confirm: str = ""
+
+@router.post("/api/shell/{name}/delete")
+def shell_delete(name: str, b: ShellDelete, request: Request):
+    """Remove shell.npz and shell.bin of the chosen finished runs (settings, metrics and the index line stay). The confirmation text must be 'DELETE <n>' with n the number of runs."""
+    sc, c = _shell(name)
+    try: prev = sc.delete_heavy(c, b.ids, dry=True)
+    except ValueError as e: raise HTTPException(422, str(e))
+    if b.confirm != "DELETE %d" % len(prev["ids"]): raise HTTPException(422, "Type exactly DELETE %d to confirm (the number of runs selected)." % len(prev["ids"]))
+    try: return sc.delete_heavy(c, b.ids, client=(request.client.host if request.client else ""))
+    except ValueError as e: raise HTTPException(422, str(e))
+
+@router.get("/api/shell/{name}/delete-preview")
+def shell_delete_preview(name: str, ids: str = ""):
+    sc, c = _shell(name)
+    try: return sc.delete_heavy(c, [i for i in ids.split(",") if i], dry=True)
+    except ValueError as e: raise HTTPException(422, str(e))
 
 
 # ------------------------------------------------------------------ datasets (read only) and the column help

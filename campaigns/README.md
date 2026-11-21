@@ -216,3 +216,19 @@ Each run's `status.json` records the host name, the Python, jax, jaxlib, scipy a
 ## Paths
 
 `CAMPAIGN_ROOT` (or `LADDER_ROOT`) sets ROOT, default `~/auxetic_project`. `CAMPAIGN_LOG_DIR` (or `LADDER_LOG_DIR`) sets LOG_DIR, default `ROOT/logs`, where the runner log goes. `CAMPAIGN_DIR` and `CAMPAIGN_SCRIPTS` move the campaigns folder and the solver scripts.
+
+## Pure shell only runs (no yarn mesh)
+
+Campaigns of thin-shell folds only (`scripts/shell_sim.py`), about 5 min per run at tiles 3. Folder `campaigns/shell_runs/<name>/` (git-ignored). Page: Campaigns, section "Pure shell only runs". Design: the report of 2026-11-21 (limits UNSOURCED, approved by K).
+
+| Command (from `~/auxetic_project`, project interpreter `venv/bin/python scripts/campaign.py ...`) | What it does |
+|---|---|
+| `shell-plan <name>` | creates the campaign, paused, with run S000001 = Pattern 1 at the 13 Nov success settings (control: its shell.npz must equal the old one bit for bit) |
+| `shell-enqueue <name> file.json` | queues one settings object or a list (matrix, tiles, cpi, wpi, optional kappa_scale, h_scale, sub, steps, iter, nu, springs, seed); identical settings are never queued twice |
+| `shell-control <name> run\|pause\|stop` | pause = finish the run in progress then wait; stop = finish it then exit |
+| `shell-run <name> [--detach]` | the runner; one run at a time, no campaign-wide time limit |
+| `shell-status <name>` | JSON status |
+
+`shell-plan` (or `shell-freeze <name>` for an older campaign) copies the five code files into `<campaign>/code/` with `MANIFEST.json` (git commit, uncommitted-changes flag, sha256 of every file, library versions). The runner and every worker run from that copy (`shell-run` re-executes into it; the page's Start does too), the hashes are checked before every run (mismatch: the runner stops itself), and every run folder holds `provenance.json` (commit, sha256 of `shell_sim.py`, versions), copied into `status.json`, the index and `results.csv`. New code = new campaign. Not frozen: the Python libraries (versions are recorded only).
+
+Per-run timeout = max(900 s, 4 x 285 s x vertices / 11,737) (UNSOURCED). The runner stops itself (control = stop) when free disk is below 20 GB or `campaigns/shell_runs` exceeds 50 GB (UNSOURCED). Run folders appear only by renaming a finished `.tmp` folder; an interrupted attempt goes to `quarantine/` and runs again from the start (3 interruptions, then `needs_approval`). The page's delete removes only `shell.npz` and `shell.bin` of chosen runs and logs it first (`deletions.log`). Restart after a reboot: `deploy/shell_runner@.service` or `deploy/crontab_shell.txt` (prepared, not installed).

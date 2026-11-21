@@ -22,7 +22,7 @@ WEB_RESULTS = os.path.join(ROOT, 'webui', 'results')
 ACCEPTED_EXIT = (0, 2)            # relax_job: 0 = settled, 2 = ended as "failed" (not settled, e.g. outer cap reached). Both leave a usable relaxed state.
 BUILD_PARAMS = {'tiles': int, 'ne': float, 'cpi': float, 'wpi': float}
 RESERVED_RELAX = {'--folder', '--resume'}
-FOREIGN_JOB_SCRIPTS = ('relax_job.py', 'tile_sim.py')
+FOREIGN_JOB_SCRIPTS = ('relax_job.py', 'tile_sim.py', 'shell_run.py')      # shell_run.py: one pure-shell run (shell_campaign.py); one job at a time across all job types
 METRIC_COLS = ['exit_code', 'relax_state', 'settled_by', 'build_s', 'wall_s', 'vertices', 'rounds_used', 'outer_max', 'E_start', 'E_final', 'rel_dE_last', 'E_stretch', 'E_bend', 'E_contact',
                'min_dist_over_2R_start', 'min_dist_over_2R_end', 'rest_len_change_total', 'rest_len_change_max_abs_wale', 'shrink_x', 'shrink_y', 'z_range_over_R_end',
                'fold_kx_per_mm', 'fold_ky_per_mm', 'fold_turn_x_rad', 'fold_turn_y_rad', 'fold_direction', 'fold_amplitude_mm', 'fold_local_amplitude_mm',
@@ -586,6 +586,8 @@ def cmd_run(a):
     write_results(name); say('runner finished')
 
 def main():
+    if len(sys.argv) > 1 and sys.argv[1] in ('shell-plan', 'shell-enqueue', 'shell-run', 'shell-status', 'shell-control', 'shell-freeze'):          # pure shell campaigns: scripts/shell_campaign.py
+        import shell_campaign; return shell_campaign.cli(sys.argv[1], sys.argv[2:])
     ap = argparse.ArgumentParser(description=__doc__.split('\n')[0]); sub = ap.add_subparsers(dest='cmd', required=True)
     for c in ('plan', 'status', 'stop', 'run'): sp = sub.add_parser(c); sp.add_argument('name')
     r = sub.choices['run']; r.add_argument('--dry-run', action='store_true'); r.add_argument('--detach', action='store_true'); r.add_argument('--poll-s', type=int, default=60); r.add_argument('--ignore-spec-change', action='store_true')
