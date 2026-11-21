@@ -4,3 +4,6 @@
 @reboot sleep 90 && /home/sarvesh/auxetic_project/venv/bin/python /home/sarvesh/auxetic_project/campaigns/shell_runs/shell1/code/campaign.py shell-run shell1 --detach
 @reboot sleep 150 && /usr/bin/setsid /usr/bin/nice -n 19 /home/sarvesh/auxetic_project/venv/bin/python /home/sarvesh/auxetic_project/scripts/shell_rules.py shell1 --every 25 --poll-s 300 >> /home/sarvesh/shell_logs/rules_shell1.log 2>&1 &
 @reboot sleep 180 && /usr/bin/setsid /usr/bin/nice -n 19 /home/sarvesh/auxetic_project/venv/bin/python /home/sarvesh/auxetic_project/scripts/shell_proposer.py shell1 --poll-s 600 >> /home/sarvesh/shell_logs/proposer_shell1.log 2>&1 &
+# Line 4 (added 2026-11-21, installed by  bash deploy/analysis_job.sh install , not by hand): the scheduled analysis job at nice 19 and ionice idle. At every 100 finished runs of shell1 it runs
+# shell_proposer_eval.py then shell_rules_sr.py, one at a time, and keeps each result per run count in campaigns/shell_runs/shell1/analysis/scheduled/. Lock, atomic writes and interrupted attempts: see the script.
+@reboot sleep 210 && /usr/bin/setsid /usr/bin/ionice -c 3 /usr/bin/nice -n 19 /home/sarvesh/auxetic_project/venv/bin/python /home/sarvesh/auxetic_project/scripts/shell_analysis_job.py shell1 --poll-s 600 >> /home/sarvesh/shell_logs/analysis_shell1.log 2>&1 &
