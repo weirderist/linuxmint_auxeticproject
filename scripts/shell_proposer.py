@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """shell_proposer.py - Stage 6: a model-based proposer for the pure-shell campaign. A separate process (numpy only, low priority) that ADDS runs to the queue ahead of the filler (tier 5 < 9), only through
 Camp.enqueue, so the approved policy is enforced in code: ESSENTIAL settings are never touched, CPI/WPI stay inside the approved ratio range at constant density, the pattern is a slight edit of a seed.
-Phase 1 (before MIN_RESULTS = 100 finished runs): nothing proposed - the seeds, variants and the deterministic filler are the space-filling random sampling.
+Phase 1 (while the proposer gate is closed, see PROPOSER_MIN_ORIGINALS_FINISHED below; and in any case before MIN_RESULTS = 100 finished runs): nothing proposed - the seeds, variants and the deterministic
+filler are the space-filling random sampling. After the gate opens, the total number of proposer runs in the campaign is capped at PROPOSER_MAX_TOTAL.
 Phase 2: a Gaussian process (RBF kernel, hyper-parameters by marginal likelihood on a grid) per target (thickness_rel, shrink_y, fold_turn_x_rad) on standardised pattern features + ln(CPI/WPI). Candidates are
 slight edits of the seeds with a random ratio; the batch is chosen greedily by the largest mean predictive standard deviation (uncertainty sampling; the posterior variance does not depend on the unknown
 outcomes, so adding a chosen point lowers the variance around it: batch selection without waiting for results). Objective: where a measured reference exists (only Pattern 1 at the success settings, which has no free
@@ -11,6 +12,19 @@ import json, math, os, random, sys, time
 import numpy as np
 HERE = os.path.dirname(os.path.abspath(__file__)); sys.path.insert(0, HERE)
 import shell_features as sf, shell_policy as sp
+
+# ------------------------------------------------------------------ proposer gate and hard cap: the two constants K edits are here and nowhere else
+# Definitions (used in this file and in tests/test_shell_proposer_gate.py):
+#   proposer run        a queue entry of tier PROPOSER_TIER (5), the tier at which this script enqueues. An entry without a tier counts as tier 5, as in Camp.pending().
+#   control run         a queue entry of tier CONTROL_TIER (1) or one that carries a 'control' record (the 2 iteration-cap controls of the policy).
+#   original run        a queue entry that is neither a proposer run nor a control run (seeds tier 0, variants tier 2, filler tier 9).
+#   originals finished  the number of original runs whose last line in index.jsonl has status 'done'. Failed, timed-out, rejected, quarantined, interrupted and queued runs do not count.
+#   proposer gate       open when originals finished >= PROPOSER_MIN_ORIGINALS_FINISHED, otherwise closed. Fail safe: if the count cannot be read, the gate is closed.
+#   hard cap            the number of proposer runs ever created in the campaign (every tier-5 entry in the append-only queue.jsonl, whatever its status) may not exceed PROPOSER_MAX_TOTAL.
+# While the gate is closed or the cap is reached, propose() adds nothing. It never edits or removes an existing queue entry.
+PROPOSER_MIN_ORIGINALS_FINISHED = 800    # Source: decision by K, 23 Nov 2026.
+PROPOSER_MAX_TOTAL = 100                 # UNSOURCED default, to be adjusted by K.
+PROPOSER_TIER = 5; CONTROL_TIER = 1      # tier numbers of shell_campaign.Camp.enqueue and shell_policy.build_plan (not new constants)
 
 MIN_RESULTS = 100
 PROP_FEATURES = ('knit_fraction', 'boundary_density', 'sections_per_100', 'tm_wale_share', 'tm_course_share', 'axis_direction', 'dilution_wale', 'log_ratio')
@@ -89,17 +103,60 @@ def candidates(policy, seeds, rows, rng, n=400, tiles=4):
     return out
 
 
+def is_proposer_run(q): return q.get('tier', PROPOSER_TIER) == PROPOSER_TIER
+def is_control_run(q): return q.get('tier', PROPOSER_TIER) == CONTROL_TIER or bool(q.get('control'))
+def is_original_run(q): return not is_proposer_run(q) and not is_control_run(q)
+
+
+def _readable(*paths):
+    """True only if every file exists and can be opened for reading (a missing, unreadable or directory path gives False)."""
+    try:
+        for p in paths: open(p, 'rb').close()
+        return True
+    except OSError: return False
+
+
+def originals_finished(camp):
+    """Originals finished (definition above), or None if queue.jsonl or index.jsonl cannot be read. Read only."""
+    try:
+        if not _readable(camp.queue, camp.index): return None
+        q = {x['id']: x for x in camp.queue_items()}
+        return sum(1 for rid, x in camp.index_last().items() if x.get('status') == 'done' and rid in q and is_original_run(q[rid]))
+    except Exception: return None
+
+
+def proposer_runs_created(camp):
+    """Number of proposer runs ever created (every tier-5 entry in queue.jsonl), or None if queue.jsonl cannot be read. Read only."""
+    try:
+        if not _readable(camp.queue): return None
+        return sum(1 for x in camp.queue_items() if is_proposer_run(x))
+    except Exception: return None
+
+
+def gate(camp):
+    """State of the proposer gate and the hard cap. 'open' is True only if the gate is open AND the cap leaves room; 'room' = proposals that may still be created."""
+    lo = PROPOSER_MIN_ORIGINALS_FINISHED; cap = PROPOSER_MAX_TOTAL
+    n = originals_finished(camp); p = proposer_runs_created(camp); out = dict(originals_finished=n, min_originals_finished=lo, proposer_runs=p, max_total=cap, open=False, room=0)
+    if n is None or p is None: out.update(status='gate closed (count unreadable)', note='the finished count could not be read: fail safe, nothing is proposed'); return out
+    if n < lo: out.update(status='gate closed', note='%d original runs finished, the proposer starts at %d' % (n, lo)); return out
+    if p >= cap: out.update(status='cap reached', note='%d proposer runs exist, the cap is %d' % (p, cap)); return out
+    out.update(open=True, room=cap - p, status='gate open', note='%d original runs finished; %d of %d proposer runs used' % (n, p, cap)); return out
+
+
 def propose(camp, batch=3, dry=False, seed=None):
     import shell_campaign as sc
-    pol = camp.policy(); rows = sf.dataset(camp)
+    pol = camp.policy()
     if not pol: return dict(status='no policy', proposed=[])
+    g = gate(camp)
+    if not g['open']: return dict(status=g['status'], note=g['note'], proposed=[], gate=g)
+    rows = sf.dataset(camp)
     if len(rows) < MIN_RESULTS: return dict(status='waiting', note='%d finished runs, the model starts at %d' % (len(rows), MIN_RESULTS), proposed=[])
     if sum(1 for x in camp.pending() if x.get('tier') == 5) >= 2: return dict(status='enough proposals queued', proposed=[])
     plan = camp.spec_().get('plan') or {}; base = os.path.dirname(plan['seeds_file']); sj = json.load(open(plan['seeds_file'], encoding='utf8'))
     seeds = [dict(id=x['id'], matrix=sc.matrix_from_text(open(os.path.join(base, x['file']), encoding='utf8').read())) for x in sj['seeds']]
     rng = random.Random(seed if seed is not None else len(rows)); cand = candidates(pol, seeds, rows, rng)
     Xtr, mu, sd = design(rows); Xc = (np.array([[f[k] for k in PROP_FEATURES] for _, f in cand]) - mu) / sd
-    chosen = select_batch(Xtr, Xc, batch); ids = []
+    chosen = select_batch(Xtr, Xc, min(batch, g['room'])); ids = []
     for j in chosen:
         s, f = cand[j]
         if not dry: ids.append(camp.enqueue(s, source='proposer:gp', tier=5, label='GP uncertainty sampling, R %.3f' % (s['cpi'] / s['wpi'])))

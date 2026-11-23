@@ -61,8 +61,11 @@ dmin = min(np.linalg.norm(Xc[a] - Xc[b]) for i, a in enumerate(ch) for b in ch[i
 check('batch selection picks 5 distinct candidates that are not clones of each other', len(set(ch)) == 5 and dmin > 0.3, 'min distance %.2f' % dmin)
 ev = pr.evaluate(rows, repeats=6, seed=0, budgets=(20, 40, 60, 80)); wins = sum(1 for b in ev.values() if b['gp_rmse'] <= b['random_rmse'] * 1.05)
 check('fixed test against random sampling: uncertainty sampling is not worse than random at 3 of 4 budgets', wins >= 3, str({k: (round(v['random_rmse'], 4), round(v['gp_rmse'], 4)) for k, v in ev.items()}))
+# The checks below exercise the GP selection itself on 130 synthetic runs. The proposer gate (800 finished original runs, K 23 Nov 2026) would keep it closed here, so it is lowered to 100 for
+# this section only; the gate and the hard cap are tested in tests/test_shell_proposer_gate.py.
+pr.PROPOSER_MIN_ORIGINALS_FINISHED = 100
 c2 = sc.Camp('syn2'); sc.Camp.create('syn2', c.spec_()); k2 = sc.Camp('syn2')
-check('proposer waits below 100 results', pr.propose(k2, 3)['status'] == 'waiting')
+rk2 = pr.propose(k2, 3); check('proposer proposes nothing below 100 results (empty campaign: the gate is closed)', rk2['proposed'] == [] and rk2['status'] != 'proposed', rk2['status'])
 rp = pr.propose(c, 3, dry=True); check('dry run proposes nothing into the queue', rp['status'] == 'dry run' and len(c.queue_items()) == 11 + 2 + 91 + 60)
 before = len(c.queue_items()); rp = pr.propose(c, 3); new = c.queue_items()[before:]
 check('proposer enqueues 3 runs at tier 5 (ahead of the filler) through the policy-enforcing enqueue', rp['status'] == 'proposed' and len(new) == 3 and all(x['tier'] == 5 and x['source'] == 'proposer:gp' for x in new))
