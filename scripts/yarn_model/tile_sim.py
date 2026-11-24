@@ -171,7 +171,7 @@ def poisson_curve(t0, strains, direction='x', maxiter=1500, log=print):
 
 def run_tile(M, W, C, R, E=3700.0, kc_ratio=30.0, ref_scale=1.0, ds_over_R=1.0, rounds=6, reset=1.0, strains=(0.05, 0.1, 0.2), delta=0.05, maxiter=1500, perturb=0.02,
              seed=0, do=('rest', 'curl', 'poisson'), cache=None, labels_swapped=True, log=lambda m: print(m, flush=True), save=None, max_verts=3000):
-    cache = cache or os.path.join(os.path.dirname(os.path.abspath(bk.__file__)), 'cell_cache'); t0 = time.time()
+    cache = cache or os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(bk.__file__))), 'cell_cache'); t0 = time.time()
     loops, Lx, Ly, res = build_tile(M, W, C, R, ds_over_R*R, cache, labels_swapped)
     log('tile %d x %d stitches, Lx %.4g Ly %.4g, %d courses, %d vertices; periodicity residual %.2g (%.2g R)' % (len(M[0]), len(M), Lx, Ly, len(loops), sum(len(l) for l in loops), res, res/R))
     if sum(len(l) for l in loops) > max_verts: sys.exit('tile has %d vertices, above --max-verts %d: use a smaller matrix or a larger --ds' % (sum(len(l) for l in loops), max_verts))
@@ -191,7 +191,7 @@ def stitch_kappas(W, C, R, E, kc_ratio=30.0, ref_scale=0.5, maxiter=2500, rounds
     """Natural curvatures (1/length, > 0 toward +z) of a digit-1 stitch, from the periodic tile of an all-digit-1 fabric: returns (kx, ky). A digit-2 stitch gets the negatives
     (front/back mirror symmetry of the model; checked on a purl tile: kx -0.2242 vs knit +0.2239, ky +0.211 vs -0.213 at ref_scale 0.5). Cached in tile_kappa_cache.json.
     kappa* scales with ref_scale, which is UNSOURCED: calibrate with the shell curvature scale against a measured fold."""
-    key = '%.5g|%.5g|%.5g|%.6g|%.5g|%.4g|%d|%d' % (W, C, R, E, kc_ratio, ref_scale, maxiter, rounds); cache = cache or os.path.join(os.path.dirname(os.path.abspath(bk.__file__)), 'cell_cache')
+    key = '%.5g|%.5g|%.5g|%.6g|%.5g|%.4g|%d|%d' % (W, C, R, E, kc_ratio, ref_scale, maxiter, rounds); cache = cache or os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(bk.__file__))), 'cell_cache')
     cp = os.path.join(cache, 'tile_kappa_cache.json'); db = json.load(open(cp)) if os.path.exists(cp) else {}
     if key in db: log('tile curvature from cache: kx %.4g ky %.4g' % tuple(db[key])); return tuple(db[key])
     log('tile analysis for the shell curvature (all digit-1 tile, ref_scale %g): a few minutes, cached afterwards' % ref_scale)

@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Tests of the pure-shell policy (scripts/shell_policy.py, campaigns/shell_policy.json) and its enforcement in scripts/shell_campaign.py, WITHOUT the solver (shell_run.py stub).
+"""Tests of the pure-shell policy (scripts/campaigns/shell_policy.py, campaigns/shell_policy.json) and its enforcement in scripts/campaigns/shell_campaign.py, WITHOUT the solver (shell_run.py stub).
 Temporary folders only. Run from the repository root: python tests/test_shell_policy.py"""
 import json, math, os, random, sys, tempfile
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TMP = tempfile.mkdtemp(prefix='shellpolicy_')
 os.environ.update(SHELL_RUNS_DIR=os.path.join(TMP, 'shell_runs'), SHELL_RUN_STUB='1', CAMPAIGN_LOG_DIR=os.path.join(TMP, 'logs'))
-sys.path.insert(0, os.path.join(ROOT, 'scripts'))
+sys.path.insert(0, os.path.join(ROOT, 'scripts')); import scriptdirs
 import shell_campaign as sc, shell_policy as sp, campaign as cm
 bad = []
 def check(name, ok, info=''):
@@ -79,7 +79,7 @@ check('the policy and the plan are copied into the campaign spec; policy.py is p
 
 # ---- shell-plan --policy through the command line (real seeds, small filler)
 import subprocess
-r = subprocess.run([sys.executable, os.path.join(ROOT, 'scripts', 'campaign.py'), 'shell-plan', 'seeded', '--policy', os.path.join(ROOT, 'campaigns', 'shell_policy.json'), '--filler', '20'], capture_output=True, text=True, env=dict(os.environ))
+r = subprocess.run([sys.executable, os.path.join(ROOT, 'scripts', 'campaigns', 'campaign.py'), 'shell-plan', 'seeded', '--policy', os.path.join(ROOT, 'campaigns', 'shell_policy.json'), '--filler', '20'], capture_output=True, text=True, env=dict(os.environ))
 sd = sc.Camp('seeded')
 check('shell-plan --policy builds the seeded queue and is paused', r.returncode == 0 and sd.exists() and len(sd.queue_items()) == 11 + 2 + 91 + 20 and sd.get_control() == 'pause', (r.stdout + r.stderr)[-200:])
 check('the seeded queue starts with the seeds at tiers 0, then controls, variants, filler', [x['tier'] for x in sd.pending()][:13] == [0] * 11 + [1] * 2)

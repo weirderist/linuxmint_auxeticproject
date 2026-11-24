@@ -2,8 +2,8 @@
 """Validate measured datasets under data/ against the schema in data/README.md.
 
 Usage:
-    python scripts/check_dataset.py                # every folder in data/
-    python scripts/check_dataset.py data/<id> ...  # one or more named dataset folders
+    python scripts/tools/check_dataset.py                # every folder in data/
+    python scripts/tools/check_dataset.py data/<id> ...  # one or more named dataset folders
 
 Prints a summary table. Exit status 0 if there is no error, 1 if any error is found, 2 for a usage problem.
 Warnings (for example a value that is null because it is unknown) never change the exit status.
@@ -246,7 +246,7 @@ def check_dataset(folder):
 
 
 def main(argv):
-    root = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data')
+    root = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'data')
     if len(argv) > 1:
         folders = argv[1:]
     else:

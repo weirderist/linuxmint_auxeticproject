@@ -5,7 +5,7 @@ import json, os, sys, hashlib
 P = _os.path.join(ROOT_STR)
 SM = os.path.join(P, "smoke_test", "campaigns"); os.environ["CAMPAIGN_DIR"] = SM
 os.environ["CAMPAIGN_ROOT"] = os.path.join(P, "smoke_test"); os.environ["CAMPAIGN_SCRIPTS"] = os.path.join(P, "scripts")
-sys.path.insert(0, os.path.join(P, "scripts"))
+sys.path.insert(0, os.path.join(P, "scripts")); import scriptdirs
 import campaign as cm
 name = "smoke1"; d = os.path.join(SM, name); os.makedirs(d, exist_ok=True)
 spec = json.load(open(os.path.join(P, "campaigns", "selftest", "spec.json"))); spec["name"] = name

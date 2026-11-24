@@ -4,7 +4,7 @@ import os, sys, json, time, shutil, pathlib
 P = pathlib.Path(_os.path.join(ROOT_STR)); SM = P / "smoke_test"
 os.environ["CAMPAIGN_DIR"] = str(SM / "campaigns"); os.environ["AUX_AUTORESUME"] = "0"
 if not (SM / "campaigns" / "fid_copy" / "runs" / "0003").exists(): sys.exit("fixtures missing: run  python tests/make_fixtures.py  (see tests/README.md)")
-sys.path.insert(0, str(P / "webui")); sys.path.insert(0, str(P / "scripts"))
+sys.path.insert(0, str(P / "webui")); sys.path.insert(0, str(P / "scripts")); import scriptdirs
 import numpy as np
 import main, runview as rv, campaign_api as ca
 from fastapi.testclient import TestClient

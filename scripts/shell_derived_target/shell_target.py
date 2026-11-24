@@ -34,6 +34,8 @@ Usage:
 import argparse, json, os, shutil, subprocess, sys, time
 import numpy as np
 HERE = os.path.dirname(os.path.abspath(__file__)); sys.path.insert(0, HERE)
+_S = os.path.dirname(HERE)
+if os.path.basename(_S) == 'scripts': sys.path.extend(os.path.join(_S, _d) for _d in sorted(os.listdir(_S)) if _d not in ('legacy', '__pycache__') and os.path.isdir(os.path.join(_S, _d)))          # the other folders of scripts/ (not in a flat frozen copy)
 
 FACTOR_FLOOR = 0.2          # numerical guard, as loop_grade.FACTOR_FLOOR
 DEFAULTS = ['--E', '3700', '--mu', '0.49', '--k-contact', '40', '--perturb', '0.20', '--curl', '0.5', '--tension', '17', '--shell-w', '0.05', '--outer', '40', '--maxiter', '200']
@@ -82,7 +84,7 @@ def apply_shell_strain(sim, sh, sign=-1.0, gain=1.0):
     return dict(method='shell_strain', sign=float(sign), gain=float(gain), sections_count=len(sim.yarns), factor_min=float(fa.min()), factor_max=float(fa.max()),
                 total_l0_before=before, total_l0_after=after, stretch_min=float(la.min()), stretch_max=float(la.max()), stretch_mean=float(la.mean()),
                 course_mean_strain=[float(v) for v in ebar], conservation='per course (one yarn): sum of rest lengths unchanged',
-                note='params.loop_grade in this run is only the switch that called this rule; see scripts/shell_target.py', unsourced=UNSOURCED), fs
+                note='params.loop_grade in this run is only the switch that called this rule; see scripts/shell_derived_target/shell_target.py', unsourced=UNSOURCED), fs
 
 
 # ------------------------------------------------------------------ steps 1, 2 and 4
@@ -91,7 +93,7 @@ def load_shell(path):
 
 def build(run, out, s, ne):
     mat = '/'.join(' '.join(str(int(v)) for v in row) for row in s['matrix'])
-    cmd = [sys.executable, os.path.join(HERE, 'build_knit.py'), '--matrix', mat, '--tiles', str(int(s['tiles'])), '--ne', str(ne), '--cpi', str(s['cpi']), '--wpi', str(s['wpi']),
+    cmd = [sys.executable, os.path.join(os.path.dirname(HERE), 'yarn_model', 'build_knit.py'), '--matrix', mat, '--tiles', str(int(s['tiles'])), '--ne', str(ne), '--cpi', str(s['cpi']), '--wpi', str(s['wpi']),
            '--out', out, '--no-tube', '--name', 'shell target of %s' % os.path.basename(os.path.normpath(run)), '--id', 'target-%s' % os.path.basename(os.path.normpath(run))]
     print('build: ' + ' '.join(cmd), flush=True); subprocess.run(cmd, check=True)
 

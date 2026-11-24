@@ -355,7 +355,7 @@ def main():
     a.add_argument('--W', type=float, default=16.0); a.add_argument('--C', type=float, default=9.0); a.add_argument('--R', type=float, default=1.0)
     a.add_argument('--ne', type=float); a.add_argument('--cpi', type=float); a.add_argument('--wpi', type=float)
     a.add_argument('--tiles', type=int, default=25, help='repeats of the matrix in x and y')
-    a.add_argument('--out', default='run_knit'); a.add_argument('--cache', default=os.path.join(os.path.dirname(os.path.abspath(__file__)), 'cell_cache'))
+    a.add_argument('--out', default='run_knit'); a.add_argument('--cache', default=os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'cell_cache'))
     a.add_argument('--labels', choices=('swapped', 'printed'), default='swapped'); a.add_argument('--swap-types', action='store_true')
     a.add_argument('--per', type=int, default=16, help='curve samples per control-point interval (axis CSV)')
     a.add_argument('--name', default=None, help='human-readable label stored in meta.json (default: matrix and tiles)')

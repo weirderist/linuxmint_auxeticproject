@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Tests of the pure-shell campaign machinery (scripts/shell_campaign.py, shell_run.py, shell_metrics.py) WITHOUT the solver: shell_run.py runs in its stub mode
+"""Tests of the pure-shell campaign machinery (scripts/campaigns/shell_campaign.py, shell_run.py, shell_metrics.py) WITHOUT the solver: shell_run.py runs in its stub mode
 (SHELL_RUN_STUB=1: a synthetic sheet, no JAX). Everything happens in a temporary folder; nothing under campaigns/ or scripts/ is written. Run from the repository root: python tests/test_shell_campaign.py"""
 import json, os, struct, sys, tempfile, threading, time, glob
 import numpy as np
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TMP = tempfile.mkdtemp(prefix='shelltest_')
 os.environ['SHELL_RUNS_DIR'] = os.path.join(TMP, 'shell_runs'); os.environ['SHELL_RUN_STUB'] = '1'; os.environ['CAMPAIGN_LOG_DIR'] = os.path.join(TMP, 'logs')
-sys.path.insert(0, os.path.join(ROOT, 'scripts'))
+sys.path.insert(0, os.path.join(ROOT, 'scripts')); import scriptdirs
 import shell_campaign as sc, shell_metrics as sm, campaign as cm
 bad = []
 def check(name, ok, info=''):
@@ -127,8 +127,8 @@ else: check('without a live runner nothing blocks', sc.busy_message() == '')
 # ---- frozen copy of the code and provenance (a later git pull cannot change a running campaign)
 import subprocess
 SCR = os.path.join(ROOT, 'scripts'); c = newcamp(); man = c.manifest()
-check('freeze: code/ holds the 5 files, byte copies of scripts/', all(sc.file_sha256(os.path.join(c.code_dir(), f)) == sc.file_sha256(os.path.join(SCR, f)) for f in sc.FROZEN_FILES))
-check('MANIFEST.json: sha256 of every file, shell_sim hash, git commit and dirty flag, versions', set(man['files']) == set(sc.FROZEN_FILES) and man['shell_sim_sha256'] == sc.file_sha256(os.path.join(SCR, 'shell_sim.py')) and 'git_commit' in man and 'git_dirty' in man and man['python'], str({k: man[k] for k in ('git_commit', 'git_dirty')}))
+check('freeze: code/ holds the 5 files, byte copies of scripts/', all(sc.file_sha256(os.path.join(c.code_dir(), f)) == sc.file_sha256(sc.frozen_source(os.path.join(SCR, 'campaigns'), f)) for f in sc.FROZEN_FILES))
+check('MANIFEST.json: sha256 of every file, shell_sim hash, git commit and dirty flag, versions', set(man['files']) == set(sc.FROZEN_FILES) and man['shell_sim_sha256'] == sc.file_sha256(os.path.join(SCR, 'shell_model', 'shell_sim.py')) and 'git_commit' in man and 'git_dirty' in man and man['python'], str({k: man[k] for k in ('git_commit', 'git_dirty')}))
 check('freeze never overwrites (new code = new campaign)', raises(c.freeze, FileExistsError))
 check('intact frozen copy verifies', c.verify_code() == '')
 c.enqueue(S()); c.set_control('run'); sc.serve(c, poll_s=0.2, stop_when_empty=True, lock=False, run_poll=0.1)
@@ -151,13 +151,13 @@ r = subprocess.run([sys.executable, os.path.join(fz.code_dir(), 'campaign.py'), 
 check('a frozen copy refuses to run another campaign', r.returncode != 0 and 'refuses to run' in (r.stderr + r.stdout), (r.stderr + r.stdout)[-160:])
 if os.name == 'posix':           # the runner locks with flock and re-executes into the frozen copy: Linux only
     pc = newcamp(); pc.enqueue(S()); pc.set_control('run')
-    r = subprocess.run([sys.executable, os.path.join(SCR, 'campaign.py'), 'shell-run', pc.name, '--stop-when-empty', '--poll-s', '0.2'], capture_output=True, text=True)
+    r = subprocess.run([sys.executable, os.path.join(SCR, 'campaigns', 'campaign.py'), 'shell-run', pc.name, '--stop-when-empty', '--poll-s', '0.2'], capture_output=True, text=True)
     pp = cm.rjson(os.path.join(pc.runs, 'S000001', 'provenance.json')) or {}
     check('shell-run from the repo re-executes into the frozen copy: the run records frozen = true', r.returncode == 0 and pp.get('frozen') is True and pp.get('matches_manifest') is True, (r.stderr + r.stdout)[-300:])
 else: print('SKIP  runner re-exec test (Linux only)')
 nf = newcamp()
 import shutil; shutil.move(nf.code_dir(), nf.code_dir() + '_moved')
-r = subprocess.run([sys.executable, os.path.join(SCR, 'campaign.py'), 'shell-run', nf.name, '--stop-when-empty'], capture_output=True, text=True)
+r = subprocess.run([sys.executable, os.path.join(SCR, 'campaigns', 'campaign.py'), 'shell-run', nf.name, '--stop-when-empty'], capture_output=True, text=True)
 check('a campaign without a frozen copy is refused unless --allow-unfrozen', r.returncode != 0 and 'frozen' in (r.stderr + r.stdout), (r.stderr + r.stdout)[-160:])
 
 # ---- metrics and export
@@ -185,7 +185,7 @@ check('KMSH vertices and indices round trip', np.allclose(pos, flat.reshape(-1, 
 # ---- shell_run.py as a subprocess (stub): files, order, nothing outside --out
 import subprocess
 o = os.path.join(TMP, 'one'); sp = os.path.join(TMP, 'one_settings.json'); json.dump(sc.normalise(S()), open(sp, 'w'))
-r = subprocess.run([sys.executable, os.path.join(ROOT, 'scripts', 'shell_run.py'), '--settings', sp, '--out', o], capture_output=True, text=True)
+r = subprocess.run([sys.executable, os.path.join(ROOT, 'scripts', 'campaigns', 'shell_run.py'), '--settings', sp, '--out', o], capture_output=True, text=True)
 z = np.load(os.path.join(o, 'shell.npz'))
 check('shell_run.py (stub) exits 0 and writes shell.npz with the keys relax_job writes', r.returncode == 0 and set(z.files) == {'X', 'W', 'C', 'sub', 'nx', 'ny', 'kappa', 'h'} and z['X'].shape == (9, 9, 3), r.stderr[-200:])
 check('metrics.json is written last (newest file)', max(os.listdir(o), key=lambda f: os.path.getmtime(os.path.join(o, f))) in ('metrics.json',))

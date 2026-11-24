@@ -1,9 +1,9 @@
-"""Tests of scripts/shell_fold.py (progressive fold): numpy and scipy only, NO JAX and no solver (a stand-in relax_solver module is put in sys.modules so that relax_job's numpy helpers import).
+"""Tests of scripts/shell_derived_target/shell_fold.py (progressive fold): numpy and scipy only, NO JAX and no solver (a stand-in relax_solver module is put in sys.modules so that relax_job's numpy helpers import).
 The relaxation is replaced by a stub that moves every stitch cell exactly onto its hold target, and the blocking by an injected distance function; so these tests check the LOGIC (freezing, blocked
 test, conservation, signs, measurement) and say nothing about the physics of a real run.
 Run from the repository root:  python tests/test_shell_fold.py"""
 import os, sys, types
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__))); sys.path.insert(0, os.path.join(ROOT, 'scripts'))
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__))); sys.path.insert(0, os.path.join(ROOT, 'scripts')); import scriptdirs
 sys.modules.setdefault('relax_solver', types.ModuleType('relax_solver'))          # stand-in: relax_job does `import relax_solver as sv` at import time (jax); none of its functions is called here
 import numpy as np
 import relax_state as rs, shell_fold as sf, shell_target as st

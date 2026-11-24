@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Tests of scripts/shell_strain.py (membrane strain and shape fields of a shell, numpy only) with exact cases: flat sheet, uniform stretch, a sheet rolled onto a cylinder (isometric), legend contract.
+"""Tests of scripts/shell_model/shell_strain.py (membrane strain and shape fields of a shell, numpy only) with exact cases: flat sheet, uniform stretch, a sheet rolled onto a cylinder (isometric), legend contract.
 Run from the repository root: python tests/test_shell_strain.py"""
 import os, sys
 import numpy as np
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__))); sys.path.insert(0, os.path.join(ROOT, 'scripts'))
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__))); sys.path.insert(0, os.path.join(ROOT, 'scripts')); import scriptdirs
 import shell_strain as ss
 bad = []
 def check(name, ok, info=''):
@@ -27,7 +27,7 @@ check('strain colours: zero is the neutral colour, compression blue, tension red
 try: ss.vertex_field(flat, W, C, sub, 'bogus'); check('unknown field is refused', False)
 except ValueError: check('unknown field is refused', True)
 
-# ---- one fold descriptor definition: shell_metrics.describe uses the same quadratic fit as scripts/fold_metric.py (K's definition of kx, ky)
+# ---- one fold descriptor definition: shell_metrics.describe uses the same quadratic fit as scripts/fold_analysis/fold_metric.py (K's definition of kx, ky)
 import shell_metrics as sm, fold_metric as fm
 rng = np.random.default_rng(3); Xr = cy + 0.05 * rng.standard_normal(cy.shape); d = sm.describe(Xr, W, C, sub); fit = fm.fit(Xr.reshape(-1, 3))
 check('describe() curvatures equal fold_metric.fit (kx, ky) on the same vertices', abs(d['fold_kx_per_mm'] - fit['kx']) < 1e-12 and abs(d['fold_ky_per_mm'] - fit['ky']) < 1e-12, '%.6f vs %.6f' % (d['fold_kx_per_mm'], fit['kx']))

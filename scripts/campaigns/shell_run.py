@@ -11,6 +11,8 @@ Test hook (never set in real campaigns): environment SHELL_RUN_STUB=1 replaces t
 import argparse, json, os, sys, time
 import numpy as np
 HERE = os.path.dirname(os.path.abspath(__file__)); sys.path.insert(0, HERE)
+_S = os.path.dirname(HERE)
+if os.path.basename(_S) == 'scripts': sys.path.extend(os.path.join(_S, _d) for _d in sorted(os.listdir(_S)) if _d not in ('legacy', '__pycache__') and os.path.isdir(os.path.join(_S, _d)))          # the other folders of scripts/ (not in a flat frozen copy)
 import shell_metrics as sm
 
 SHELL_KAPPA_C, SHELL_H_C = 1.2, 0.5 / 1.2          # as relax_job.py: Niu et al. kappa = 1, h = 0.5 for a stitch 1.4 x 1.2, written per course spacing C
@@ -29,14 +31,22 @@ def provenance():
     """What actually ran: sha256 of the code files next to this script, compared with the frozen MANIFEST.json (if this is a campaign's frozen copy), git commit, library versions."""
     import hashlib, importlib.metadata as im, platform, subprocess
     sha = lambda p: hashlib.sha256(open(p, 'rb').read()).hexdigest()
-    files = {f: sha(os.path.join(HERE, f)) for f in FILES if os.path.isfile(os.path.join(HERE, f))}
+    GITDIR = os.path.dirname(HERE) if os.path.basename(os.path.dirname(HERE)) == 'scripts' else HERE          # git is asked about the whole of scripts/, as before the sort into folders
+    def where(f):          # next to this script (flat copy) or in a sibling folder of scripts/ (shell_sim.py and shell_metrics.py live in scripts/shell_model/)
+        p = os.path.join(HERE, f)
+        if os.path.isfile(p): return p
+        for d in sorted(os.listdir(os.path.dirname(HERE))):
+            q = os.path.join(os.path.dirname(HERE), d, f)
+            if os.path.isfile(q): return q
+        return p
+    files = {f: sha(where(f)) for f in FILES if os.path.isfile(where(f))}
     try: man = json.load(open(os.path.join(HERE, 'MANIFEST.json')))
     except (OSError, ValueError): man = None
     commit, dirty = (man or {}).get('git_commit', ''), (man or {}).get('git_dirty')
     if not man:                                                       # run by hand from scripts/: ask git (best effort)
         try:
-            commit = subprocess.run(['git', '-C', HERE, 'rev-parse', 'HEAD'], capture_output=True, text=True, timeout=20).stdout.strip()
-            dirty = bool(subprocess.run(['git', '-C', HERE, 'status', '--porcelain', '--', '.'], capture_output=True, text=True, timeout=20).stdout.strip())
+            commit = subprocess.run(['git', '-C', GITDIR, 'rev-parse', 'HEAD'], capture_output=True, text=True, timeout=20).stdout.strip()
+            dirty = bool(subprocess.run(['git', '-C', GITDIR, 'status', '--porcelain', '--', '.'], capture_output=True, text=True, timeout=20).stdout.strip())
         except Exception: pass
     out = dict(frozen=bool(man), git_commit=commit, git_dirty=dirty, shell_sim_sha256=files.get('shell_sim.py', ''), files=files, matches_manifest=(files == man.get('files')) if man else None,
                manifest_frozen=(man or {}).get('frozen'), python=platform.python_version(), host=platform.node(), t=time.strftime('%Y-%m-%dT%H:%M:%S'))

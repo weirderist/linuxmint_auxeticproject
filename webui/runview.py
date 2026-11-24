@@ -19,7 +19,7 @@ HERE = Path(__file__).parent
 ROOT = HERE.parent
 CAMPAIGNS = Path(os.environ.get("CAMPAIGN_DIR") or ROOT / "campaigns")
 SCRIPTS = Path(os.environ.get("CAMPAIGN_SCRIPTS") or ROOT / "scripts")
-if str(SCRIPTS) not in sys.path: sys.path.append(str(SCRIPTS))
+if str(SCRIPTS / "yarn_model") not in sys.path: sys.path.append(str(SCRIPTS / "yarn_model"))
 import loop_grade as lg          # shared with relax_job.py --loop-grade: resample, loop boundaries, loop sums (one loop identity for the viewer and the field)
 RESULTS = HERE / "results"
 ID_RE = re.compile(r"^[0-9A-Za-z_-]{1,64}$")
@@ -96,7 +96,7 @@ def ensure_tube(rid, d, rel):
 
 def _gen(src, out, R, sides, prog):
     """Child process: the same tube writer as build_knit.py (write_obj: decimation, rotation-minimising frames, sweep_tube), progress in a JSON file."""
-    sys.path.insert(0, str(SCRIPTS))
+    sys.path.insert(0, str(SCRIPTS / "yarn_model"))
     import build_knit as bk
     t0 = time.time(); out = Path(out)
     def note(stage, done=0, total=0, finished=False, error=""):

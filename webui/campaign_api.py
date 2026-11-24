@@ -1,10 +1,10 @@
 """Campaigns control page: read-only views of campaigns/ and datasets, plus two guarded actions (start = the same detached command as
 `campaign.py run <name> --detach`, pause = create the STOP file). Nothing is ever killed from here. The YARN campaigns are never deleted from here; the only delete is the one of the
 "Pure shell only runs" section (below, /api/shell/...): it removes the heavy files shell.npz and shell.bin of chosen shell runs, inside campaigns/shell_runs only, with a path guard, a typed
-confirmation and a log written first (scripts/shell_campaign.py delete_heavy).
+confirmation and a log written first (scripts/campaigns/shell_campaign.py delete_heavy).
 
 Wired into webui/main.py with   campaign_api.setup(app, _any_running)   and   campaign_api.runner_busy()   (used by the Simulate endpoint).
-Reuses scripts/campaign.py (alive(), the lock-file format, METRIC_COLS) and scripts/check_dataset.py by loading them from SCRIPTS.
+Reuses scripts/campaigns/campaign.py (alive(), the lock-file format, METRIC_COLS) and scripts/tools/check_dataset.py by loading them from SCRIPTS.
 Paths: CAMPAIGN_DIR / CAMPAIGN_SCRIPTS (same variables as campaign.py), AUX_DATA_DIR (default <project>/data).
 """
 import csv, hashlib, importlib.util, json, math, os, re, subprocess, sys, threading, time
@@ -44,8 +44,8 @@ def _load(name, path):
         m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m); _mods[name] = m
     return _mods[name]
 
-def _cm(): return _load("campaign_cli", SCRIPTS / "campaign.py")
-def _tight(): return _load("shell_tightness", SCRIPTS / "shell_tightness.py")          # display-only tightness values, computed on read from the recorded CPI and WPI
+def _cm(): return _load("campaign_cli", SCRIPTS / "campaigns" / "campaign.py")
+def _tight(): return _load("shell_tightness", SCRIPTS / "shell_model" / "shell_tightness.py")          # display-only tightness values, computed on read from the recorded CPI and WPI
 
 
 # ------------------------------------------------------------------ small helpers
@@ -299,7 +299,7 @@ def start(name: str):
         if time.time() - _last_start.get(name, 0) < START_GUARD_S: raise HTTPException(409, "Not started: a start for this campaign was requested a moment ago. Reload in a few seconds.")
         _last_start[name] = time.time()
     py = str(PROJECT_PY) if PROJECT_PY.exists() else sys.executable                       # campaign.py starts build_knit.py and relax_job.py with ITS OWN sys.executable, so use the project venv, not the web service's
-    cmd = [py, str(SCRIPTS / "campaign.py"), "run", name, "--detach"]          # the same command as the README step 3
+    cmd = [py, str(SCRIPTS / "campaigns" / "campaign.py"), "run", name, "--detach"]          # the same command as the README step 3
     try:
         p = subprocess.run(cmd, capture_output=True, text=True, timeout=60, cwd=str(SCRIPTS))
     except Exception as e:
@@ -320,8 +320,8 @@ def stop(name: str):
     return {"stop": name, "message": "Pause requested. The run in progress finishes, then the runner stops. Nothing is killed."}
 
 
-# ------------------------------------------------------------------ pure shell runs (scripts/shell_campaign.py; design of 2026-11-21)
-def _sc(): return _load("shell_campaign", SCRIPTS / "shell_campaign.py")
+# ------------------------------------------------------------------ pure shell runs (scripts/campaigns/shell_campaign.py; design of 2026-11-21)
+def _sc(): return _load("shell_campaign", SCRIPTS / "campaigns" / "shell_campaign.py")
 
 def _shell(name):
     sc = _sc()
@@ -340,7 +340,7 @@ def shell_list():
 
 @router.get("/api/shell/{name}")
 def shell_detail(name: str):
-    sc, c = _shell(name); st = c.status(); rows = c.rows(); sco = _load("shell_score", SCRIPTS / "shell_score.py")
+    sc, c = _shell(name); st = c.status(); rows = c.rows(); sco = _load("shell_score", SCRIPTS / "shell_model" / "shell_score.py")
     for r in rows: r["score"] = sco.score(r)          # similarity out of 100 where a measured reference exists (Pattern 1), else None
     tg = _tight()
     for r in rows: tr = tg.record(r); r["stitch_density"], r["tf_rel"], r["tf_c_rel"], r["tf_w_rel"] = tr["stitch_density"], tr["tf_rel"], tr["tf_c_rel"], tr["tf_w_rel"]          # display only, computed on read (Ne fixed at 12); nothing is written to the runs
@@ -437,21 +437,21 @@ def shell_colors(name: str, rid: str, field: str = "area_strain", clip: float = 
     try: f = Path(c.run_path(rid)) / "shell.npz"
     except ValueError as e: raise HTTPException(404, str(e))
     if not f.is_file(): raise HTTPException(404, "the 3D data of this run was deleted")
-    ss = _load("shell_strain", SCRIPTS / "shell_strain.py")
+    ss = _load("shell_strain", SCRIPTS / "shell_model" / "shell_strain.py")
     try: X, W, C, sub = ss.load(f); rgb, legend = ss.colours(field, ss.vertex_field(X, W, C, sub, field), clip)
     except ValueError as e: raise HTTPException(422, str(e))
     return Response(rgb.tobytes(), media_type="application/octet-stream", headers={"Content-Encoding": "identity", "X-Count": str(len(rgb)), "X-Legend": json.dumps(legend)})
 
 @router.get("/api/shell/{name}/rules")
 def shell_rules(name: str):
-    """What the offline rule job (scripts/shell_rules.py) last wrote; nothing is computed here."""
+    """What the offline rule job (scripts/shell_learning/shell_rules.py) last wrote; nothing is computed here."""
     sc, c = _shell(name); r = _rjson(Path(c.d) / "analysis" / "rules.json")
     if r is None: return {"status": "not run yet", "min_runs": 100, "n_finished": sum(1 for x in c.index_last().values() if x.get("status") == "done"), "label": "learned from the shell, not confirmed on real fabric"}
     return r
 
-# ------------------------------------------------------------------ scheduled analysis (scripts/shell_analysis_job.py): READ ONLY. Nothing here starts, stops or changes a tool; it reads analysis/scheduled/.
+# ------------------------------------------------------------------ scheduled analysis (scripts/shell_learning/shell_analysis_job.py): READ ONLY. Nothing here starts, stops or changes a tool; it reads analysis/scheduled/.
 MILESTONE_RE = re.compile(r"^[0-9]{1,6}$")
-def _aj(): return _load("shell_analysis_job", SCRIPTS / "shell_analysis_job.py")
+def _aj(): return _load("shell_analysis_job", SCRIPTS / "shell_learning" / "shell_analysis_job.py")
 
 def _milestones(c):
     aj = _aj(); d = Path(aj.adir(c)); out = []
@@ -510,7 +510,7 @@ def page_shellview_js(): return _page("shellview.js", "application/javascript")
 # ------------------------------------------------------------------ datasets (read only) and the column help
 @router.get("/api/datasets")
 def datasets():
-    cd = _load("check_dataset_cli", SCRIPTS / "check_dataset.py"); out = []
+    cd = _load("check_dataset_cli", SCRIPTS / "tools" / "check_dataset.py"); out = []
     if DATA.is_dir():
         for d in sorted(p for p in DATA.iterdir() if p.is_dir() and (p / "meta.json").exists()):
             info = cd.check_dataset(str(d)); meta = _rjson(d / "meta.json") or {}

@@ -17,7 +17,7 @@ mkdir -p "$S" "$LOG_DIR"
 echo "label $LABEL tiles $TILES start $(date +%s.%N)" > "$L.status"
 
 # ---- build ----
-/usr/bin/time -v -o "$L.build.time" "$P" -u scripts/build_knit.py --matrix "1 1/1 1" --tiles "$TILES" \
+/usr/bin/time -v -o "$L.build.time" "$P" -u scripts/yarn_model/build_knit.py --matrix "1 1/1 1" --tiles "$TILES" \
   --ne 12 --cpi 22 --wpi 16 --out "$S" --name "ladder-$LABEL" --no-tube > "$L.build.log" 2>&1
 BRC=$?
 echo "build_exit $BRC" >> "$L.status"
@@ -26,14 +26,14 @@ if [ $BRC -ne 0 ]; then echo "BUILD_FAILED" >> "$L.status"; exit 10; fi
 
 # ---- relax ----
 (
-  /usr/bin/time -v -o "$L.relax.time" "$P" -u scripts/relax_job.py --folder "$S" --E 3700 --mu 0.49 \
+  /usr/bin/time -v -o "$L.relax.time" "$P" -u scripts/yarn_model/relax_job.py --folder "$S" --E 3700 --mu 0.49 \
     --k-contact 50017.10385104558 --perturb 0.02 --outer 20 --maxiter 150 2>&1 \
   | while IFS= read -r line; do printf '%s %s\n' "$(date +%s.%N)" "$line"; done > "$L.relax.log"
 ) &
 SUB=$!
 sleep 3
 while kill -0 "$SUB" 2>/dev/null; do
-  PID=$(pgrep -f "^$P -u scripts/relax_job.py --folder $S " | head -1)
+  PID=$(pgrep -f "^$P -u scripts/yarn_model/relax_job.py --folder $S " | head -1)
   if [ -n "$PID" ]; then
     RSS=$(awk '/VmRSS/{print $2}' /proc/$PID/status 2>/dev/null)
     if [ -n "$RSS" ] && [ "$RSS" -gt "$RAM_LIMIT_KB" ]; then

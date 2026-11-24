@@ -5,7 +5,7 @@ Each dataset is one folder, `data/<id>/`, holding two files:
 - `meta.json` describes the fabric, the test and the units.
 - `data.csv` holds the measurements.
 
-The folder name must equal the `id` in `meta.json`. Optional photographs go in `data/<id>/photos/`; these are excluded from git. Check the layout with `python scripts/check_dataset.py` (all datasets) or `python scripts/check_dataset.py data/<id>` (one).
+The folder name must equal the `id` in `meta.json`. Optional photographs go in `data/<id>/photos/`; these are excluded from git. Check the layout with `python scripts/tools/check_dataset.py` (all datasets) or `python scripts/tools/check_dataset.py data/<id>` (one).
 
 Rule: record only what was measured or is documented. Write `null` for an unknown value; never estimate one. Anything without a source must say so in `notes`.
 

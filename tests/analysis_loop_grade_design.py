@@ -1,4 +1,4 @@
-"""REFERENCE PROTOTYPE (independent, SciPy based; no simulation) of the sectioned starting loop-length field of relax_job --loop-grade. The production code is scripts/loop_grade.py (numpy only);
+"""REFERENCE PROTOTYPE (independent, SciPy based; no simulation) of the sectioned starting loop-length field of relax_job --loop-grade. The production code is scripts/yarn_model/loop_grade.py (numpy only);
 tests/test_loop_grade.py checks that it reproduces this prototype exactly. The prototype weights every loop equally; the production code weights by rest length per solver segment.
 Run:  python tests/analysis_loop_grade_design.py        (needs numpy and scipy)
 

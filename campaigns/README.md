@@ -19,37 +19,37 @@ ssh server "ls ~/auxetic_project/campaigns"
 **1. Plan** (fixes the list of runs; do this once per campaign, it refuses to overwrite an existing plan):
 
 ```
-ssh server "cd ~/auxetic_project && venv/bin/python scripts/campaign.py plan fidelity"
+ssh server "cd ~/auxetic_project && venv/bin/python scripts/campaigns/campaign.py plan fidelity"
 ```
 
 **2. Check what would run** (starts nothing, prints every command):
 
 ```
-ssh server "cd ~/auxetic_project && venv/bin/python scripts/campaign.py run fidelity --dry-run"
+ssh server "cd ~/auxetic_project && venv/bin/python scripts/campaigns/campaign.py run fidelity --dry-run"
 ```
 
 **3. Start** (detached: it keeps running after you close PowerShell or the connection drops):
 
 ```
-ssh server "cd ~/auxetic_project && venv/bin/python scripts/campaign.py run fidelity --detach"
+ssh server "cd ~/auxetic_project && venv/bin/python scripts/campaigns/campaign.py run fidelity --detach"
 ```
 
 **4. Check status** (counts, and a table of the runs; also refreshes results.csv):
 
 ```
-ssh server "cd ~/auxetic_project && venv/bin/python scripts/campaign.py status fidelity"
+ssh server "cd ~/auxetic_project && venv/bin/python scripts/campaigns/campaign.py status fidelity"
 ```
 
 **5. Pause (stop):** the run in progress finishes, then the runner stops. Nothing is killed. This can take as long as one run (minutes to an hour for the larger fabrics).
 
 ```
-ssh server "cd ~/auxetic_project && venv/bin/python scripts/campaign.py stop fidelity"
+ssh server "cd ~/auxetic_project && venv/bin/python scripts/campaigns/campaign.py stop fidelity"
 ```
 
 **6. Resume:** start it again with the same command as step 3. Finished runs are never repeated; queued runs go on. Use the same command after a power cut: a run that was cut off is detected, requeued and continued from its last checkpoint.
 
 ```
-ssh server "cd ~/auxetic_project && venv/bin/python scripts/campaign.py run fidelity --detach"
+ssh server "cd ~/auxetic_project && venv/bin/python scripts/campaigns/campaign.py run fidelity --detach"
 ```
 
 **Is the runner alive?** (empty output means no runner and no job is running):
@@ -88,7 +88,7 @@ scp server:auxetic_project/campaigns/fidelity/results.csv .\fidelity_results.csv
 
 ## Details
 
-A campaign runs many `relax_job.py` simulations one after another on the server and records every result in one table. It is driven by `scripts/campaign.py` (standard library plus numpy). Run it on the server, in the project virtual environment.
+A campaign runs many `relax_job.py` simulations one after another on the server and records every result in one table. It is driven by `scripts/campaigns/campaign.py` (standard library plus numpy). Run it on the server, in the project virtual environment.
 
 ```
 campaigns/<name>/
@@ -104,14 +104,14 @@ campaigns/pattern1_matrix.txt   the 20-row x 16-column stitch matrix (rows separ
 ## Commands
 
 ```
-venv/bin/python scripts/campaign.py plan   <name>          write manifest.json (refuses if one exists; it never overwrites)
-venv/bin/python scripts/campaign.py run    <name> --dry-run   print the build and relax commands of every queued run; starts nothing
-venv/bin/python scripts/campaign.py run    <name> --detach    start the runner in its own session with SIGHUP ignored (same effect as nohup setsid ... &), log in logs/campaign_<name>.log
-venv/bin/python scripts/campaign.py status <name>          counts and a table of the runs (also rewrites results.csv)
-venv/bin/python scripts/campaign.py stop   <name>          create STOP; the runner checks it between runs and then exits
+venv/bin/python scripts/campaigns/campaign.py plan   <name>          write manifest.json (refuses if one exists; it never overwrites)
+venv/bin/python scripts/campaigns/campaign.py run    <name> --dry-run   print the build and relax commands of every queued run; starts nothing
+venv/bin/python scripts/campaigns/campaign.py run    <name> --detach    start the runner in its own session with SIGHUP ignored (same effect as nohup setsid ... &), log in logs/campaign_<name>.log
+venv/bin/python scripts/campaigns/campaign.py status <name>          counts and a table of the runs (also rewrites results.csv)
+venv/bin/python scripts/campaigns/campaign.py stop   <name>          create STOP; the runner checks it between runs and then exits
 ```
 
-Equivalent by hand: `nohup setsid venv/bin/python scripts/campaign.py run <name> > logs/campaign_<name>.log 2>&1 &`.
+Equivalent by hand: `nohup setsid venv/bin/python scripts/campaigns/campaign.py run <name> > logs/campaign_<name>.log 2>&1 &`.
 
 `stop` never kills anything. The run in progress finishes; the runner then renames STOP to `STOP.honored.<time>` and exits. A STOP file found when a runner starts is an old request: it is renamed `STOP.stale.<time>` and the runner continues.
 
@@ -134,7 +134,7 @@ Equivalent by hand: `nohup setsid venv/bin/python scripts/campaign.py run <name>
 
 ### Starting loop-length grade (`--loop-grade`, opt-in)
 
-By default every run starts from a uniform rest length (the as-built chord times one ratio). The grade changes that start: rest length grows toward the boundary of every *section* (a 4-connected region of one loop type; the fabric edge counts as a boundary) and along *TM axes* (wales or courses that are mostly one type, stronger the purer they are). The total rest length of every section is conserved exactly. It works with and without `shell`. Rule, prototype and decisions: `tests/NOTES_loop_grade.md`, code: `scripts/loop_grade.py`.
+By default every run starts from a uniform rest length (the as-built chord times one ratio). The grade changes that start: rest length grows toward the boundary of every *section* (a 4-connected region of one loop type; the fabric edge counts as a boundary) and along *TM axes* (wales or courses that are mostly one type, stronger the purer they are). The total rest length of every section is conserved exactly. It works with and without `shell`. Rule, prototype and decisions: `tests/NOTES_loop_grade.md`, code: `scripts/yarn_model/loop_grade.py`.
 
 Put the three keys in `relax` (they are checked against the options of `relax_job.py` like every other key), or give `loop_grade` in `vary`:
 
@@ -219,9 +219,9 @@ Each run's `status.json` records the host name, the Python, jax, jaxlib, scipy a
 
 ## Pure shell only runs (no yarn mesh)
 
-Campaigns of thin-shell folds only (`scripts/shell_sim.py`), about 5 min per run at tiles 3. Folder `campaigns/shell_runs/<name>/` (git-ignored). Page: Campaigns, section "Pure shell only runs". Design: the report of 2026-11-21 (limits UNSOURCED, approved by K).
+Campaigns of thin-shell folds only (`scripts/shell_model/shell_sim.py`), about 5 min per run at tiles 3. Folder `campaigns/shell_runs/<name>/` (git-ignored). Page: Campaigns, section "Pure shell only runs". Design: the report of 2026-11-21 (limits UNSOURCED, approved by K).
 
-| Command (from `~/auxetic_project`, project interpreter `venv/bin/python scripts/campaign.py ...`) | What it does |
+| Command (from `~/auxetic_project`, project interpreter `venv/bin/python scripts/campaigns/campaign.py ...`) | What it does |
 |---|---|
 | `shell-plan <name>` | creates the campaign, paused, with run S000001 = Pattern 1 at the 13 Nov success settings (control: its shell.npz must equal the old one bit for bit) |
 | `shell-enqueue <name> file.json` | queues one settings object or a list (matrix, tiles, cpi, wpi, optional kappa_scale, h_scale, sub, steps, iter, nu, springs, seed); identical settings are never queued twice |
@@ -237,7 +237,7 @@ Per-run timeout = max(900 s, 4 x 285 s x vertices / 11,737) (UNSOURCED). The run
 
 | Job (numpy only, low priority) | What it does |
 |---|---|
-| `venv/bin/python scripts/shell_rules.py <name> --every 25` | frames rules from the finished runs: sparse regression (cross-validated) and a depth-3 tree of scale-free fold descriptors on pattern features; writes `<campaign>/analysis/rules.json`, shown on the /shell page. Nothing is reported below 100 finished runs. Label: learned from the shell, not confirmed on real fabric |
-| `venv/bin/python scripts/shell_proposer.py <name>` | adds runs at tier 5 (ahead of the filler) chosen by a Gaussian process (largest predictive uncertainty), only through the policy-enforcing queue; `--dry-run` shows what it would add. Proposer gate: nothing is added until 800 original runs (runs that are neither proposer runs, tier 5, nor control runs, tier 1) have status done (`PROPOSER_MIN_ORIGINALS_FINISHED`, decision by K, 23 Nov 2026); hard cap: at most `PROPOSER_MAX_TOTAL` = 100 proposer runs ever created in the campaign (UNSOURCED default). Both constants are at the top of the script. If the count cannot be read, nothing is added. The proposer never edits a queue entry; already-queued tier-5 entries are still taken by the runner (frozen code), see CLAUDE.md task 45 |
+| `venv/bin/python scripts/shell_learning/shell_rules.py <name> --every 25` | frames rules from the finished runs: sparse regression (cross-validated) and a depth-3 tree of scale-free fold descriptors on pattern features; writes `<campaign>/analysis/rules.json`, shown on the /shell page. Nothing is reported below 100 finished runs. Label: learned from the shell, not confirmed on real fabric |
+| `venv/bin/python scripts/shell_learning/shell_proposer.py <name>` | adds runs at tier 5 (ahead of the filler) chosen by a Gaussian process (largest predictive uncertainty), only through the policy-enforcing queue; `--dry-run` shows what it would add. Proposer gate: nothing is added until 800 original runs (runs that are neither proposer runs, tier 5, nor control runs, tier 1) have status done (`PROPOSER_MIN_ORIGINALS_FINISHED`, decision by K, 23 Nov 2026); hard cap: at most `PROPOSER_MAX_TOTAL` = 100 proposer runs ever created in the campaign (UNSOURCED default). Both constants are at the top of the script. If the count cannot be read, nothing is added. The proposer never edits a queue entry; already-queued tier-5 entries are still taken by the runner (frozen code), see CLAUDE.md task 45 |
 
-The similarity score out of 100 (`scripts/shell_score.py`) exists only for the one measured reference (Pattern 1 at the success settings); its tolerances are UNSOURCED.
+The similarity score out of 100 (`scripts/shell_model/shell_score.py`) exists only for the one measured reference (Pattern 1 at the success settings); its tolerances are UNSOURCED.

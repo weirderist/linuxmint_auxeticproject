@@ -1,6 +1,6 @@
 # Starting loop-length field (`--loop-grade`)
 
-**Status, 2026-11-20 (later): implemented and tested without the solver; not yet run in the solver; not committed.** Code: `scripts/loop_grade.py` (numpy only), called from `scripts/relax_job.py`. Prototype and reference: `tests/analysis_loop_grade_design.py`. Tests: `tests/test_loop_grade.py`. The earlier radial draft (`tests/loop_grade_draft.patch`) is superseded and kept only as history.
+**Status, 2026-11-20 (later): implemented and tested without the solver; not yet run in the solver; not committed.** Code: `scripts/yarn_model/loop_grade.py` (numpy only), called from `scripts/yarn_model/relax_job.py`. Prototype and reference: `tests/analysis_loop_grade_design.py`. Tests: `tests/test_loop_grade.py`. The earlier radial draft (`tests/loop_grade_draft.patch`) is superseded and kept only as history.
 Every constant is UNSOURCED until K measures loop length by region.
 
 ## The rule (K's decisions, implemented)

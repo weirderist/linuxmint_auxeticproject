@@ -1,4 +1,4 @@
-"""Writes tests/golden_loop_grade.json: SHA-256 fingerprints of the starting rest lengths that scripts/loop_grade.py produces for fixed fixtures and settings.
+"""Writes tests/golden_loop_grade.json: SHA-256 fingerprints of the starting rest lengths that scripts/yarn_model/loop_grade.py produces for fixed fixtures and settings.
 Run ONCE before a refactor of loop_grade.py (python tests/make_golden_loop_grade.py); tests/test_slip_ext.py then proves the refactor changed no number.
 Needs the fixtures of tests/make_fixtures.py. Regenerating it on purpose is a statement that the field itself was meant to change."""
 import os as _os, pathlib as _pl
@@ -6,7 +6,7 @@ ROOT_STR = str(_pl.Path(__file__).resolve().parent.parent)
 import hashlib, json, shutil, sys
 from pathlib import Path
 P = Path(ROOT_STR); SM = P / "smoke_test"; FID = SM / "campaigns" / "fid_copy" / "runs"
-sys.path.insert(0, str(P / "scripts"))
+sys.path.insert(0, str(P / "scripts")); import scriptdirs
 import numpy as np
 import loop_grade as lg, relax_state as rs
 

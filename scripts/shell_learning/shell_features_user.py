@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""shell_features_user.py - K's own pattern features for the open-ended rule search (scripts/shell_rules_sr.py). Picked up automatically; nothing else needs changing.
+"""shell_features_user.py - K's own pattern features for the open-ended rule search (scripts/shell_learning/shell_rules_sr.py). Picked up automatically; nothing else needs changing.
 
 How to add a feature: write a function whose name starts with feat_ . It receives
     T    the TILED stitch matrix as a numpy integer array (rows = courses, columns = wales; digit 1 or 2, as in the campaign matrix),
@@ -20,7 +20,7 @@ SETTING_DEFAULTS = {}
 # def feat_purl_rows(T, ctx):
 #     return float((T == 2).all(axis=1).mean())
 
-# Prepared but OFF: the nominal tightness index TF_rel = sqrt(tex x CPI x WPI), Ne fixed at 12 (scripts/shell_tightness.py; proportional to the tightness factor, scale constant UNSOURCED).
+# Prepared but OFF: the nominal tightness index TF_rel = sqrt(tex x CPI x WPI), Ne fixed at 12 (scripts/shell_model/shell_tightness.py; proportional to the tightness factor, scale constant UNSOURCED).
 # It is deliberately not a feature now: in shell1 CPI x WPI is fixed at 352 (campaigns/shell_policy.json), so it is constant, would be dropped as constant anyway, and it carries no information
 # beyond CPI and WPI. Switch it on only for a campaign in which CPI x WPI varies. The existing linear rules (shell_rules.py, fixed feature list) are not affected either way; rules_sr.json then
 # gains one candidate feature, user_tf_rel.
@@ -28,7 +28,7 @@ SETTING_DEFAULTS = {}
 #     import shell_tightness
 #     return shell_tightness.tf_rel(ctx['cpi'], ctx['wpi'])
 
-# Also prepared but OFF: TF_c_rel = sqrt(tex) x CPI and TF_w_rel = sqrt(tex) x WPI (scripts/shell_tightness.py). Unlike TF_rel these change from run to run in shell1, but at constant CPI x WPI each is a fixed
+# Also prepared but OFF: TF_c_rel = sqrt(tex) x CPI and TF_w_rel = sqrt(tex) x WPI (scripts/shell_model/shell_tightness.py). Unlike TF_rel these change from run to run in shell1, but at constant CPI x WPI each is a fixed
 # function of CPI / WPI alone (CPI = sqrt(352 R), WPI = sqrt(352 / R)), and log_ratio = ln(CPI / WPI) is already a feature, so they add no information to the search; switching them on only changes the names
 # in which a rule can be written. They are most useful in a campaign in which CPI x WPI varies.
 # def feat_tf_c_rel(T, ctx):

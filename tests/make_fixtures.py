@@ -16,7 +16,7 @@ print("smoke1 campaign ready")
 j = SM / "jersey_build12"
 if not (j / "meta.json").exists():
     j.mkdir(parents=True, exist_ok=True)
-    subprocess.run([sys.executable, str(ROOT / "scripts" / "build_knit.py"), "--matrix", "1", "--tiles", "12", "--ne", "12", "--cpi", "22", "--wpi", "16", "--out", str(j), "--cache", str(SM / "cell_cache"),
+    subprocess.run([sys.executable, str(ROOT / "scripts" / "yarn_model" / "build_knit.py"), "--matrix", "1", "--tiles", "12", "--ne", "12", "--cpi", "22", "--wpi", "16", "--out", str(j), "--cache", str(SM / "cell_cache"),
                     "--no-tube", "--name", "jersey12", "--id", "jersey12"], check=True, env=env, stdout=subprocess.DEVNULL)
 r20 = FID / "runs" / "0020"; r20.mkdir(parents=True, exist_ok=True)
 for fn in ("fab_axis.csv", "fab_nodes.csv", "meta.json"): shutil.copy(j / fn, r20 / fn)

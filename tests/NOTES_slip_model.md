@@ -1,6 +1,6 @@
 # Slip extensions, diagnostics and the tightness record
 
-**Status 2026-11-20: implemented and tested without the solver; never run in the solver; not committed.** Code: `scripts/slip_ext.py`, `scripts/round_diag.py`, hooks in `scripts/relax_state.py` (`migrate`, `run`) and options in `scripts/relax_job.py`. Tests: `tests/test_slip_ext.py`. Everything is opt-in and off by default; with all options off the numbers are bit-identical to before (tested). Every constant is UNSOURCED.
+**Status 2026-11-20: implemented and tested without the solver; never run in the solver; not committed.** Code: `scripts/yarn_model/slip_ext.py`, `scripts/yarn_model/round_diag.py`, hooks in `scripts/yarn_model/relax_state.py` (`migrate`, `run`) and options in `scripts/yarn_model/relax_job.py`. Tests: `tests/test_slip_ext.py`. Everything is opt-in and off by default; with all options off the numbers are bit-identical to before (tested). Every constant is UNSOURCED.
 
 ## What was built (K's reduced list)
 1. **`--diagnostics`**: `diagnostics.csv` per run, one row per outer round (30 columns, defined in `round_diag.py`): loop rest length and geometric length (mean/min/max for all / outer / inner loops, each against the start of the run), the share of the length change stored in the rest length, number and size of slips, a fold descriptor, the drive strength of the round. Regions are defined on the boundary term of the sectioned field (outer = G_b >= 0.75, inner <= 0.25; UNSOURCED thresholds).

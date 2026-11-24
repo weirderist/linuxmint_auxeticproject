@@ -1,4 +1,4 @@
-"""Tests for the starting loop-length field (scripts/loop_grade.py, relax_job --loop-grade) WITHOUT the solver and without JAX.
+"""Tests for the starting loop-length field (scripts/yarn_model/loop_grade.py, relax_job --loop-grade) WITHOUT the solver and without JAX.
 Run from the repository root:  python tests/test_loop_grade.py     (needs the fixtures of tests/make_fixtures.py)
 What this proves and what it does not is written in tests/README.md (section 'test_loop_grade')."""
 import os as _os, pathlib as _pl
@@ -8,7 +8,7 @@ P = pathlib.Path(ROOT_STR); SM = P / "smoke_test"; FID = SM / "campaigns" / "fid
 os.environ["CAMPAIGN_DIR"] = str(SM / "campaigns"); os.environ["CAMPAIGN_SCRIPTS"] = str(P / "scripts"); os.environ["AUX_AUTORESUME"] = "0"
 for r in ("0001", "0003", "0020"):
     if not (FID / r).exists(): sys.exit("fixtures missing: run  python tests/make_fixtures.py  (see tests/README.md)")
-sys.path.insert(0, str(P / "scripts")); sys.path.insert(0, str(P / "webui")); sys.path.insert(0, str(P / "tests"))
+sys.path.insert(0, str(P / "scripts")); import scriptdirs; sys.path.insert(0, str(P / "webui")); sys.path.insert(0, str(P / "tests"))
 import numpy as np
 from scipy import ndimage
 import loop_grade as lg, relax_state as rs, campaign as cm
@@ -68,7 +68,7 @@ same = True
 for name, M in (("jersey 8x8", np.ones((8, 8), int)), ("Pattern 1 tiles 1", P1)):
     for mode in ("boundary", "tm", "both"):
         L1, lab1, n1 = lg.field_equal_weights(M, 0.02, mode); L2, lab2, n2 = proto.field(M, mode, 0.02); same &= np.allclose(L1, L2) and n1 == n2
-check("scripts/loop_grade.py reproduces the prototype field exactly (jersey and Pattern 1, boundary / tm / both)", same)
+check("scripts/yarn_model/loop_grade.py reproduces the prototype field exactly (jersey and Pattern 1, boundary / tm / both)", same)
 check("per-section equal-weight conservation of the loop field is exact", all(abs(lg.field_equal_weights(P1, 0.02, m)[0][lg.label_sections(P1)[0] == k].mean() - 1) < 1e-12 for m in ("both",) for k in (1, 2, 3)))
 
 # ---------------------------------------------------------------- 4. shared loop identity
@@ -81,7 +81,7 @@ check("the viewer (runview.py) uses the same loop code as the field (one loop id
 sim, d, meta = load_sim("off", "0001"); ratio = 0.9488
 indep = [np.linalg.norm(np.diff(y.X, axis=0), axis=1) * ratio for y in sim.yarns]
 check("option off: the starting l0 equals the plain uniform formula chord x ratio, bit for bit (every segment of every course)", all(np.array_equal(y.l0, e) for y, e in zip(sim.yarns, indep)))
-src = (P / "scripts" / "relax_job.py").read_text(encoding="utf8"); tree = ast.parse(src)
+src = (P / "scripts" / "yarn_model" / "relax_job.py").read_text(encoding="utf8"); tree = ast.parse(src)
 par = {}
 for node in ast.walk(tree):
     for ch in ast.iter_child_nodes(node): par[ch] = node

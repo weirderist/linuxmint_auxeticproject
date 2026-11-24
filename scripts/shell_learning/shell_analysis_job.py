@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """shell_analysis_job.py - the scheduled offline analysis of a pure-shell campaign: at every multiple of EVERY = 100 finished runs (100, 200, 300, ...) it runs, one after the other in ONE process,
-  1. the proposer evaluation (scripts/shell_proposer_eval.py, evaluate_rows), then
-  2. the open-ended rule search (scripts/shell_rules_sr.py, run_rows),
+  1. the proposer evaluation (scripts/shell_learning/shell_proposer_eval.py, evaluate_rows), then
+  2. the open-ended rule search (scripts/shell_learning/shell_rules_sr.py, run_rows),
 on exactly the first m finished runs (m = the multiple), so a result belongs to one run count and is reproducible. Both tools are imported unchanged.
 
 Counting ("finished runs"): the runs the tools themselves use (shell_features.dataset without control runs): last index status 'done', present in the queue, not a control run. Their order is the order
@@ -19,11 +19,13 @@ Safety:
 Usage: python3 shell_analysis_job.py <campaign> [--every 100] [--poll-s 600] [--once]"""
 import argparse, hashlib, json, os, shutil, subprocess, sys, time
 HERE = os.path.dirname(os.path.abspath(__file__)); sys.path.insert(0, HERE)
+_S = os.path.dirname(HERE)
+if os.path.basename(_S) == 'scripts': sys.path.extend(os.path.join(_S, _d) for _d in sorted(os.listdir(_S)) if _d not in ('legacy', '__pycache__') and os.path.isdir(os.path.join(_S, _d)))          # the other folders of scripts/ (not in a flat frozen copy)
 
 EVERY = 100                 # K's request (2026-11-21): analyse at every 100 finished runs; also the tools' own minimum (shell_rules.MIN_RUNS = 100)
 MAX_ATTEMPTS = 3            # UNSOURCED design choice: interrupted attempts allowed per tool and run count before it is marked failed
 TOOLS = ('proposer_eval', 'rules_sr')
-TOOL_TEXT = dict(proposer_eval='proposer evaluation against random picking (scripts/shell_proposer_eval.py)', rules_sr='open-ended rule search (scripts/shell_rules_sr.py)')
+TOOL_TEXT = dict(proposer_eval='proposer evaluation against random picking (scripts/shell_learning/shell_proposer_eval.py)', rules_sr='open-ended rule search (scripts/shell_learning/shell_rules_sr.py)')
 
 
 def now(): return time.strftime('%Y-%m-%dT%H:%M:%S')

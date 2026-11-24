@@ -17,11 +17,14 @@ One row per outer round:
   fold_kx_per_mm, fold_ky_per_mm                 curvatures along the courses (x) and the wales (y), 2 x the x^2 and y^2 coefficients of the quadratic fit of fold_metric.fit on all yarn vertices
                                                  (the same function campaign.py's fold_metrics and shell_metrics.describe use; so one definition for the shell, the campaign and these diagnostics)
   z_range_over_R                                 z range of all vertices over the yarn radius
-Regions (UNSOURCED thresholds on the boundary term G_b of the sectioned loop field, scripts/loop_grade.py): outer = G_b >= 0.75 (next to a section boundary), inner = G_b <= 0.25 (far from every boundary),
+Regions (UNSOURCED thresholds on the boundary term G_b of the sectioned loop field, scripts/yarn_model/loop_grade.py): outer = G_b >= 0.75 (next to a section boundary), inner = G_b <= 0.25 (far from every boundary),
 all = every loop. For single jersey outer is the free-edge ring and inner the centre.
 """
-import csv, os
+import csv, os, sys
 import numpy as np
+HERE = os.path.dirname(os.path.abspath(__file__))
+_S = os.path.dirname(HERE)
+if os.path.basename(_S) == 'scripts': sys.path.extend(os.path.join(_S, _d) for _d in sorted(os.listdir(_S)) if _d not in ('legacy', '__pycache__') and os.path.isdir(os.path.join(_S, _d)))          # the other folders of scripts/ (not in a flat frozen copy)
 import loop_grade as lg
 from fold_metric import fit as fold_fit
 

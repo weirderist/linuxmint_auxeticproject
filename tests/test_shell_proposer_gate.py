@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
-"""Tests of the proposer gate and the hard cap in scripts/shell_proposer.py (decision by K, 23 Nov 2026) on a SYNTHETIC seeded campaign: no solver, numpy only, temporary folders.
-Terms (defined in scripts/shell_proposer.py): proposer run = tier 5; control run = tier 1 or a 'control' record; original run = neither; originals finished = original runs whose last index status is 'done';
+"""Tests of the proposer gate and the hard cap in scripts/shell_learning/shell_proposer.py (decision by K, 23 Nov 2026) on a SYNTHETIC seeded campaign: no solver, numpy only, temporary folders.
+Terms (defined in scripts/shell_learning/shell_proposer.py): proposer run = tier 5; control run = tier 1 or a 'control' record; original run = neither; originals finished = original runs whose last index status is 'done';
 proposer gate = open at PROPOSER_MIN_ORIGINALS_FINISHED (800) originals finished; hard cap = at most PROPOSER_MAX_TOTAL (100, UNSOURCED) proposer runs ever created.
-What this file does NOT test: that the RUNNER skips queued tier-5 entries while the gate is closed. The runner (Camp.pending and serve in scripts/shell_campaign.py) is frozen code of campaign shell1
+What this file does NOT test: that the RUNNER skips queued tier-5 entries while the gate is closed. The runner (Camp.pending and serve in scripts/campaigns/shell_campaign.py) is frozen code of campaign shell1
 and was not changed; the INFO line below shows that the unchanged runner still puts queued tier-5 entries before the filler.
 Run from the repository root: python tests/test_shell_proposer_gate.py"""
 import hashlib, inspect, os, shutil, subprocess, sys, tempfile
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TMP = tempfile.mkdtemp(prefix='shellgate_'); SR = os.path.join(TMP, 'shell_runs')
 os.environ.update(SHELL_RUNS_DIR=SR, CAMPAIGN_LOG_DIR=os.path.join(TMP, 'logs'))
-sys.path.insert(0, os.path.join(ROOT, 'scripts'))
+sys.path.insert(0, os.path.join(ROOT, 'scripts')); import scriptdirs
 import shell_campaign as sc, shell_proposer as pr, campaign as cm
 bad = []
 def check(name, ok, info=''):
@@ -22,7 +22,7 @@ sb = inspect.signature(pr.select_batch).parameters
 check('the proposer stays target-blind: select_batch keeps length scale 1.4 and noise 1e-2', sb['ls'].default == 1.4 and sb['noise'].default == 1e-2)
 
 # ---- one seeded campaign (11 seeds, 2 controls, 91 variants, 720 filler = 822 original runs), copied for every case
-r = subprocess.run([sys.executable, os.path.join(ROOT, 'scripts', 'campaign.py'), 'shell-plan', 'base', '--policy', os.path.join(ROOT, 'campaigns', 'shell_policy.json'), '--filler', '720'], capture_output=True, text=True, env=dict(os.environ))
+r = subprocess.run([sys.executable, os.path.join(ROOT, 'scripts', 'campaigns', 'campaign.py'), 'shell-plan', 'base', '--policy', os.path.join(ROOT, 'campaigns', 'shell_policy.json'), '--filler', '720'], capture_output=True, text=True, env=dict(os.environ))
 base = sc.Camp('base'); Q = base.queue_items(); ORIG = [x['id'] for x in Q if pr.is_original_run(x)]; CTRL = [x['id'] for x in Q if pr.is_control_run(x)]
 check('synthetic campaign: 822 original runs, 2 control runs (tier 1), no proposer runs', r.returncode == 0 and len(ORIG) == 822 and len(CTRL) == 2 and all(x['tier'] == 1 for x in Q if x['id'] in CTRL) and not any(pr.is_proposer_run(x) for x in Q), (r.stdout + r.stderr)[-200:])
 
@@ -60,7 +60,7 @@ check('proposer runs are excluded: 799 originals + 200 finished tier-5 runs = 79
 # ---- already-queued tier-5 entries while the gate is closed
 c = fresh('gqueued'); mark(c, ORIG[:500]); mark(c, CTRL); queued = add_proposer_entries(c, 4); qd, idd = digest(c.queue), digest(c.index)
 outs = [pr.propose(c, 3) for _ in range(3)]
-p = subprocess.run([sys.executable, os.path.join(ROOT, 'scripts', 'shell_proposer.py'), 'gqueued', '--once'], capture_output=True, text=True, env=dict(os.environ))
+p = subprocess.run([sys.executable, os.path.join(ROOT, 'scripts', 'shell_learning', 'shell_proposer.py'), 'gqueued', '--once'], capture_output=True, text=True, env=dict(os.environ))
 check('gate closed with 4 tier-5 entries queued: the proposer adds nothing (3 calls and the --once command line)', all(o['status'] == 'gate closed' and o['proposed'] == [] for o in outs) and p.returncode == 0 and 'gate closed' in p.stdout, p.stdout.strip()[-120:])
 check('the queued tier-5 entries are untouched on disk: queue.jsonl and index.jsonl byte-identical, all 4 still present and pending', digest(c.queue) == qd and digest(c.index) == idd and set(queued) <= {x['id'] for x in c.pending()})
 first = c.pending()[0]

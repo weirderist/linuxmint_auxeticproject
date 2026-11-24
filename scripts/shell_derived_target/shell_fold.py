@@ -52,6 +52,8 @@ from dataclasses import dataclass
 import numpy as np
 from scipy.spatial import cKDTree
 HERE = os.path.dirname(os.path.abspath(__file__)); sys.path.insert(0, HERE)
+_S = os.path.dirname(HERE)
+if os.path.basename(_S) == 'scripts': sys.path.extend(os.path.join(_S, _d) for _d in sorted(os.listdir(_S)) if _d not in ('legacy', '__pycache__') and os.path.isdir(os.path.join(_S, _d)))          # the other folders of scripts/ (not in a flat frozen copy)
 import shell_target as st
 
 SCHEMA = 'shell_fold_summary_v1'

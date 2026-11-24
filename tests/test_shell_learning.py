@@ -6,7 +6,7 @@ import numpy as np
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TMP = tempfile.mkdtemp(prefix='shelllearn_')
 os.environ.update(SHELL_RUNS_DIR=os.path.join(TMP, 'shell_runs'), CAMPAIGN_LOG_DIR=os.path.join(TMP, 'logs'))
-sys.path.insert(0, os.path.join(ROOT, 'scripts'))
+sys.path.insert(0, os.path.join(ROOT, 'scripts')); import scriptdirs
 import shell_campaign as sc, shell_features as sf, shell_rules as rl, shell_proposer as pr, shell_policy as sp, campaign as cm
 bad = []
 def check(name, ok, info=''):
@@ -27,7 +27,7 @@ check('targets are scale-free and None when a descriptor is missing', sf.targets
 
 # ---- a synthetic seeded campaign with 130 finished runs whose targets depend on the features
 pol = sp.load(os.path.join(ROOT, 'campaigns', 'shell_policy.json'))
-r = subprocess.run([sys.executable, os.path.join(ROOT, 'scripts', 'campaign.py'), 'shell-plan', 'syn', '--policy', os.path.join(ROOT, 'campaigns', 'shell_policy.json'), '--filler', '60'], capture_output=True, text=True, env=dict(os.environ))
+r = subprocess.run([sys.executable, os.path.join(ROOT, 'scripts', 'campaigns', 'campaign.py'), 'shell-plan', 'syn', '--policy', os.path.join(ROOT, 'campaigns', 'shell_policy.json'), '--filler', '60'], capture_output=True, text=True, env=dict(os.environ))
 c = sc.Camp('syn'); rng = np.random.default_rng(1); items = [x for x in c.queue_items() if not x.get('control')][:130]
 def metrics_for(s):
     ff = sf.features(s['matrix'], s['tiles'], s['cpi'], s['wpi']); flat_x, flat_y = 76.2, 69.3

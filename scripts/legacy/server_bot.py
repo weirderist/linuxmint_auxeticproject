@@ -27,8 +27,8 @@ MATRIX_DIR = os.path.join(BASE_DIR, "output_matrices")
 SOLVER_OUTPUT_DIR = os.path.join(BASE_DIR, "sim_output")
 
 PYTHON_EXEC = os.path.join(BASE_DIR, "scripts/venv/bin/python")
-CROP_SCRIPT = os.path.join(BASE_DIR, "scripts/crop_classify.py")
-MAIN_SCRIPT = os.path.join(BASE_DIR, "scripts/main.py")
+CROP_SCRIPT = os.path.join(BASE_DIR, "scripts/tools/crop_classify.py")
+MAIN_SCRIPT = os.path.join(BASE_DIR, "scripts/legacy/main.py")
 
 os.makedirs(SIM_INPUT_DIR, exist_ok=True)
 os.makedirs(SIM_OUTPUT_DIR, exist_ok=True)

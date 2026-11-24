@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Tests of scripts/shell_tightness.py against hand-computed values (pure Python, no numpy). Run from the repository root: python tests/test_shell_tightness.py"""
+"""Tests of scripts/shell_model/shell_tightness.py against hand-computed values (pure Python, no numpy). Run from the repository root: python tests/test_shell_tightness.py"""
 import json, math, os, sys
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__))); sys.path.insert(0, os.path.join(ROOT, 'scripts'))
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__))); sys.path.insert(0, os.path.join(ROOT, 'scripts')); import scriptdirs
 import shell_tightness as st
 bad = []
 def check(name, ok, info=''):

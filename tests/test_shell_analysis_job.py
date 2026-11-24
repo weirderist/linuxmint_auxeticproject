@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests of the scheduled analysis job (scripts/shell_analysis_job.py) and its read-only API routes (webui/campaign_api.py /api/shell/<c>/analysis...), on SYNTHETIC finished runs in temporary
+"""Tests of the scheduled analysis job (scripts/shell_learning/shell_analysis_job.py) and its read-only API routes (webui/campaign_api.py /api/shell/<c>/analysis...), on SYNTHETIC finished runs in temporary
 folders: threshold, counting, idempotence, lock, interrupted attempts, failures, repeats at every 100 runs, nothing written outside analysis/scheduled. No solver, no server.
 Run from the repository root: python tests/test_shell_analysis_job.py   (about two minutes: the real tools run twice with small settings)"""
 import hashlib, json, os, subprocess, sys, tempfile, time
@@ -8,7 +8,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TMP = tempfile.mkdtemp(prefix='shellajob_')
 os.environ.update(SHELL_RUNS_DIR=os.path.join(TMP, 'shell_runs'), CAMPAIGN_DIR=os.path.join(TMP, 'campaigns'), CAMPAIGN_LOG_DIR=os.path.join(TMP, 'logs'))
 os.makedirs(os.environ['CAMPAIGN_DIR'])
-sys.path.insert(0, os.path.join(ROOT, 'scripts')); sys.path.insert(0, os.path.join(ROOT, 'webui'))
+sys.path.insert(0, os.path.join(ROOT, 'scripts')); import scriptdirs; sys.path.insert(0, os.path.join(ROOT, 'webui'))
 import shell_campaign as sc, shell_features as sf, shell_analysis_job as aj, campaign as cm
 bad = []
 def check(name, ok, info=''):
@@ -25,7 +25,7 @@ quiet = lambda s: None
 dead_pid = subprocess.Popen([sys.executable, '-c', 'pass']); dead_pid.wait(); DEAD = dead_pid.pid          # a process that has exited
 
 # ---- a synthetic seeded campaign (same construction as tests/test_shell_learning.py) and a helper that finishes k more runs
-r = subprocess.run([sys.executable, os.path.join(ROOT, 'scripts', 'campaign.py'), 'shell-plan', 'syn', '--policy', os.path.join(ROOT, 'campaigns', 'shell_policy.json'), '--filler', '400', '--seeds', os.path.join(ROOT, 'campaigns', 'shell_seeds', 'seeds.json'), '--pattern1-file', os.path.join(ROOT, 'campaigns', 'pattern1_matrix.txt')], capture_output=True, text=True, env=dict(os.environ))
+r = subprocess.run([sys.executable, os.path.join(ROOT, 'scripts', 'campaigns', 'campaign.py'), 'shell-plan', 'syn', '--policy', os.path.join(ROOT, 'campaigns', 'shell_policy.json'), '--filler', '400', '--seeds', os.path.join(ROOT, 'campaigns', 'shell_seeds', 'seeds.json'), '--pattern1-file', os.path.join(ROOT, 'campaigns', 'pattern1_matrix.txt')], capture_output=True, text=True, env=dict(os.environ))
 c = sc.Camp('syn'); rng = np.random.default_rng(1); pending = [x for x in c.queue_items() if not x.get('control')]; controls = [x for x in c.queue_items() if x.get('control')]
 check('synthetic campaign planned with more than 500 non-control runs', r.returncode == 0 and len(pending) > 500, (r.stdout + r.stderr)[-200:])
 def metrics_for(s):

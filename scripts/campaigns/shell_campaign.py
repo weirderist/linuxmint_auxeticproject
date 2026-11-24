@@ -15,7 +15,7 @@ import argparse, csv, glob, hashlib, json, math, os, re, shutil, signal, subproc
 HERE = os.path.dirname(os.path.abspath(__file__)); sys.path.insert(0, HERE)
 import campaign as cm            # wjson, rjson, boot_id, proc_info, alive, busy_reason, say, LOG_DIR
 
-ROOT = os.path.dirname(HERE)
+ROOT = os.path.dirname(os.path.dirname(HERE)) if os.path.basename(os.path.dirname(HERE)) == 'scripts' else os.path.dirname(HERE)          # the project folder; in a frozen copy (<campaign>/code/) the old rule stays
 FROZEN = os.path.basename(HERE) == 'code' and os.path.isfile(os.path.join(os.path.dirname(HERE), 'spec.json'))      # this file runs from the FROZEN COPY inside a campaign folder (<root>/<campaign>/code/)
 CAMPAIGNS = os.environ.get('CAMPAIGN_DIR') or os.path.join(ROOT, 'campaigns')
 SHELL_ROOT = os.environ.get('SHELL_RUNS_DIR') or (os.path.dirname(os.path.dirname(HERE)) if FROZEN else os.path.join(CAMPAIGNS, 'shell_runs'))
@@ -78,6 +78,16 @@ def read_lines(path):
 def fsync_dir(d):
     try: fd = os.open(d, os.O_RDONLY); os.fsync(fd); os.close(fd)
     except OSError: pass
+
+def frozen_source(src, f):
+    """Path of one frozen file: in `src` itself (flat layout) or in a sibling folder of scripts/ (shell_sim.py and shell_metrics.py live in scripts/shell_model/)."""
+    p = os.path.join(src, f)
+    if os.path.isfile(p): return p
+    par = os.path.dirname(os.path.abspath(src))
+    for d in sorted(os.listdir(par)):
+        q = os.path.join(par, d, f)
+        if os.path.isfile(q): return q
+    return p
 
 def file_sha256(path):
     h = hashlib.sha256()
@@ -161,9 +171,9 @@ class Camp:
         src = src or HERE; dst = s.code_dir()
         if os.path.exists(dst): raise FileExistsError('frozen code folder %s already exists; never overwritten (new code = new campaign)' % dst)
         tmp = dst + '.tmp'; os.makedirs(tmp)
-        for f in FROZEN_FILES: shutil.copy2(os.path.join(src, f), os.path.join(tmp, f))
+        for f in FROZEN_FILES: shutil.copy2(frozen_source(src, f), os.path.join(tmp, f))
         files = {f: file_sha256(os.path.join(tmp, f)) for f in FROZEN_FILES}
-        cm.wjson(os.path.join(tmp, 'MANIFEST.json'), dict(frozen=cm.now(), source_dir=os.path.abspath(src), files=files, shell_sim_sha256=files['shell_sim.py'], **git_info(os.path.dirname(os.path.abspath(src))), **versions()))
+        cm.wjson(os.path.join(tmp, 'MANIFEST.json'), dict(frozen=cm.now(), source_dir=os.path.abspath(src), files=files, shell_sim_sha256=files['shell_sim.py'], **git_info(ROOT), **versions()))
         os.rename(tmp, dst); fsync_dir(s.d)
     def verify_code(s):
         """'' if the frozen files match MANIFEST.json (or the campaign has no frozen copy: legacy), otherwise a sentence."""

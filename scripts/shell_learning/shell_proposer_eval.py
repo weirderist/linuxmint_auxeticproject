@@ -19,6 +19,8 @@ Usage: python3 shell_proposer_eval.py [campaign] [--repeats 30] [--start 10] [--
 import argparse, hashlib, json, math, os, sys, time
 import numpy as np
 HERE = os.path.dirname(os.path.abspath(__file__)); sys.path.insert(0, HERE)
+_S = os.path.dirname(HERE)
+if os.path.basename(_S) == 'scripts': sys.path.extend(os.path.join(_S, _d) for _d in sorted(os.listdir(_S)) if _d not in ('legacy', '__pycache__') and os.path.isdir(os.path.join(_S, _d)))          # the other folders of scripts/ (not in a flat frozen copy)
 import shell_features as sf
 import shell_proposer as pr                       # imported, never modified: select_batch, gp_fit, gp_predict, PROP_FEATURES, PROP_TARGETS
 

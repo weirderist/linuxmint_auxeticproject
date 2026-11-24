@@ -1,4 +1,4 @@
-"""Tests for the opt-in slip extensions (scripts/slip_ext.py), the per-round diagnostics (scripts/round_diag.py), the tightness record and the wiring in relax_job.py / relax_state.py,
+"""Tests for the opt-in slip extensions (scripts/yarn_model/slip_ext.py), the per-round diagnostics (scripts/yarn_model/round_diag.py), the tightness record and the wiring in relax_job.py / relax_state.py,
 WITHOUT the solver and without JAX. Run from the repository root:  python tests/test_slip_ext.py   (needs the fixtures of tests/make_fixtures.py)."""
 import os as _os, pathlib as _pl
 ROOT_STR = str(_pl.Path(__file__).resolve().parent.parent)
@@ -9,7 +9,7 @@ import os
 os.environ["CAMPAIGN_DIR"] = str(SM / "campaigns"); os.environ["CAMPAIGN_SCRIPTS"] = str(P / "scripts")
 for r in ("0001", "0020"):
     if not (FID / r).exists(): sys.exit("fixtures missing: run  python tests/make_fixtures.py  (see tests/README.md)")
-sys.path.insert(0, str(P / "scripts")); sys.path.insert(0, str(P / "tests"))
+sys.path.insert(0, str(P / "scripts")); import scriptdirs; sys.path.insert(0, str(P / "tests"))
 import numpy as np
 import loop_grade as lg, relax_state as rs, slip_ext as se, round_diag as rd, campaign as cm
 import make_golden_loop_grade as golden
@@ -172,7 +172,7 @@ check("tightness record for Ne %g: tex = 590.5 / Ne = %.3f, loop length %.3f mm,
       abs(rec12["tex"] - exp_tex) < 1e-9 and 5.3 < rec12["loop_length_mm"] < 5.7 and abs(rec12["tightness_factor_per_mm"] - math.sqrt(exp_tex)/rec12["loop_length_mm"]) < 1e-12 and abs(rec12["tightness_factor_per_cm"] - 10*rec12["tightness_factor_per_mm"]) < 1e-12 and "definition" in rec12)
 mn = dict(m12); mn.pop("ne", None); mn.get("structure", {}).pop("ne", None)
 check("no tightness record for a result without Ne (R-unit result): None", lg.tightness_record(mn, str(d12)) is None)
-src = (P / "scripts" / "relax_job.py").read_text(encoding="utf8"); tree = ast.parse(src)
+src = (P / "scripts" / "yarn_model" / "relax_job.py").read_text(encoding="utf8"); tree = ast.parse(src)
 par = {}
 for node in ast.walk(tree):
     for ch in ast.iter_child_nodes(node): par[ch] = node
@@ -200,7 +200,7 @@ rowc = [n for n in ast.walk(tree) if isinstance(n, ast.Attribute) and n.attr == 
 check("the statistics reset and the diagnostics row are written only under 'if diag:'", len(stat) == 1 and inside_if(stat[0], "diag") and len(rowc) == 1 and inside_if(rowc[0], "diag"))
 check("the validation refuses a drive outside -0.1..0.1, a negative friction constant or decay, and a decay without a drive", all(s_ in src for s_ in ("--slip-drive must be between -0.1 and 0.1", "--slip-friction-load must be between 0 and 10", "--slip-drive-decay must be >= 0", "--slip-drive-decay needs --slip-drive")))
 check("the record (params, slip_ext block with the UNSOURCED list) is written only when an extension is on; diagnostics adds one param flag", "if ext_rec: run_entry['params'].update(" in src and "if diag: run_entry['params']['diagnostics'] = True" in src)
-rst = (P / "scripts" / "relax_state.py").read_text(encoding="utf8")
+rst = (P / "scripts" / "yarn_model" / "relax_state.py").read_text(encoding="utf8")
 check("relax_state.py: only the hooks changed (migrate gets sim.slip_ext / stats, run sets round_index and passes the statistics); slip_at_node is untouched", "def slip_at_node(la, l0a, lb, l0b, EA, mu, phi, step_max):" in rst and "sim.round_index = k; sim.contacts = build_contacts(sim); dmax = migrate(sim, getattr(sim, 'slip_stats', None))" in rst)
 
 # ---------------------------------------------------------------- 9. campaign.py picks the flags up; dry-run command

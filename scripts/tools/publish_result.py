@@ -7,12 +7,12 @@ into meta.json. The rename is atomic, so the viewer never sees a half-written re
 """
 import json, os, re, shutil, subprocess, sys
 from pathlib import Path
-BASE = Path(__file__).resolve().parent.parent
+BASE = Path(__file__).resolve().parent.parent.parent
 RES = BASE / "webui" / "results"; RES.mkdir(parents=True, exist_ok=True)
 args = sys.argv[1:]
 if any(a == "--out" or a.startswith("--out=") for a in args): sys.exit("error: --out is set by this script")
 tmp = RES / (".build-%d" % os.getpid())
-p = subprocess.run([sys.executable, str(Path(__file__).resolve().parent / "build_knit.py"), *args, "--out", str(tmp)])
+p = subprocess.run([sys.executable, str(Path(__file__).resolve().parent.parent / "yarn_model" / "build_knit.py"), *args, "--out", str(tmp)])
 if p.returncode != 0 or not (tmp / "meta.json").exists():
     shutil.rmtree(tmp, ignore_errors=True); sys.exit("build failed; nothing published")
 rid = json.loads((tmp / "meta.json").read_text())["id"]

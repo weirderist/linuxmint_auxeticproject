@@ -2,7 +2,7 @@ import os as _os, pathlib as _pl
 ROOT_STR = str(_pl.Path(__file__).resolve().parent.parent)          # repository root: the tests run from any folder
 import sys, json, math, types, numpy as np
 sys.dont_write_bytecode = True
-sys.path.insert(0, _os.path.join(ROOT_STR, "scripts")); sys.path.insert(0, _os.path.join(ROOT_STR, "webui"))
+sys.path.insert(0, _os.path.join(ROOT_STR, "scripts")); import scriptdirs; sys.path.insert(0, _os.path.join(ROOT_STR, "webui"))
 import relax_state as rs, runview as rv
 base = _os.path.join(ROOT_STR, "smoke_test", "campaigns", "fid_copy", "runs", "0001")
 f = rv.fields(base); p = f.meta["simulations"][-1]["params"]; mu, step = p["mu"], 0.2

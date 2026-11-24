@@ -1,4 +1,4 @@
-import sys, numpy as np; sys.path.insert(0,'scripts'); import shell_target as st
+import sys, numpy as np; sys.path.insert(0,'scripts'); import scriptdirs; import shell_target as st
 ok=True
 def check(n,c,i=''): 
     global ok; ok&=bool(c); print(('PASS ' if c else 'FAIL ')+n, i)

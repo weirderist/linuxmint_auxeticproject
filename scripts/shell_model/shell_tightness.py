@@ -3,7 +3,7 @@
 calculation, and nothing is written into any run folder. Pure Python (math only).
 
 Definitions
-  tex      = 590.5 / Ne: conversion of the English cotton count Ne to tex (grams per 1000 m of yarn); the same conversion as scripts/loop_grade.py.
+  tex      = 590.5 / Ne: conversion of the English cotton count Ne to tex (grams per 1000 m of yarn); the same conversion as scripts/yarn_model/loop_grade.py.
   NE_FABRIC = 12: K's fabric (project data, campaigns/shell_policy.json 'no_effect': the shell does not use Ne). Pure-shell runs always use this constant; a yarn-level campaign run uses its own
              recorded Ne (its build setting), because there Ne is a real input.
   S        = CPI x WPI: nominal stitch density, stitches per square inch, from the INPUT CPI and WPI (not a measured value; no relaxation state is implied by the shell).
@@ -21,7 +21,7 @@ Definitions
 import math
 
 NE_FABRIC = 12.0                 # K's fabric (project data); not a published value
-TEX_PER_NE = 590.5               # tex = 590.5 / Ne (as scripts/loop_grade.py)
+TEX_PER_NE = 590.5               # tex = 590.5 / Ne (as scripts/yarn_model/loop_grade.py)
 LABEL_S = 'nominal stitch density S = CPI x WPI (stitches per square inch, from the input CPI and WPI)'
 LABEL_TF = 'TF_rel = sqrt(tex x CPI x WPI) (tex^0.5 per inch): proportional to the tightness factor TF = sqrt(tex)/l; scale constant UNSOURCED'
 NOTE = ('Display only: computed from the recorded CPI and WPI, never a shell input. TF = sqrt(tex)/l needs the loop length l; the shell has none, and no sourced constant relating l to CPI x WPI '

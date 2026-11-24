@@ -15,7 +15,9 @@ Without the shell (loops that fold on their own): --ramp K grows the stress-free
 """
 import argparse, json, math, os, sys, time
 import numpy as np
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+HERE = os.path.dirname(os.path.abspath(__file__)); sys.path.insert(0, HERE)
+_S = os.path.dirname(HERE)
+if os.path.basename(_S) == 'scripts': sys.path.extend(os.path.join(_S, _d) for _d in sorted(os.listdir(_S)) if _d not in ('legacy', '__pycache__') and os.path.isdir(os.path.join(_S, _d)))          # the other folders of scripts/ (not in a flat frozen copy)
 import relax_state as rs, relax_solver as sv
 from build_knit import write_obj
 
@@ -260,7 +262,7 @@ def main():
     a_creep = 1.0 - math.exp(-(g.hours/g.outer)/g.creep_tau) if g.creep_tau else 0.0
     sim = rs.load(g.folder, p)
     grade_rec = None
-    if g.loop_grade:        # opt-in starting loop-length field (scripts/loop_grade.py, numpy only). With 0 this block does not run: l0 is exactly the uniform ratio of load(). It also works together with --shell:
+    if g.loop_grade:        # opt-in starting loop-length field (scripts/yarn_model/loop_grade.py, numpy only). With 0 this block does not run: l0 is exactly the uniform ratio of load(). It also works together with --shell:
         import loop_grade as lg      # the grade only changes l0, from the AS-BUILT loop geometry read here, before the shell moves the vertices; the shell hold acts on positions, not on rest lengths
         try: grade_rec = lg.apply_start_grade(sim, g.folder, meta, g.loop_grade, g.loop_grade_target, g.loop_grade_min_strength, with_shell=bool(g.shell))
         except ValueError as e: sys.exit('--loop-grade: %s' % e)

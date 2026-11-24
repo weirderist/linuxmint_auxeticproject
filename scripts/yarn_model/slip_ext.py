@@ -5,7 +5,7 @@ Both are off by default: with neither switched on relax_state.migrate does not t
 (1) Load-dependent slip limit (--slip-friction-load mu_n): the capstan limit exp(mu phi) T_lo uses only the wrap angle. The limit becomes  T_hi <= max(T_lo, 0) exp(mu phi) + mu_n F_n,
     F_n = kc x overlap of the contact (kc = k_contact, overlap = max(0, 2R - contact distance), the penalty force the solver already has). A tightly packed fabric presses its yarns together harder,
     so its slip limit rises and the tension stays stored as strain; a loose one slips freely. mu_n is UNSOURCED (no measured value).
-(2) Persistent drive (--slip-drive e, --slip-drive-decay N): at the node between two segments with the loop-field values G_a and G_b (the sectioned field of scripts/loop_grade.py, targets and minimum
+(2) Persistent drive (--slip-drive e, --slip-drive-decay N): at the node between two segments with the loop-field values G_a and G_b (the sectioned field of scripts/yarn_model/loop_grade.py, targets and minimum
     strength from --loop-grade-target / --loop-grade-min-strength; loop_grade.drive_field: the loop values interpolated along the yarn between the loop centres and multiplied by the segments per loop, so that
     G_b - G_a is the G change per loop), the effective tensions get an offset  +-0.5 e EA (G_b - G_a) k(round):  the segment in the loop with the higher G looks more
     tense, so rest length flows toward it (toward the section boundary and the TM axes) every round, for as long as the strains do not build a back-stress that cancels it. e is the effective strain

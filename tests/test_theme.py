@@ -4,7 +4,7 @@ Dark only; every colour defined once in :root; no colour literal, no inline colo
 legend wording. No server, no solver. Run from the repository root: python tests/test_theme.py"""
 import os, re, sys
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__))); W = os.path.join(ROOT, 'webui')
-sys.path.insert(0, W); sys.path.insert(0, os.path.join(ROOT, 'scripts'))
+sys.path.insert(0, W); sys.path.insert(0, os.path.join(ROOT, 'scripts')); import scriptdirs
 os.environ.setdefault('CAMPAIGN_DIR', os.path.join(ROOT, 'smoke_test', 'campaigns'))
 bad = []
 def check(name, ok, info=''):

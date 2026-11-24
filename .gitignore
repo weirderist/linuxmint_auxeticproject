@@ -80,7 +80,7 @@ campaigns/*/runs/
 # viewer cache of generated tube meshes for campaign runs (never written into runs/)
 campaigns/*/cache/
 
-# pure shell campaigns: runs, queue, index (scripts/shell_campaign.py)
+# pure shell campaigns: runs, queue, index (scripts/campaigns/shell_campaign.py)
 campaigns/shell_runs/
 
 # K report (private): not in git

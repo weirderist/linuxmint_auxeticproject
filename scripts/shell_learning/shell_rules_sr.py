@@ -14,7 +14,7 @@ A separate job from shell_rules.py (the existing linear rules); it imports shell
                opposite digit; diagonals (both directions, length >= 4): mean majority share and share of strong-majority diagonals (the diagonal TM axis of K's report, Batch B Sample 5);
     settings   every numeric setting of a run (except seed and test hooks) as set_<key>: a new setting such as a tightness parameter is picked up as soon as runs carry it; one that is constant over all runs
                (or absent from all) is dropped;
-    user       functions feat_* in scripts/shell_features_user.py (or --user-features PATH), see that file.
+    user       functions feat_* in scripts/shell_learning/shell_features_user.py (or --user-features PATH), see that file.
 (b) Derived terms of the TOP_K base features most correlated with the target on the selection set: squares, products, both ratios (only when the denominator keeps one sign and |denominator| >= 1 % of its
     largest value: UNSOURCED guard against blow-ups) and logs (only of positive features); degree at most 2.
 (c) see (a) user.
@@ -38,6 +38,8 @@ Usage: python3 shell_rules_sr.py [campaign] [--targets a,b] [--boots 100] [--per
 import argparse, hashlib, importlib.util, json, math, os, sys, time
 import numpy as np
 HERE = os.path.dirname(os.path.abspath(__file__)); sys.path.insert(0, HERE)
+_S = os.path.dirname(HERE)
+if os.path.basename(_S) == 'scripts': sys.path.extend(os.path.join(_S, _d) for _d in sorted(os.listdir(_S)) if _d not in ('legacy', '__pycache__') and os.path.isdir(os.path.join(_S, _d)))          # the other folders of scripts/ (not in a flat frozen copy)
 import shell_features as sf
 import shell_rules as rl
 

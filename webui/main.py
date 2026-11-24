@@ -106,8 +106,8 @@ def _ensure_baseline_tube(d):
     if not meta.get("R") or not ax.exists():
         raise HTTPException(404, "no baseline mesh and no fab_axis.csv to build one from")
     import numpy as np
-    if str(SCRIPTS) not in sys.path:
-        sys.path.insert(0, str(SCRIPTS))
+    if str(SCRIPTS / "yarn_model") not in sys.path:
+        sys.path.insert(0, str(SCRIPTS / "yarn_model"))
     from build_knit import write_obj
     A = np.loadtxt(ax, delimiter=",", skiprows=1)
     lines = [A[A[:, 0] == c][:, 1:] for c in np.unique(A[:, 0])]
@@ -161,8 +161,8 @@ def axis(rid: str, v: str = "baseline", view: int = 0):
     src = hits[0]; out = (runview.cache_dir(rid) if runview.is_run(rid) else src.parent) / (src.stem + ".view.csv")      # a run folder is never written to
     if not out.exists() or out.stat().st_mtime < src.stat().st_mtime:
         import numpy as np
-        if str(SCRIPTS) not in sys.path:
-            sys.path.insert(0, str(SCRIPTS))
+        if str(SCRIPTS / "yarn_model") not in sys.path:
+            sys.path.insert(0, str(SCRIPTS / "yarn_model"))
         from build_knit import decimate_curve
         R = (_read_json(d / "meta.json") or {}).get("R") or 1.0
         A = np.loadtxt(src, delimiter=",", skiprows=1)
@@ -237,7 +237,7 @@ def _law_points(s):
 def _sim_cmd(d, b, R):
     EA_in = b.ea or (_law_points(b.stretch_law)[0][1]/_law_points(b.stretch_law)[0][0] if b.stretch_law else None)
     kc = b.kc_ratio * (EA_in if EA_in else b.E * math.pi * R**2) / R          # kc = ratio * EA / R; EA = E pi R^2 unless EA or a stretch law is entered (then the entered EA)
-    cmd = [sys.executable, str(SCRIPTS / "relax_job.py"), "--folder", str(d), "--E", repr(b.E), "--mu", repr(b.mu),
+    cmd = [sys.executable, str(SCRIPTS / "yarn_model" / "relax_job.py"), "--folder", str(d), "--E", repr(b.E), "--mu", repr(b.mu),
            "--k-contact", repr(kc), "--perturb", repr(b.perturb), "--outer", str(b.outer), "--maxiter", str(b.maxiter),
            "--curl", repr(b.curl), "--tension", repr(b.tension_cN), "--creep-tau", repr(b.creep_tau_h), "--hours", repr(b.hours)] + (["--curl-aniso"] if b.curl_aniso else []) + ["--ref-scale", repr(b.ref_scale)]
     if b.shell:
@@ -383,7 +383,7 @@ def tile_start(rid: str, b: TileBody):
         raise HTTPException(422, "meta.json has no matrix, W, C and R (result built by an older pipeline)")
     for f in ("tile_result.json", "tile_axis.csv", "tile_state.npz", "tile.log"):
         (d / f).unlink(missing_ok=True)
-    cmd = [sys.executable, str(SCRIPTS / "tile_sim.py"), "--folder", str(d), "--E", repr(b.E), "--kc-ratio", repr(b.kc_ratio), "--ref-scale", repr(b.ref_scale),
+    cmd = [sys.executable, str(SCRIPTS / "yarn_model" / "tile_sim.py"), "--folder", str(d), "--E", repr(b.E), "--kc-ratio", repr(b.kc_ratio), "--ref-scale", repr(b.ref_scale),
            "--reset", repr(b.reset), "--rounds", str(b.rounds), "--maxiter", str(b.maxiter), "--perturb", repr(b.perturb), "--delta", repr(b.delta),
            "--strain", b.strain, "--do", b.do]
     log = open(d / "tile.log", "w")
@@ -628,7 +628,7 @@ def build(b: BuildBody):
     if len({len(r) for r in rows}) != 1 or not rows[0]:
         raise HTTPException(422, "the matrix rows must all have the same length")
     rid = _unique_id(); tmp = RESULTS / (".build-" + rid)
-    cmd = [sys.executable, str(SCRIPTS / "build_knit.py"), "--matrix", "/".join(" ".join(r) for r in rows), "--tiles", str(b.tiles), "--ne", repr(b.ne), "--cpi", repr(b.cpi), "--wpi", repr(b.wpi),
+    cmd = [sys.executable, str(SCRIPTS / "yarn_model" / "build_knit.py"), "--matrix", "/".join(" ".join(r) for r in rows), "--tiles", str(b.tiles), "--ne", repr(b.ne), "--cpi", repr(b.cpi), "--wpi", repr(b.wpi),
            "--out", str(tmp), "--no-tube", "--name", b.name.strip(), "--id", rid]       # id = creation date and time; the folder carries the same id; the name is the user's
     tmp.mkdir(parents=True, exist_ok=True)
     log = open(tmp / "build.log", "w")

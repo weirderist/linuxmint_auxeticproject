@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Tests of scripts/shell_proposer_eval.py (proposer against random) and scripts/shell_rules_sr.py (open-ended rule search) on SYNTHETIC finished runs: no solver, numpy only, temporary folders.
+"""Tests of scripts/shell_learning/shell_proposer_eval.py (proposer against random) and scripts/shell_learning/shell_rules_sr.py (open-ended rule search) on SYNTHETIC finished runs: no solver, numpy only, temporary folders.
 Run from the repository root: python tests/test_shell_eval_sr.py   (a few minutes: the rule search runs its permutation test)"""
 import json, os, subprocess, sys, tempfile, time
 import numpy as np
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TMP = tempfile.mkdtemp(prefix='shelleval_')
 os.environ.update(SHELL_RUNS_DIR=os.path.join(TMP, 'shell_runs'), CAMPAIGN_LOG_DIR=os.path.join(TMP, 'logs'))
-sys.path.insert(0, os.path.join(ROOT, 'scripts'))
+sys.path.insert(0, os.path.join(ROOT, 'scripts')); import scriptdirs
 import shell_campaign as sc, shell_features as sf, shell_proposer as pr, shell_proposer_eval as pe, shell_rules_sr as sr, campaign as cm
 bad = []
 def check(name, ok, info=''):
@@ -29,7 +29,7 @@ check('two horizontal stripes (3 courses each): sections 6 wide and 3 high, wale
       fs['sec_width_mean'] == 6 and fs['sec_height_mean'] == 3 and fs['run_wale_mean'] == 3 and fs['run_course_mean'] == 6 and fs['sec_edge_stitch_frac'] == 1.0)
 
 # ---- a synthetic seeded campaign with 130 finished runs (same construction as tests/test_shell_learning.py)
-r = subprocess.run([sys.executable, os.path.join(ROOT, 'scripts', 'campaign.py'), 'shell-plan', 'syn', '--policy', os.path.join(ROOT, 'campaigns', 'shell_policy.json'), '--filler', '60'], capture_output=True, text=True, env=dict(os.environ))
+r = subprocess.run([sys.executable, os.path.join(ROOT, 'scripts', 'campaigns', 'campaign.py'), 'shell-plan', 'syn', '--policy', os.path.join(ROOT, 'campaigns', 'shell_policy.json'), '--filler', '60'], capture_output=True, text=True, env=dict(os.environ))
 c = sc.Camp('syn'); rng = np.random.default_rng(1); items = [x for x in c.queue_items() if not x.get('control')][:130]
 def metrics_for(s):
     ff = sf.features(s['matrix'], s['tiles'], s['cpi'], s['wpi']); fx, fy = 76.2, 69.3

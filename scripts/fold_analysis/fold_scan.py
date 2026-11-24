@@ -14,7 +14,7 @@ def main():
     g = a.parse_args(); rest = [r for r in g.rest if r != '--']; here = os.path.dirname(os.path.abspath(__file__)); rows = []
     for kx, ky in itertools.product([float(v) for v in g.kx.split(',')], [float(v) for v in g.ky.split(',')]):
         d = tempfile.mkdtemp(prefix='foldscan_'); shutil.copytree(g.folder, d, dirs_exist_ok=True)
-        pr = subprocess.run(os.environ.get('FOLD_SCAN_RUNNER', sys.executable).split() + [os.path.join(here, 'relax_job.py'), '--folder', d, '--warp-kx', repr(kx), '--warp-ky', repr(ky)] + rest, stdout=subprocess.DEVNULL)
+        pr = subprocess.run(os.environ.get('FOLD_SCAN_RUNNER', sys.executable).split() + [os.path.join(os.path.dirname(here), 'yarn_model', 'relax_job.py'), '--folder', d, '--warp-kx', repr(kx), '--warp-ky', repr(ky)] + rest, stdout=subprocess.DEVNULL)
         if pr.returncode not in (0, 2): sys.exit('relax_job.py failed (exit %d) for the start kx %g ky %g; run it by hand with the same options to see why' % (pr.returncode, kx, ky))     # exit 2 = the run ended as "failed" (not settled): its relaxed state is still used
         meta = json.load(open(os.path.join(d, 'meta.json'))); e = meta['simulations'][-1].get('energy_final', None)
         if e is None: e = meta['simulations'][-1]['rounds'][-1]['E']

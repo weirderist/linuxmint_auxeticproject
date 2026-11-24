@@ -114,7 +114,7 @@ def descendants_rss_kb(root_pid):
 
 # ------------------------------------------------------------------ spec, design, manifest
 def known_relax_flags():
-    txt = open(os.path.join(SCRIPTS, 'relax_job.py')).read()
+    txt = open(os.path.join(SCRIPTS, 'yarn_model', 'relax_job.py')).read()
     return set(re.findall(r"add_argument\('(--[A-Za-z0-9-]+)'", txt))
 
 def flag_of(name): return '--E' if name == 'E' else '--' + name.replace('_', '-')
@@ -215,11 +215,11 @@ def k_contact(r, R):
     return float(r['kc_ratio']) * EA / R
 
 def build_cmd(spec, name, rid, b, out):
-    return [sys.executable, '-u', os.path.join(SCRIPTS, 'build_knit.py'), '--matrix', fabric_matrix(spec), '--tiles', str(int(b['tiles'])), '--ne', repr(float(b['ne'])), '--cpi', repr(float(b['cpi'])),
+    return [sys.executable, '-u', os.path.join(SCRIPTS, 'yarn_model', 'build_knit.py'), '--matrix', fabric_matrix(spec), '--tiles', str(int(b['tiles'])), '--ne', repr(float(b['ne'])), '--cpi', repr(float(b['cpi'])),
             '--wpi', repr(float(b['wpi'])), '--out', out, '--name', '%s-%s' % (name, rid), '--id', '%s-%s' % (name, rid), '--no-tube']
 
 def relax_cmd(r, R, folder):
-    cmd = [sys.executable, '-u', os.path.join(SCRIPTS, 'relax_job.py'), '--folder', folder, '--k-contact', repr(k_contact(r, R))]
+    cmd = [sys.executable, '-u', os.path.join(SCRIPTS, 'yarn_model', 'relax_job.py'), '--folder', folder, '--k-contact', repr(k_contact(r, R))]
     for k in sorted(r):
         if k in ('kc_ratio', 'k_contact'): continue
         v = r[k]
@@ -321,7 +321,7 @@ def fold_metrics(axis_csv, meta, th):
     out = {}
     try:
         import numpy as np
-        sys.path.insert(0, SCRIPTS)
+        sys.path.insert(0, os.path.join(SCRIPTS, 'fold_analysis'))
         from fold_metric import fit
         P = np.loadtxt(axis_csv, delimiter=',', skiprows=1)[:, 1:]
     except Exception: return out
@@ -586,7 +586,7 @@ def cmd_run(a):
     write_results(name); say('runner finished')
 
 def main():
-    if len(sys.argv) > 1 and sys.argv[1] in ('shell-plan', 'shell-enqueue', 'shell-run', 'shell-status', 'shell-control', 'shell-freeze'):          # pure shell campaigns: scripts/shell_campaign.py
+    if len(sys.argv) > 1 and sys.argv[1] in ('shell-plan', 'shell-enqueue', 'shell-run', 'shell-status', 'shell-control', 'shell-freeze'):          # pure shell campaigns: scripts/campaigns/shell_campaign.py
         import shell_campaign; return shell_campaign.cli(sys.argv[1], sys.argv[2:])
     ap = argparse.ArgumentParser(description=__doc__.split('\n')[0]); sub = ap.add_subparsers(dest='cmd', required=True)
     for c in ('plan', 'status', 'stop', 'run'): sp = sub.add_parser(c); sp.add_argument('name')

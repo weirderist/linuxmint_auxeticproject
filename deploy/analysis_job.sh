@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# deploy/analysis_job.sh - the scheduled analysis job of a pure-shell campaign (scripts/shell_analysis_job.py). Run ON THE SERVER by K, for example:
+# deploy/analysis_job.sh - the scheduled analysis job of a pure-shell campaign (scripts/shell_learning/shell_analysis_job.py). Run ON THE SERVER by K, for example:
 #   ssh server "bash ~/auxetic_project/deploy/analysis_job.sh install"     add the @reboot line to K's crontab (once; a second install changes nothing)
 #   ssh server "bash ~/auxetic_project/deploy/analysis_job.sh start"       start the job now, detached (does nothing if it already runs)
 #   ssh server "bash ~/auxetic_project/deploy/analysis_job.sh status"      is it running, the crontab line, the last log lines
@@ -8,7 +8,7 @@
 # The job reads the campaign and writes only <campaign>/analysis/scheduled/ and its log. It runs at nice 19 and ionice class 3 (idle). It does not touch the runner, which uses its frozen copy.
 set -u
 CAMP="${2:-shell1}"
-PROJ="$HOME/auxetic_project"; PY="$PROJ/venv/bin/python"; JOB="$PROJ/scripts/shell_analysis_job.py"; LOG="$HOME/shell_logs/analysis_${CAMP}.log"
+PROJ="$HOME/auxetic_project"; PY="$PROJ/venv/bin/python"; JOB="$PROJ/scripts/shell_learning/shell_analysis_job.py"; LOG="$HOME/shell_logs/analysis_${CAMP}.log"
 TAG="shell_analysis_job.py ${CAMP} "
 LINE="@reboot sleep 210 && /usr/bin/setsid /usr/bin/ionice -c 3 /usr/bin/nice -n 19 $PY $JOB ${CAMP} --poll-s 600 >> $LOG 2>&1 &"
 running() { pgrep -f -- "$JOB ${CAMP} --poll-s" >/dev/null; }
