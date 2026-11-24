@@ -89,3 +89,6 @@ data/ten_patterns_pure_shell/*.png
 
 # campaign runner lock (shows as untracked on the server)
 campaigns/*/runner.lock
+
+# K private command list
+K_COMMANDS.txt
