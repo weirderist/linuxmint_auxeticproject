@@ -86,3 +86,6 @@ campaigns/shell_runs/
 # K report (private): not in git
 data/ten_patterns_pure_shell/chapters.docx
 data/ten_patterns_pure_shell/*.png
+
+# campaign runner lock (shows as untracked on the server)
+campaigns/*/runner.lock

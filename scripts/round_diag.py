@@ -14,6 +14,8 @@ One row per outer round:
   net_l0_change                                  (sum l0 - sum l0_start) / sum l0_start (creep does not conserve the total; slip does)
   fold_amplitude                                 peak-to-peak of the stitch-cell mean heights after removing a best-fit plane (the same definition as campaign.py's fold_amplitude_mm; in the units of the
                                                  result); empty when more than 10 % of the cells are empty
+  fold_kx_per_mm, fold_ky_per_mm                 curvatures along the courses (x) and the wales (y), 2 x the x^2 and y^2 coefficients of the quadratic fit of fold_metric.fit on all yarn vertices
+                                                 (the same function campaign.py's fold_metrics and shell_metrics.describe use; so one definition for the shell, the campaign and these diagnostics)
   z_range_over_R                                 z range of all vertices over the yarn radius
 Regions (UNSOURCED thresholds on the boundary term G_b of the sectioned loop field, scripts/loop_grade.py): outer = G_b >= 0.75 (next to a section boundary), inner = G_b <= 0.25 (far from every boundary),
 all = every loop. For single jersey outer is the free-edge ring and inner the centre.
@@ -21,11 +23,12 @@ all = every loop. For single jersey outer is the free-edge ring and inner the ce
 import csv, os
 import numpy as np
 import loop_grade as lg
+from fold_metric import fit as fold_fit
 
 REGION_OUTER, REGION_INNER = 0.75, 0.25          # UNSOURCED
 REGIONS = ('all', 'outer', 'inner')
 COLUMNS = (['round', 'E', 'max_dl0', 'n_slips', 'transferred_total', 'transferred_max', 'drive_strength'] + ['%s_%s_%s' % (k, r, s) for k in ('rest', 'geo') for r in REGIONS for s in ('mean', 'min', 'max')] +
-           ['share_l0', 'mean_elastic_strain', 'net_l0_change', 'fold_amplitude', 'z_range_over_R'])
+           ['share_l0', 'mean_elastic_strain', 'net_l0_change', 'fold_amplitude', 'fold_kx_per_mm', 'fold_ky_per_mm', 'z_range_over_R'])
 
 
 def fold_amplitude(Xs, nx, ny):
@@ -65,7 +68,9 @@ class RoundDiag:
         out['share_l0'] = dl0 / (dl0 + el) if dl0 + el > 0 else None
         out['mean_elastic_strain'] = float(np.concatenate([c / a - 1.0 for c, a in zip(chord, l0)]).mean())
         out['net_l0_change'] = (float(sum(a.sum() for a in l0)) - self.sum_l0_start) / self.sum_l0_start
-        Xs = [y.X for y in sim.yarns]; out['fold_amplitude'] = fold_amplitude(Xs, self.ncol, self.nrow); P = np.vstack(Xs); out['z_range_over_R'] = float(np.ptp(P[:, 2]) / sim.R)
+        Xs = [y.X for y in sim.yarns]; out['fold_amplitude'] = fold_amplitude(Xs, self.ncol, self.nrow); P = np.vstack(Xs)
+        ff = fold_fit(P) if len(P) >= 20 and np.all(np.isfinite(P)) else {}; out['fold_kx_per_mm'] = ff.get('kx'); out['fold_ky_per_mm'] = ff.get('ky')
+        out['z_range_over_R'] = float(np.ptp(P[:, 2]) / sim.R)
         return out
 
     @staticmethod

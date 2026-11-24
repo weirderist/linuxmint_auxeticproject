@@ -205,7 +205,7 @@ def fields(d):
     f.arc_asb = arc(f.l_asb)
     f.mean_asb = float(f.arc_asb[f.arc_asb > 0].mean())
     f.rest_src, f.rest_note, f.rest_exact = "reconstructed", "", False
-    f.l_rel = f.arc_rel = f.l0 = f.strain = f.strain_grid = f.rest_sum = None
+    f.l_rel = f.arc_rel = f.l0 = f.strain = f.strain_grid = f.rest_sum = f.rest_rel = None
     f.ratio, _n, _e = _rest_ratio(meta, f.R); f.rest0_mean = f.ratio * f.mean_asb      # the as-built rest length of a loop is ratio x its as-built chord length
     if f.Xr is not None:
         f.l_rel = [np.linalg.norm(np.diff(X, axis=0), axis=1) for X in f.Xr]; f.arc_rel = arc(f.l_rel)
@@ -217,6 +217,7 @@ def fields(d):
         else:
             f.rest_note = _n; f.l0 = [l * f.ratio for l in f.l_asb]
         f.rest_sum = arc(f.l0)
+        f.rest_rel = np.where(f.arc_asb > 0, f.rest_sum / (f.ratio * np.where(f.arc_asb > 0, f.arc_asb, 1.0)), 1.0)          # each loop against its OWN as-built rest length (ratio x its as-built chord sum); 1 where the loop has no length
         f.strain = [lr / l0 - 1.0 for lr, l0 in zip(f.l_rel, f.l0)]
         f.strain_grid = np.array([_loop_sum(f.strain[i], f.beta[i]) / np.maximum(f.span[i], 1e-12) for i in range(nc)])
     if len(_FCACHE) >= 3: _FCACHE.pop(next(iter(_FCACHE)))
@@ -227,7 +228,7 @@ def _vertex_values(f, field, variant):
     """(values per source vertex in the file order of the variant's axis csv, the field actually used).
     loop    = restlen when the run has saved rest lengths and the relaxed state is asked for, otherwise looplen
     looplen = yarn ARC LENGTH of each loop in the shown geometry / as-built mean loop length (geometric: does not show migration)
-    restlen = SUM OF THE REST LENGTHS l0 of each loop / as-built mean rest length of a loop (needs relaxed_l0.csv): this is the migrated length
+    restlen = SUM OF THE REST LENGTHS l0 of each loop / THE SAME LOOP'S OWN as-built rest length (ratio x its as-built chord sum; needs relaxed_l0.csv): 1 = unchanged, so as-built differences between loop types are not shown as migration
     strain  = axial strain of the relaxed fabric, per vertex"""
     if field == "loop": field = "restlen" if (variant == "relaxed" and f.rest_src == "saved") else "looplen"
     if field in ("looplen", "restlen"):
@@ -235,7 +236,7 @@ def _vertex_values(f, field, variant):
             if f.Xr is None: raise HTTPException(404, "no relaxed axis for this folder")
             if field == "restlen":
                 if f.rest_src != "saved": raise HTTPException(404, "the rest lengths after the relaxation are not saved for this run (no relaxed_l0.csv)")
-                grid = f.rest_sum / f.rest0_mean
+                grid = f.rest_rel
             else: grid = f.arc_rel / f.mean_asb
             ids = f.vid0
         else:
@@ -260,7 +261,7 @@ def ramp(stops, t):
     t = np.clip(t, 0.0, 1.0) * (len(stops) - 1); i = np.minimum(t.astype(int), len(stops) - 2); u = (t - i)[:, None]
     return stops[i] * (1 - u) + stops[i + 1] * u
 
-LOOP_NOTES = {"looplen": "geometric arc length - does not show migration", "restlen": "rest length l0 of each loop - shows migration"}
+LOOP_NOTES = {"looplen": "geometric arc length - does not show migration", "restlen": "rest length l0 of each loop against its own as-built value - shows migration"}
 
 def colour_values(field, vals, flip, clip):
     """(uint8 RGB per value, legend dict). Loop fields: the range is 1 +- h, h = max(clip-th percentile of |value - 1|, LOOP_HALF_MIN): yellow = shorter than the as-built mean, dark blue = longer,
@@ -270,7 +271,7 @@ def colour_values(field, vals, flip, clip):
         t = (vals - lo) / (2 * h)
         lab = "loop yarn length (relaxed geometry)" if field == "looplen" else "loop rest length l0"
         return ramp(LOOP_STOPS, t).round().astype(np.uint8), dict(vmin=lo, vmax=hi, centre=1.0, half_width=h, min_half_width=LOOP_HALF_MIN, data_min=float(vals.min()), data_max=float(vals.max()), clip_percentile=clip,
-                                                                  stops=LOOP_STOPS.astype(int).tolist(), label=lab + " / as-built mean", note=LOOP_NOTES[field], field=field, ticks=[lo, 1.0, hi], end_labels=["shorter", "longer"])
+                                                                  stops=LOOP_STOPS.astype(int).tolist(), label=lab + (" / as-built mean" if field == "looplen" else " / its own as-built rest length"), centre_label=("as-built mean" if field == "looplen" else "own as-built"), note=LOOP_NOTES[field], field=field, ticks=[lo, 1.0, hi], end_labels=["shorter", "longer"])
     c = float(np.percentile(np.abs(vals), clip)) or 1e-12
     t = np.clip(vals / c, -1, 1)[:, None]
     pos, neg = (STRAIN_GREEN, STRAIN_RED) if flip else (STRAIN_RED, STRAIN_GREEN)       # default: tension red, compression green
@@ -366,10 +367,9 @@ def field_info(rid: str, field: str = "loop", variant: str = "baseline", flip: i
     notes = []
     if fu in ("looplen", "restlen"):
         notes.append(LOOP_NOTES[fu].capitalize() + ".")
-        notes.append("Loop = one stitch of one course; identity: %s. Lengths are chord sums of the solver's resampled yarn, with the two segments at a loop boundary split in proportion; divided by the as-built mean over all %d loops "
-                     "(%.4g%s)." % (f.identity, int((f.arc_asb > 0).sum()), f.mean_asb if fu == "looplen" else f.rest0_mean, "" if fu == "looplen" else ", as-built rest length = chord x %.5f" % f.ratio))
+        notes.append("Loop = one stitch of one course; identity: %s. Lengths are chord sums of the solver's resampled yarn, with the two segments at a loop boundary split in proportion; %s." % (f.identity, "divided by the as-built mean over all %d loops (%.4g)" % (int((f.arc_asb > 0).sum()), f.mean_asb) if fu == "looplen" else "each loop's rest length is divided by that loop's own as-built rest length (= its as-built chord sum x %.5f), so 1 = unchanged" % f.ratio))
         notes.append("UNSOURCED display choice: colour range = 1 +- h, h = max(%g-th percentile of |value - 1|, %g); here h = %.4g, data range %.4f to %.4f." % (clip, LOOP_HALF_MIN, legend["half_width"], legend["data_min"], legend["data_max"]))
-        if fu == "restlen": notes.append("The as-built loops already differ between loop types (min to max spread %.1f %% of the mean loop length); that variation is part of this colour, so compare it with the baseline view to see what the relaxation or a starting grade changed." % (100 * float(f.arc_asb.max() - f.arc_asb.min()) / f.mean_asb))
+        if fu == "restlen": notes.append("Per-loop reference: as-built differences between loop types (spread %.1f %% of the mean loop length) are NOT shown. The start is taken as ratio x the as-built chord, i.e. uniform: a starting loop-length grade (--loop-grade) therefore appears as change." % (100 * float(f.arc_asb.max() - f.arc_asb.min()) / f.mean_asb))
         if fu == "looplen" and variant == "relaxed":
             if f.strain is not None: notes.append("The geometric arc length follows the rest length only through l = l0 (1 + strain), so it can show migration larger than the elastic strain (here up to about %.2f %%) and nothing smaller." % (100 * float(np.abs(np.concatenate(f.strain)).max())))
             if f.rest_src != "saved": notes.append("This run has no relaxed_l0.csv (runs made before commit c325e07 did not save it). Its colouring cannot be used as evidence for or against loop-length migration.")

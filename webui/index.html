@@ -431,7 +431,7 @@ let colMode = 'none';
 function setLegend(l) {
   const el = $('#legend'); if (!l) { el.hidden = true; return; }
   const g = l.stops.map(c => 'rgb(' + c.join(',') + ')').join(','), f = x => (+x).toFixed(3);
-  el.innerHTML = '<b>' + l.label + '</b><div class="bar" style="background:linear-gradient(to right,' + g + ')"></div><div class="tk"><span>' + f(l.vmin) + ' (shorter)</span><span>' + f(l.ticks[1]) + ' (as-built mean)</span><span>' + f(l.vmax) + ' (longer)</span></div><div>' + (l.note || '') + '</div><div style="opacity:.7">data ' + f(l.data_min) + ' to ' + f(l.data_max) + '</div>';
+  el.innerHTML = '<b>' + l.label + '</b><div class="bar" style="background:linear-gradient(to right,' + g + ')"></div><div class="tk"><span>' + f(l.vmin) + ' (shorter)</span><span>' + f(l.ticks[1]) + ' (' + (l.centre_label || 'as-built mean') + ')</span><span>' + f(l.vmax) + ' (longer)</span></div><div>' + (l.note || '') + '</div><div style="opacity:.7">data ' + f(l.data_min) + ' to ' + f(l.data_max) + '</div>';
   el.hidden = false;
 }
 function setColButtons() { $('#bColNone').classList.toggle('on', colMode === 'none'); $('#bColLoop').classList.toggle('on', colMode === 'loop'); }

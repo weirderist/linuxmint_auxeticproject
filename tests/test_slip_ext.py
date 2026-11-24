@@ -156,6 +156,9 @@ check("at the start of a run share_l0 is 0 and every rest ratio is exactly 1 (no
 flat = [np.c_[np.linspace(0, 10, 50), np.full(50, y), np.zeros(50)] for y in np.linspace(0, 5, 12)]
 bump = [X + np.c_[np.zeros(50), np.zeros(50), 0.4*np.exp(-((X[:, 0] - 5)**2 + (X[:, 1] - 2.5)**2))] for X in flat]
 check("fold descriptor: 0 for a flat sheet, > 0 for a bumped sheet", abs(rd.fold_amplitude(flat, 10, 6)) < 1e-12 and rd.fold_amplitude(bump, 10, 6) > 0.05)
+from fold_metric import fit as _fit
+_P = np.vstack([np.c_[np.linspace(-5, 5, 30), np.full(30, y), 0.01*np.linspace(-5, 5, 30)**2 + 0.02*y**2] for y in np.linspace(-3, 3, 10)])
+check("fold curvatures of round_diag are the fold_metric.fit curvatures (a paraboloid z = 0.01 x^2 + 0.02 y^2 gives kx 0.02, ky 0.04)", abs(rd.fold_fit(_P)["kx"] - 0.02) < 1e-9 and abs(rd.fold_fit(_P)["ky"] - 0.04) < 1e-9 and rd.fold_fit is _fit)
 csvp = dD / "diagnostics_test.csv"
 if csvp.exists(): csvp.rename(csvp.with_suffix(".old.%d" % int(__import__("time").time())))
 rd.RoundDiag.append(str(csvp), row); rd.RoundDiag.append(str(csvp), row)
