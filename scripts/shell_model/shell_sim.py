@@ -76,19 +76,85 @@ def make_energy(X0, tri, hin, A0, a0, ell, h, Y, nu, spring_w, bnd):
         return Es + Eb + Esp
     return jax.jit(jax.value_and_grad(U)), jax.jit(U)
 
-def fold(M, W, C, kappa=1.0, h=0.5, nu=0.4, Y=1.0, sub=1, ntile=(1, 1), steps=20, maxiter=400, springs=0.0, seed=0, verbose=True, kx=None, ky=None):
-    """kx, ky: natural curvatures of a digit-1 stitch (1/length, > 0 bends toward +z); digit 2 gets the negatives. None = the paper's (-kappa, +kappa)."""
+def plate_data(X0, tri, hin, A0):
+    """Rest data of the PLATE bending term (bending='plate', added 2026-11-26). To first order the dihedral angle of an edge between triangles a and b is theta_e = n . (g_b - g_a): g = the gradient of the
+    flat triangle's height (the jump is along the in-plane edge normal n, pointing from a to b, because both triangles share the edge). For a quadratic surface z = (K_xx x^2 + 2 K_xy x y + K_yy y^2)/2, g of
+    a flat triangle through its three vertices is exactly linear in K (it is computed here for the three basis quadrics x^2/2, y^2/2, x y; note it is NOT the surface gradient at the centroid, but the one
+    that matches the surface slope along each edge at the edge midpoint). So theta_e = G_e . (K_xx, K_yy, K_xy), and a triangle with three interior edges has three such equations:
+    K_t = G_t^-1 theta, exact for every quadratic surface whatever the edge directions. (Two simpler estimators were tried and failed tests/test_shell_plate.py on 2026-11-26: the Grinspun et al. 2006
+    sum theta |e| n n^T / (2A) gave 3.3 x the energy of a 45-degree twist on this grid; a centroid-gradient model gave 2.2-8.8 x.)
+    Triangles with a boundary edge get weight 0 (no neighbour across it); a free edge carries no bending moment, and the strip is O(1/N) of the sheet. Returns (H hinge index per triangle edge,
+    len(hin) for a boundary edge; Ginv (T, 3, 3); wt (T,) 1 for interior triangles, 0 for boundary ones)."""
+    hid = {}
+    for h_, (i, j, k, l, ta, tb) in enumerate(hin): hid[(min(i, j), max(i, j))] = (h_, ta, tb)
+    P = X0[:, :2] - X0[:, :2].mean(0); Z = np.c_[0.5*P[:, 0]**2, 0.5*P[:, 1]**2, P[:, 0]*P[:, 1]]          # vertex heights of the three basis quadrics
+    E1 = P[tri[:, 1]] - P[tri[:, 0]]; E2 = P[tri[:, 2]] - P[tri[:, 0]]; Minv = np.linalg.inv(np.stack([E1, E2], 1))                 # g . e1 = dz1, g . e2 = dz2
+    g = np.einsum('tij,tjb->tib', Minv, np.stack([Z[tri[:, 1]] - Z[tri[:, 0]], Z[tri[:, 2]] - Z[tri[:, 0]]], 1))                     # (T, 2 components, 3 basis)
+    ctr = P[tri].mean(1); T = len(tri); H = np.full((T, 3), len(hin), int); Ginv = np.zeros((T, 3, 3)); wt = np.zeros(T)
+    for t, (p, q, r) in enumerate(tri):
+        G = np.zeros((3, 3)); ok = True
+        for s_, (a, b) in enumerate(((p, q), (q, r), (r, p))):
+            hh = hid.get((min(a, b), max(a, b)))
+            if hh is None: ok = False; continue
+            H[t, s_] = hh[0]; nb = hh[2] if hh[1] == t else hh[1]
+            e = P[b] - P[a]; n = np.array([e[1], -e[0]])/np.linalg.norm(e); n = n if n @ (ctr[nb] - ctr[t]) > 0 else -n          # normal pointing from t to its neighbour
+            G[s_] = n @ (g[nb] - g[t])
+        if ok: Ginv[t] = np.linalg.inv(G); wt[t] = 1.0
+    return H, Ginv, wt
+
+def make_energy(X0, tri, hin, A0, a0, ell, h, Y, nu, spring_w, bnd, bending='hinge', return_parts=False):
+    """bending = 'hinge' (default, the energy of every run up to shell1, kept bit-identical): hinge energy kb wbend (theta - theta0)^2. MEASURED 2026-11-26 (tests/test_shell_plate.py, run on the server):
+    about 2.9 x the plate energy for a cylinder, 4.9 x for a grid-aligned saddle and 10 x for a 45-degree twist, independent of the mesh size (it behaves as if nu = 0 and depends on the grid direction).
+    bending = 'plate': the Kirchhoff plate energy  sum_t A_t D/2 [nu tr(dS)^2 + (1 - nu) tr(dS dS)],  dS = S_t - S0_t, S_t the discrete shape operator of plate_data and S0_t = diag(kx, ky) x the stitch sign,
+    i.e. the bending term of Niu et al. 2025 Eq. 1 with the curvature taken from the dihedral angles. Then th0 is the (T, 2, 2) rest curvature tensor instead of the hinge angles."""
+    a0inv = np.linalg.inv(a0); D = Y*h**3/(12*(1 - nu**2)); kb = D/2.0
+    i, j, k, l, ta, tb = hin.T; wbend = 3*ell**2/(A0[ta] + A0[tb])
+    c1 = Y*nu/(1 - nu**2); c2 = Y/(1 + nu); x0 = jnp.array(X0)
+    if bending not in ('hinge', 'plate'): raise ValueError("bending must be 'hinge' or 'plate'")
+    if bending == 'plate': H, Ginv, wt = plate_data(X0, tri, hin, A0); Aw = A0*wt
+    def parts(x, th0):
+        X = x.reshape(-1, 3); p = X[tri]; e1 = p[:, 1] - p[:, 0]; e2 = p[:, 2] - p[:, 0]
+        a = jnp.stack([jnp.stack([(e1*e1).sum(1), (e1*e2).sum(1)], 1), jnp.stack([(e1*e2).sum(1), (e2*e2).sum(1)], 1)], 1)
+        Xm = jnp.einsum('tij,tjk->tik', a0inv, a - a0); tr = Xm[:, 0, 0] + Xm[:, 1, 1]; tr2 = jnp.einsum('tij,tji->t', Xm, Xm)
+        Es = 0.5*jnp.sum(A0*(h/4.0)*(c1*tr**2 + c2*tr2))
+        xi, xj, xk, xl = X[i], X[j], X[k], X[l]; ev = xj - xi; eh = ev/jnp.sqrt((ev*ev).sum(1, keepdims=True) + 1e-30)
+        n1 = jnp.cross(xj - xi, xk - xi); n2 = jnp.cross(xi - xj, xl - xj)
+        n1 = n1/jnp.sqrt((n1*n1).sum(1, keepdims=True) + 1e-30); n2 = n2/jnp.sqrt((n2*n2).sum(1, keepdims=True) + 1e-30)
+        th = jnp.arctan2(-(jnp.cross(n1, n2)*eh).sum(1), (n1*n2).sum(1))              # >0: surface bends toward +z (concave up)
+        if bending == 'hinge': Eb = jnp.sum(kb*wbend*(th - th0)**2)
+        else:
+            kv = jnp.einsum('tij,tj->ti', Ginv, jnp.concatenate([th, jnp.zeros(1)])[H])          # (K_xx, K_yy, K_xy) per triangle
+            dxx, dyy, dxy = kv[:, 0] - th0[:, 0, 0], kv[:, 1] - th0[:, 1, 1], kv[:, 2] - th0[:, 0, 1]
+            Eb = jnp.sum(Aw*0.5*D*(nu*(dxx + dyy)**2 + (1 - nu)*(dxx**2 + dyy**2 + 2*dxy**2)))
+        Esp = 0.5*spring_w*jnp.sum(((X - x0)[bnd]**2).sum(1)) if bnd is not None else 0.0
+        return Es, Eb, Esp
+    def U(x, th0):
+        Es, Eb, Esp = parts(x, th0); return Es + Eb + Esp
+    vg, Uj = jax.jit(jax.value_and_grad(U)), jax.jit(U)
+    return (vg, Uj, jax.jit(parts)) if return_parts else (vg, Uj)          # parts = (stretch, bend, springs), for the tests
+
+def rest_tensor(tri, sg, kx, ky, scale=1.0):
+    """Rest curvature tensor S0 per triangle for bending='plate': diag(kx, ky) x scale for digit 1, the negative for digit 2 (no averaging needed at a knit/purl interface: each triangle has its own)."""
+    return np.einsum('t,ab->tab', scale*np.asarray(sg, float), np.diag([kx, ky]))
+
+def fold(M, W, C, kappa=1.0, h=0.5, nu=0.4, Y=1.0, sub=1, ntile=(1, 1), steps=20, maxiter=400, springs=0.0, seed=0, verbose=True, kx=None, ky=None, bending='hinge', snapshots=None):
+    """kx, ky: natural curvatures of a digit-1 stitch (1/length, > 0 bends toward +z); digit 2 gets the negatives. None = the paper's (-kappa, +kappa).
+    bending: 'hinge' (default, bit-identical to every earlier run) or 'plate' (see make_energy). log rows: (growth s, U, iterations, z-range, largest |gradient| at the end of the step, L-BFGS status);
+    the last two were added 2026-11-26 (task 32: a step that ends at the iteration cap is not converged; the gradient says how far from it).
+    snapshots: None (default) or a list that receives a copy of the positions (n, 3) after every growth step: the shell's own path of equilibria at curvature fraction s (used by shell_fold.py, task 52)."""
     kx0, ky0 = (-kappa, +kappa) if kx is None else (kx, ky)
     X0, tri, hin, sg, (nx, ny) = build(M, W, C, sub, ntile)
     A0, a0, ell = rest_data(X0, tri, hin, sg)
     bnd = None
     if springs > 0:
         gx, gy = nx*sub + 1, ny*sub + 1; idx = np.arange(len(X0)).reshape(gy, gx); bnd = np.unique(np.r_[idx[0], idx[-1], idx[:, 0], idx[:, -1]])
-    vg, U = make_energy(X0, tri, hin, A0, a0, ell, h, Y, nu, springs, bnd)
+    vg, U = make_energy(X0, tri, hin, A0, a0, ell, h, Y, nu, springs, bnd, bending)
     x = X0.copy(); x[:, 2] += 1e-3*np.random.default_rng(seed).standard_normal(len(x)); x = x.ravel(); log = []
     for s in np.linspace(1.0/steps, 1.0, steps):
-        th0 = rest_angles(X0, hin, sg, kx0, ky0, s)
+        th0 = rest_angles(X0, hin, sg, kx0, ky0, s) if bending == 'hinge' else rest_tensor(tri, sg, kx0, ky0, s)
         r = minimize(lambda z: tuple(np.asarray(v, float) for v in vg(z, th0)), x, jac=True, method='L-BFGS-B', options=dict(maxiter=maxiter, maxcor=30, ftol=1e-14, gtol=1e-9)); x = r.x
-        Xc = x.reshape(-1, 3); log.append((float(s), float(r.fun), int(r.nit), float(np.ptp(Xc[:, 2]))))
-        if verbose: print('  growth %.2f: U %.5g, %d its, z-range %.3f mm' % log[-1], flush=True)
+        Xc = x.reshape(-1, 3)
+        if snapshots is not None: snapshots.append(Xc.copy())
+        log.append((float(s), float(r.fun), int(r.nit), float(np.ptp(Xc[:, 2])), float(np.abs(r.jac).max()), int(r.status)))
+        if verbose: print('  growth %.2f: U %.5g, %d its, z-range %.3f mm, max |grad| %.3g, status %d' % log[-1], flush=True)
     return X0, x.reshape(-1, 3), tri, (nx, ny), log

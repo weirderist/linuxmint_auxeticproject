@@ -128,4 +128,22 @@ with tempfile.TemporaryDirectory() as td:
     check('summary and aggregation: share frozen 1/48, minimum fraction 0.4, schema, unsourced list present', sm['schema'] == sf.SCHEMA and abs(float(line['share_frozen']) - 1/48) < 1e-9 and abs(float(line['min_fraction']) - 0.4) < 1e-9 and int(line['n_frozen']) == 1 and len(sm['unsourced']) > 5, line)
     sf.write_cells_csv(os.path.join(td, 'c.csv'), cells4, NX, NY); check('fold_cell_metrics.csv has one row per cell and all columns', len(list(csv.DictReader(open(os.path.join(td, 'c.csv'))))) == NX*NY)
 
+# ---------------------------------------------------------------- task 52 (2026-11-26): the fold path = the shell's own equilibria, not the straight line flat -> shell
+def roll(k):          # exact isometric roll of the flat grid along x with curvature k (the sheet keeps every length)
+    if abs(k) < 1e-12: return np.stack([x, y, np.zeros_like(x)], -1)
+    c0 = L/2; s = x - c0; return np.stack([c0 + np.sin(k*s)/k, y, (1 - np.cos(k*s))/k], -1)
+kmax = 2*np.pi/L                                   # half the sheet on each side turns by pi/2: a 180-degree roll in all
+fr = np.linspace(0, 1, 11); path = (fr, np.stack([roll(t*kmax) for t in fr]))
+SR = dict(X=roll(kmax), W=W, C=C, sub=SUB, nx=NX, ny=NY); SP = dict(SR, path=path)
+half = np.full((NY, NX), 0.5)
+Fx_lin, _ = sf.deformation_at(dict(SR), half); Fx_path, _ = sf.deformation_at(SP, half)
+st_lin, st_path = np.linalg.norm(Fx_lin, axis=-1), np.linalg.norm(Fx_path, axis=-1)
+check('task 52: straight-line path at t = 0.5 of a 180-degree roll compresses the courses strongly (the defect)', st_lin.min() < 0.3, 'min course stretch %.3f' % st_lin.min())
+check('task 52: the equilibrium path keeps the course length at t = 0.5 (stretch within 0.5 %)', np.abs(st_path - 1).max() < 5e-3, 'stretch %.4f to %.4f' % (st_path.min(), st_path.max()))
+mid = sf.shell_at(SP, np.full((gy, gx), 0.5))['X']
+check('task 52: shell_at on the path at t = 0.5 is the equilibrium of half the curvature', np.abs(mid - roll(0.5*kmax)).max() < 1e-9)
+check('task 52: shell_at on the path at t = 0 and 1 gives the flat sheet and the shell', np.allclose(sf.shell_at(SP, np.zeros((gy, gx)))['X'], roll(0)) and np.allclose(sf.shell_at(SP, np.ones((gy, gx)))['X'], SR['X']))
+Fq, _ = sf.deformation_at(SP, np.full((NY, NX), 0.55)); sq = np.linalg.norm(Fq, axis=-1)
+check('task 52: between two path sheets (t = 0.55, sheets 18 degrees of roll apart) the interpolated stretch stays within 2 % (linear interpolation of a turning sheet; 1.3 % expected; a real shell has 15 growth steps, and a stage whose fraction is a growth step is exact)', np.abs(sq - 1).max() < 2e-2, 'stretch %.4f to %.4f' % (sq.min(), sq.max()))
+
 print('ALL OK' if ok else 'SOME FAILED'); sys.exit(0 if ok else 1)

@@ -6,8 +6,9 @@ shell_sim.py and the frozen copy of shell1 are NOT modified: this driver imports
 Method
   1. start     the yarn mesh of the shell run's own pattern is built flat (shell_target.build, same CPI, WPI, tiles, Ne); rest lengths = the normal start state of relax_job (feeder-tension ratio, optional
                loop_grade.apply_start_grade); the stress-free curvature kb0 of the flat state is kept; the usual out-of-plane perturbation is added once.
-  2. stages    N stages, fold fraction t = s/N, s = 1..N. At stage s every stitch cell has a TARGET fraction (t, or its frozen value). The shell at that fraction is X_t = flat + t (X_shell - flat) (UNSOURCED
-               linear path of the displacement). Per stage: (a) rest lengths are recomputed from the strain of the shell's OWN triangles at that fraction, F_t = I + t (F - I) with t of the cell (shell_target.segment_stretch, course_factors:
+  2. stages    N stages, fold fraction t = s/N, s = 1..N. At stage s every stitch cell has a TARGET fraction (t, or its frozen value). The shell at that fraction is the shell's OWN equilibrium at curvature fraction t
+               (task 52, 2026-11-26: the growth steps of the same shell solve, recorded once and cached as shell_path.npz; between two steps the sheets and F are interpolated; --linear-path restores the
+               old straight line X_t = flat + t (X - flat), which invented compression where the sheet turns). Per stage: (a) rest lengths are recomputed from the strain of the shell's OWN triangles at that fraction, F_t of the path with t of the cell (shell_target.segment_stretch, course_factors:
                tension sites give yarn away, compression sites collect it, sign -1 as in shell_target; the factors are applied to the START rest lengths, so every course keeps its total at every stage);
                (b) the per-cell targets of relax_job (cell mean of the yarn vertices held toward the sheet, yarn offset along the sheet normal) are rebuilt on X_t, and kb0 is rotated into the local frame of X_t;
                (c) a short L-BFGS relaxation (relax_solver.relax, contact ON, strong shell hold) is run; (d) blocked cells are frozen (below).
@@ -39,7 +40,7 @@ Required physical behaviour, and what this driver can and cannot show (K, 24 Nov
 
 UNSOURCED (every value below is a guess or a numerical choice, not from the literature; also recorded in fold_summary.json)
   stages N = 10; stage shell hold 0.5 x EA/R (strong); final shell hold 0.05 x EA/R (the 13 Nov 2026 success setting recorded in CLAUDE.md); stage relaxation 100 iterations x 1 round;
-  blocked_frac = 0.8 of the yarn diameter (axis distance, cells of one stitch); linear path X_t = flat + t (X - flat); smaller fraction at shared shell vertices; normals of the interpolated sheet;
+  blocked_frac = 0.8 of the yarn diameter (axis distance, cells of one stitch); fold path = the shell's own growth equilibria, linear interpolation between two of them; smaller fraction at shared shell vertices; normals of the interpolated sheet;
   segment-to-cell assignment by the flat midpoint; spacing from cell means; sign agreement thresholds 1e-3; gain and sign of the strain rule (as in shell_target); ref-scale 0 (shell_target's default;
   relax_job advises 1 with a shell: open parameter); kb0 rotated into the frame of the sheet at every stage (an adaptation of Sperl, Narain, Wojtan 2021, as in relax_job); no revert on freezing.
 
@@ -61,7 +62,7 @@ EPS = 1e-3                                        # UNSOURCED: a change or strai
 DEFAULT_STAGES, STAGE_SHELL_W, FINAL_SHELL_W, STAGE_ITER, STAGE_ROUNDS, BLOCKED_FRAC = 10, 0.5, 0.05, 100, 1, 0.8
 RELAX_DEFAULTS = dict(E=500.0, mu=0.49, k_contact=40.0, perturb=0.20, curl=0.5, tension=17.0, outer=40, maxiter=200)       # as shell_target.DEFAULTS, no creep
 UNSOURCED = ['stages N = 10', 'stage shell hold 0.5 x EA/R', 'final shell hold 0.05 x EA/R (13 Nov 2026 success setting)', 'stage relaxation 100 iterations x 1 round', 'blocked fraction 0.8 of 2R (axis distance)',
-             'linear path of the displacement X_t = flat + t (X - flat) and of F_t = I + t (F - I)', 'smaller fraction at a shell vertex shared with a frozen cell', 'normals of the interpolated sheet', 'segment-to-cell by flat midpoint',
+             'fold path = shell growth equilibria (curvature fraction = fold fraction), interpolated linearly between neighbouring growth steps', 'smaller fraction at a shell vertex shared with a frozen cell', 'normals of the interpolated sheet', 'segment-to-cell by flat midpoint',
              'spacings from cell means', 'sign-agreement threshold 1e-3', 'gain and sign of the strain rule (shell_target)', 'ref-scale 0 (open)', 'kb0 rotated into the sheet frame at every stage',
              'frozen cells are not reverted']
 
@@ -82,9 +83,43 @@ def flat_grid(sh):
     gy, gx = np.asarray(sh['X']).shape[:2]; ii, jj = np.meshgrid(np.arange(gx), np.arange(gy))
     return np.stack([ii*sh['W']/sh['sub'], jj*sh['C']/sh['sub'], np.zeros((gy, gx))], -1)
 
+def fold_path(sh):
+    """(fractions, sheets) of the fold path. With sh['path'] (set by shell_path, task 52, 2026-11-26): the shell's OWN equilibria after every growth step, fraction k/N, from the flat sheet to the shell.
+    Without it: the two-point path flat -> shell, i.e. the straight line X_t = flat + t (X - flat) used before 2026-11-26. That straight line keeps no length where the sheet turns: at t = 0.5 of a
+    180-degree roll the course stretch was 0.02 (review of 2026-11-26), so the middle stages saw a false compression and froze the crests; it is kept only for the numpy tests and --linear-path."""
+    p = sh.get('path')
+    if p is not None: return np.asarray(p[0], float), np.asarray(p[1], float)
+    return np.array([0.0, 1.0]), np.stack([flat_grid(sh), np.asarray(sh['X'], float)])
+
+def _bracket(ts, t):
+    """Index k and weight w with t = (1 - w) ts[k] + w ts[k+1] (clipped to the path)."""
+    t = np.asarray(t, float); k = np.clip(np.searchsorted(ts, t, side='right') - 1, 0, len(ts) - 2); return k, np.clip((t - ts[k])/(ts[k + 1] - ts[k]), 0.0, 1.0)
+
 def shell_at(sh, t_grid):
-    """The sheet at fold fraction t (per shell grid vertex): flat + t (folded - flat). Same keys as sh."""
-    F = flat_grid(sh); return dict(sh, X=F + np.asarray(t_grid, float)[..., None]*(np.asarray(sh['X'], float) - F))
+    """The sheet at fold fraction t (per shell grid vertex), interpolated between the two neighbouring sheets of the fold path (fold_path). Same keys as sh."""
+    ts, G = fold_path(sh); t = np.asarray(t_grid, float); k, w = _bracket(ts, t); jj, ii = np.indices(t.shape)
+    return dict(sh, X=(1 - w)[..., None]*G[k, jj, ii] + w[..., None]*G[k + 1, jj, ii])
+
+def shell_path(run_dir, sh, out):
+    """The shell's own fold path for task 52: the same shell solve as the run (its settings.json; shell_sim.fold with the expressions of shell_run.py), recording the sheet after every growth step.
+    Cached in <out>/shell_path.npz (written atomically; never in the campaign's run folder). The last sheet must equal the run's shell.npz: with the same code and settings the solve is deterministic;
+    a difference (another code version) is reported and the last sheet is replaced by the run's own, so the path always ends at the shell that was analysed. Needs JAX (one shell solve, minutes)."""
+    cp = os.path.join(out, 'shell_path.npz')
+    if os.path.exists(cp):
+        z = np.load(cp); return dict(fractions=z['t'], sheets=z['X'], end_diff=float(z['end_diff']), cached=True)
+    import shell_sim as ss
+    rj = _rj(); s = json.load(open(os.path.join(run_dir, 'settings.json'))); W, C = 25.4/s['wpi'], 25.4/s['cpi']
+    kappa, h = rj.SHELL_KAPPA_C/C, rj.SHELL_H_C*C*s.get('h_scale', 1.0); kx, ky = s.get('kappa_scale', 1.0)*(-rj.SHELL_KAPPA_C/C), s.get('kappa_scale', 1.0)*(rj.SHELL_KAPPA_C/C)
+    snaps = []; t0 = time.time(); print('fold path: recomputing the shell growth (%d steps) to record its equilibria' % s['steps'], flush=True)
+    X0, X, tri, (nx, ny), log = ss.fold(s['matrix'], W, C, kappa=kappa, h=h, nu=s.get('nu', 0.4), sub=s['sub'], ntile=(s['tiles'], s['tiles']), steps=s['steps'], maxiter=s['iter'], springs=s.get('springs', 0.0),
+                                        seed=s.get('seed', 0), verbose=False, kx=kx, ky=ky, bending=s.get('bending', 'hinge'), snapshots=snaps)
+    gy, gx = np.asarray(sh['X']).shape[:2]; sheets = np.stack([flat_grid(sh)] + [np.asarray(x).reshape(gy, gx, 3) for x in snaps]); ts = np.r_[0.0, [r[0] for r in log]]
+    end_diff = float(np.abs(sheets[-1] - np.asarray(sh['X'], float)).max())
+    if end_diff > 1e-9: print("fold path: the recomputed shell differs from the run by up to %.3g mm (another code version?): the last sheet is replaced by the run's own" % end_diff, flush=True)
+    sheets[-1] = np.asarray(sh['X'], float)
+    with open(cp + '.tmp', 'wb') as fh: np.savez(fh, t=ts, X=sheets, end_diff=end_diff); fh.flush(); os.fsync(fh.fileno())
+    os.replace(cp + '.tmp', cp); print('fold path: %d sheets in %.0f s, end difference %.3g mm' % (len(ts), time.time() - t0, end_diff), flush=True)
+    return dict(fractions=ts, sheets=sheets, end_diff=end_diff, cached=False)
 
 def cell_layout(P, sh):
     """(cell index per vertex, ids of the used stitch cells (cj nx + ci), their number): the same cells as relax_job.shell_cells, with the ids kept."""
@@ -104,11 +139,16 @@ def grid_fraction(frac_cells, uniq, sh, t_default):
 
 # ------------------------------------------------------------------ rest lengths at a fraction (numpy only, via shell_target)
 def deformation_at(sh, tc):
-    """Deformation gradient of the shell's OWN triangles at fold fraction t, F_t = I + t (F - I), with t constant on every stitch cell (tc, (ny, nx)): (Fx, Fy) as shell_target.deformation.
-    Taken from the complete shell, NOT from the interpolated sheet of the targets: where a frozen cell (small t) touches a free cell (large t) that sheet has a step of one grid spacing and a false
-    strain of the order of 100 % (found by the synthetic test); F_t has no such step, and is exactly the strain of the interpolated sheet wherever t is uniform."""
-    Fx, Fy = st.deformation(sh); sub = sh['sub']; tg = np.kron(np.asarray(tc, float), np.ones((sub, sub)))[None, :, :, None]
-    ex = np.array([1.0, 0.0, 0.0]); ey = np.array([0.0, 1.0, 0.0]); return ex + tg*(Fx - ex), ey + tg*(Fy - ey)
+    """Deformation gradient of the shell's OWN triangles at fold fraction t, with t constant on every stitch cell (tc, (ny, nx)): (Fx, Fy) as shell_target.deformation, interpolated per triangle between
+    the two neighbouring sheets of the fold path (fold_path; with the two-point path this is F_t = I + t (F - I), the formula used before 2026-11-26). Taken from the path sheets, NOT from the
+    interpolated sheet of the targets: where a frozen cell (small t) touches a free cell (large t) that sheet has a step of one grid spacing and a false strain of the order of 100 % (found by the
+    synthetic test); this F has no such step, and is exactly the strain of the path wherever t is uniform."""
+    ts, G = fold_path(sh); key = (id(sh.get('path')), G.shape)
+    if sh.get('_Fpath_key') != key: sh['_Fpath'] = [st.deformation(dict(sh, X=g)) for g in G]; sh['_Fpath_key'] = key          # cached per path
+    FP = sh['_Fpath']; sub = sh['sub']; tg = np.kron(np.asarray(tc, float), np.ones((sub, sub))); k, w = _bracket(ts, tg)
+    Fx = np.stack([f[0] for f in FP]); Fy = np.stack([f[1] for f in FP]); jj, ii = np.indices(tg.shape); w = w[None, :, :, None]
+    pick = lambda A, kk: np.moveaxis(A[kk, :, jj, ii], 2, 0)          # (2, gy-1, gx-1, 3) at path index kk of every cell
+    return (1 - w)*pick(Fx, k) + w*pick(Fx, k + 1), (1 - w)*pick(Fy, k) + w*pick(Fy, k + 1)
 
 def stage_factors(flatX, l0_start, sh, Fx, Fy, sign, gain):
     """Per course: lambda of every flat segment (shell_target.segment_stretch with the deformation Fx, Fy of the shell triangle holding the segment midpoint), factor f = 1 + sign gain (e - e_bar)
@@ -287,6 +327,7 @@ def parse(argv):
     A('--bend-scale', type=float, default=1.0); A('--ea', type=float, default=0.0); A('--ei', type=float, default=0.0); A('--stretch-law', default='')
     A('--loop-grade', type=float, default=0.0); A('--loop-grade-target', choices=['boundary', 'tm', 'both'], default='both'); A('--loop-grade-min-strength', type=float, default=0.2)
     A('--stages-only', action='store_true', help='stop after the stages (no final 40 x 200 relaxation)'); A('--build-only', action='store_true'); A('--resume', action='store_true')
+    A('--linear-path', action='store_true', help='use the old straight-line fold path flat -> shell (before 2026-11-26) instead of the shell growth equilibria (task 52); only for comparison')
     A('--aggregate', nargs='+', metavar='DIR'); return a.parse_args(argv)
 
 def save_checkpoint(path, sim, ctx, state, phase, k):
@@ -381,6 +422,8 @@ def main():
         if g.resume: sys.exit('--resume: %s holds no fold to resume' % g.out)
         st.build(g.run, g.out, s, g.ne)
     sh = st.load_shell(shp); meta = json.load(open(os.path.join(g.out, 'meta.json'))); st.check_match(meta, sh)
+    if not g.build_only and not g.linear_path:          # task 52: the shell's own equilibria as the fold path (one extra shell solve, cached in the output folder)
+        pth = shell_path(g.run, sh, g.out); sh['path'] = (pth['fractions'], pth['sheets'])
     if not os.path.exists(os.path.join(g.out, 'shell.npz')): shutil.copy2(shp, os.path.join(g.out, 'shell.npz'))
     json.dump(dict(source_run=os.path.abspath(g.run), settings=s, args={k: v for k, v in vars(g).items() if k not in ('aggregate',)}, t=time.strftime('%Y-%m-%dT%H:%M:%S')), open(marker, 'w'), indent=1, default=str)
     if g.build_only: print('build only: %s ready (mesh and shell match)' % g.out); return
