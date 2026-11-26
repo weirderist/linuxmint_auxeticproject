@@ -59,7 +59,7 @@ import shell_target as st
 SCHEMA = 'shell_fold_summary_v1'
 EPS = 1e-3                                        # UNSOURCED: a change or strain below this is not counted in a sign-agreement share
 DEFAULT_STAGES, STAGE_SHELL_W, FINAL_SHELL_W, STAGE_ITER, STAGE_ROUNDS, BLOCKED_FRAC = 10, 0.5, 0.05, 100, 1, 0.8
-RELAX_DEFAULTS = dict(E=3700.0, mu=0.49, k_contact=40.0, perturb=0.20, curl=0.5, tension=17.0, outer=40, maxiter=200)       # as shell_target.DEFAULTS, no creep
+RELAX_DEFAULTS = dict(E=500.0, mu=0.49, k_contact=40.0, perturb=0.20, curl=0.5, tension=17.0, outer=40, maxiter=200)       # as shell_target.DEFAULTS, no creep
 UNSOURCED = ['stages N = 10', 'stage shell hold 0.5 x EA/R', 'final shell hold 0.05 x EA/R (13 Nov 2026 success setting)', 'stage relaxation 100 iterations x 1 round', 'blocked fraction 0.8 of 2R (axis distance)',
              'linear path of the displacement X_t = flat + t (X - flat) and of F_t = I + t (F - I)', 'smaller fraction at a shell vertex shared with a frozen cell', 'normals of the interpolated sheet', 'segment-to-cell by flat midpoint',
              'spacings from cell means', 'sign-agreement threshold 1e-3', 'gain and sign of the strain rule (shell_target)', 'ref-scale 0 (open)', 'kb0 rotated into the sheet frame at every stage',
@@ -261,9 +261,10 @@ def write_fraction_csv(path, state, uniq, nx, dmin_final, thresh):
         for k, u in enumerate(uniq): w.writerow([int(u % nx), int(u//nx), '%.6f' % state.frac[k], int(state.frozen[k]), int(state.frozen_stage[k]), '' if not np.isfinite(dmin_final[k]) else '%.6f' % dmin_final[k], int(dmin_final[k] < thresh)])
 
 def summary_dict(state, dmin_final, thresh, stages, R, extra):
+    """dmin_final: closest axis distance per cell ALREADY divided by 2R (as passed by run_fold and compared with thresh = blocked_frac). R is kept in the signature only; until 2026-11-26 the minimum was divided by 2R a second time."""
     n = len(state.frac); fin = np.isfinite(dmin_final)
     return dict(schema=SCHEMA, n_cells=int(n), n_frozen=int(state.frozen.sum()), share_frozen=float(state.frozen.mean()) if n else None, min_fraction=float(state.frac.min()) if n else None, mean_fraction=float(state.frac.mean()) if n else None,
-                share_blocked_at_end=float((dmin_final[fin] < thresh).mean()) if fin.any() else None, dmin_final_over_2R_min=float(dmin_final[fin].min()/(2*R)) if fin.any() else None, stages=stages, unsourced=UNSOURCED, **extra)
+                share_blocked_at_end=float((dmin_final[fin] < thresh).mean()) if fin.any() else None, dmin_final_over_2R_min=float(dmin_final[fin].min()) if fin.any() else None, stages=stages, unsourced=UNSOURCED, **extra)
 
 def aggregate(folders, out=sys.stdout):
     """One CSV line per run folder with a fold_summary.json (the end-of-campaign self-intersection pass)."""
@@ -364,6 +365,7 @@ def run_fold(g, out, sh, meta):
     sys.exit(0 if status in ('settled', 'stages only') else 2)
 
 def main():
+    if '--aggregate' not in sys.argv: st.refuse_if_busy(sys.argv)          # one solver job at a time (the aggregate pass only reads files)
     g = parse(sys.argv[1:])
     if g.aggregate: return aggregate(g.aggregate)
     if not g.run or not g.out: sys.exit('--run and --out are required (or --aggregate DIR ...)')

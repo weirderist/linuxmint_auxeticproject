@@ -24,7 +24,7 @@ Definitions (step 3)
   sign = +1       the opposite: rest length follows the shell metric, so the yarn is closer to stress-free on the folded sheet.
 UNSOURCED: gain (default 1), the sign choice, F taken constant per shell triangle at the segment midpoint, the per-course weighted mean, FACTOR_FLOOR (numerical guard, as loop_grade.py).
 
-Relaxation defaults (overridable after --): the 13 Nov 2026 success settings recorded in CLAUDE.md (E 3700, mu 0.49, k-contact 40, perturb 0.20, curl 0.5, tension 17 cN, shell hold 0.05 x EA/R)
+Relaxation defaults (overridable after --): the 13 Nov 2026 success settings recorded in CLAUDE.md (E 3700 then; the default is now E 500 MPa, derived from Xiong et al. 2026 (webui/main.py CONFIG, 2026-11-26): give -- --E 3700 to reproduce 13 Nov exactly; mu 0.49, k-contact 40, perturb 0.20, curl 0.5, tension 17 cN, shell hold 0.05 x EA/R)
 WITHOUT creep (creep does not conserve rest length and would erase step 3), with outer 40 and maxiter 200 (K, 24 Nov 2026). ref-scale is left at relax_job's default, as in the 13 Nov run.
 
 Usage:
@@ -38,7 +38,7 @@ _S = os.path.dirname(HERE)
 if os.path.basename(_S) == 'scripts': sys.path.extend(os.path.join(_S, _d) for _d in sorted(os.listdir(_S)) if _d not in ('legacy', '__pycache__') and os.path.isdir(os.path.join(_S, _d)))          # the other folders of scripts/ (not in a flat frozen copy)
 
 FACTOR_FLOOR = 0.2          # numerical guard, as loop_grade.FACTOR_FLOOR
-DEFAULTS = ['--E', '3700', '--mu', '0.49', '--k-contact', '40', '--perturb', '0.20', '--curl', '0.5', '--tension', '17', '--shell-w', '0.05', '--outer', '40', '--maxiter', '200']
+DEFAULTS = ['--E', '500', '--mu', '0.49', '--k-contact', '40', '--perturb', '0.20', '--curl', '0.5', '--tension', '17', '--shell-w', '0.05', '--outer', '40', '--maxiter', '200']
 UNSOURCED = ['gain', 'sign', 'F constant per shell triangle, taken at the segment midpoint', 'rest-length-weighted course mean', 'factor floor 0.2 (numerical guard)']
 
 
@@ -104,7 +104,19 @@ def check_match(meta, sh):
     if meta['stitches_per_course'] != sh['nx'] or meta['courses'] != sh['ny']: bad.append('stitches: mesh %d x %d, shell %d x %d' % (meta['stitches_per_course'], meta['courses'], sh['nx'], sh['ny']))
     if bad: sys.exit('mesh and shell do not match: ' + '; '.join(bad))
 
+def refuse_if_busy(argv):
+    """One solver job at a time on the server (2026-11-26). The campaign runners cannot see this script (it runs relax_job in-process, and the frozen shell1 runner only knows relax_job.py, tile_sim.py and
+    shell_run.py), so it checks them itself before starting. --ignore-busy skips the check (K's decision)."""
+    if '--ignore-busy' in argv: argv.remove('--ignore-busy'); return
+    why = ''
+    try:
+        import campaign as cm; why = cm.busy_reason()
+        if not why: import shell_campaign as sc; why = sc.busy_message()
+    except Exception: return          # the check is a courtesy; a missing module must not stop a run on a machine without campaigns
+    if why: sys.exit('another solver job is running, so this one does not start (one job at a time): %s\nWait for it, pause the campaign, or add --ignore-busy.' % why)
+
 def main():
+    refuse_if_busy(sys.argv)
     argv = sys.argv[1:]; extra = argv[argv.index('--') + 1:] if '--' in argv else []; argv = argv[:argv.index('--')] if '--' in argv else argv
     a = argparse.ArgumentParser(description=__doc__.split('\n')[0]); a.add_argument('--run', required=True); a.add_argument('--out', required=True)
     a.add_argument('--ne', type=float, default=12.0, help='yarn count (the shell run has none; K fixed Ne 12)'); a.add_argument('--sign', type=float, choices=(-1.0, 1.0), default=-1.0)

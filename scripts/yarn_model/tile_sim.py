@@ -15,7 +15,7 @@ Cylindrical bending (as in the paper, Sec 7.1): mode 'x' bends about an axis par
 rotation about the cylinder axis, so the lattice stays exactly periodic. A saddle (both curvatures at once) is not representable because the two lattice rotations
 do not commute; kappa_x* and kappa_y* are therefore found one at a time, each with the other direction flat.
 Sign: kappa > 0 bends toward +z (digit 1 = front loops are at +z). All unsourced inputs (mu is not used here; E, kc_ratio, ref_scale, ds) are as in relax_job.
-Usage: python3 tile_sim.py --matrix "1 1/1 1" --ne 10 --cpi 14 --wpi 18 --out tile_out [--E 3700] [--kc-ratio 30] [--ref-scale 1] [--rounds 6] [--strain 0.05,0.1,0.2]
+Usage: python3 tile_sim.py --matrix "1 1/1 1" --ne 10 --cpi 14 --wpi 18 --out tile_out [--E 500] [--kc-ratio 30] [--ref-scale 1] [--rounds 6] [--strain 0.05,0.1,0.2]
 """
 import argparse, json, math, os, sys, time
 import numpy as np
@@ -169,7 +169,7 @@ def poisson_curve(t0, strains, direction='x', maxiter=1500, log=print):
         log('   stretch %.3g along %s: orthogonal strain %+.4g, nu %+.4g, E %.6g' % (s, direction, eps, -eps/s, E))
     return out
 
-def run_tile(M, W, C, R, E=3700.0, kc_ratio=30.0, ref_scale=1.0, ds_over_R=1.0, rounds=6, reset=1.0, strains=(0.05, 0.1, 0.2), delta=0.05, maxiter=1500, perturb=0.02,
+def run_tile(M, W, C, R, E=500.0, kc_ratio=30.0, ref_scale=1.0, ds_over_R=1.0, rounds=6, reset=1.0, strains=(0.05, 0.1, 0.2), delta=0.05, maxiter=1500, perturb=0.02,
              seed=0, do=('rest', 'curl', 'poisson'), cache=None, labels_swapped=True, log=lambda m: print(m, flush=True), save=None, max_verts=3000):
     cache = cache or os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(bk.__file__))), 'cell_cache'); t0 = time.time()
     loops, Lx, Ly, res = build_tile(M, W, C, R, ds_over_R*R, cache, labels_swapped)
@@ -192,18 +192,22 @@ def stitch_kappas(W, C, R, E, kc_ratio=30.0, ref_scale=0.5, maxiter=2500, rounds
     (front/back mirror symmetry of the model; checked on a purl tile: kx -0.2242 vs knit +0.2239, ky +0.211 vs -0.213 at ref_scale 0.5). Cached in tile_kappa_cache.json.
     kappa* scales with ref_scale, which is UNSOURCED: calibrate with the shell curvature scale against a measured fold."""
     key = '%.5g|%.5g|%.5g|%.6g|%.5g|%.4g|%d|%d' % (W, C, R, E, kc_ratio, ref_scale, maxiter, rounds); cache = cache or os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(bk.__file__))), 'cell_cache')
-    cp = os.path.join(cache, 'tile_kappa_cache.json'); db = json.load(open(cp)) if os.path.exists(cp) else {}
+    cp = os.path.join(cache, 'tile_kappa_cache.json'); db = {}
+    if os.path.exists(cp):
+        try:
+            with open(cp) as fh: db = json.load(fh)
+        except ValueError as e: log('tile curvature cache %s unreadable (%s): computing again' % (cp, e))          # cut short by a power cut (written in place before 2026-11-25)
     if key in db: log('tile curvature from cache: kx %.4g ky %.4g' % tuple(db[key])); return tuple(db[key])
     log('tile analysis for the shell curvature (all digit-1 tile, ref_scale %g): a few minutes, cached afterwards' % ref_scale)
     out, t = run_tile([[1, 1], [1, 1]], W, C, R, E, kc_ratio, ref_scale, 1.0, rounds, 0.0, (), 0.05, maxiter, 0.02, 0, ('rest', 'curl'), cache, True, log=log)
-    kx, ky = [c['kappa_free'] for c in out['curl']]; db[key] = [kx, ky]; os.makedirs(cache, exist_ok=True); json.dump(db, open(cp, 'w'), indent=1); return kx, ky
+    kx, ky = [c['kappa_free'] for c in out['curl']]; db[key] = [kx, ky]; os.makedirs(cache, exist_ok=True); bk.write_json_atomic(cp, db, indent=1); return kx, ky
 
 def main():
     a = argparse.ArgumentParser(); a.add_argument('--folder', help='web UI result folder: matrix, W, C, R are read from its meta.json and the outputs are written into it'); a.add_argument('--max-verts', type=int, default=3000)
     a.add_argument('--matrix', help='rows separated by /, digits 1 and 2, first row = bottom course (one repeat = one tile)')
     a.add_argument('--ne', type=float); a.add_argument('--cpi', type=float); a.add_argument('--wpi', type=float)
     a.add_argument('--W', type=float, default=16.0); a.add_argument('--C', type=float, default=9.0); a.add_argument('--R', type=float, default=1.0)
-    a.add_argument('--E', type=float, default=3700.0, help='yarn modulus, MPa for mm results'); a.add_argument('--kc-ratio', type=float, default=30.0)
+    a.add_argument('--E', type=float, default=500.0, help='yarn modulus, MPa for mm results (default 500 MPa, derived from Xiong et al. 2026, see webui/main.py CONFIG; was 3700)'); a.add_argument('--kc-ratio', type=float, default=30.0)
     a.add_argument('--ref-scale', type=float, default=1.0, help='initial rest curvature = ref_scale x baseline curvature (paper: rest = registered geometry, so 1)')
     a.add_argument('--ds', type=float, default=1.0, help='vertex spacing in yarn radii'); a.add_argument('--rounds', type=int, default=6, help='rest-shape reset rounds (Sperl 7.2)')
     a.add_argument('--reset', type=float, default=1.0, help='fraction of the way l0 and kb0 move to the current state per reset')

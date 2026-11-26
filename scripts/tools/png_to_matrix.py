@@ -5,6 +5,9 @@ Same classification as webui/main.py /api/classify and crop_classify.py (measure
 which need rows and columns as input. Here the grid is found from the black border lines: the coloured bounding box (saturation > 30) gives the extent, the black lines inside it (dark pixels in more than
 60 % of a column or row) give the cell boundaries, so cells need not be equal. Row order = image order: the first row of the matrix is the TOP row of the picture (checked against campaigns/pattern1_matrix.txt,
 whose first rows have the structure of the top block of seed PNG 2; K confirms with the picture-beside-matrix check).
+NOTE (2026-11-26): shell_sim.py, build_knit.py and campaign matrices read the FIRST row as the BOTTOM course, so a matrix written here is simulated upside down relative to its picture. For the
+shell this is a mirror image (same fold, reflected); the fabrics are the same on both faces (K). Left as it is so that new seeds stay consistent with the shell1 seeds; flip the rows if a picture's
+top/bottom ever matters (e.g. comparing a yarn run course by course with a photograph).
 Output format = campaigns/pattern1_matrix.txt: rows separated by /, digits separated by spaces.
 Usage: python3 png_to_matrix.py a.png [b.png ...] [--out-dir DIR]   (writes NN.txt per PNG into DIR and prints size and low-confidence cells)
 numpy and Pillow (cv2 is not needed)."""

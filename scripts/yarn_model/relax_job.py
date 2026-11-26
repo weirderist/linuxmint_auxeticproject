@@ -13,7 +13,7 @@ Without the shell (loops that fold on their own): --ramp K grows the stress-free
 --seed-stitch a tilts front loops by +a R and back loops by -a R out of the plane before the random perturbation, --stall-tol t ends the outer loop when energy, rest lengths and positions have stopped changing
 (reported as 'settled', with the reason in the state history; not strict convergence). The end summary now also gives the size change of the relaxed fabric and the rest length per stitch.
 """
-import argparse, json, math, os, sys, time
+import argparse, json, math, os, shutil, sys, time
 import numpy as np
 HERE = os.path.dirname(os.path.abspath(__file__)); sys.path.insert(0, HERE)
 _S = os.path.dirname(HERE)
@@ -150,6 +150,26 @@ def run_ramp(sim, g, kb_base, ratio):
         print('ramp %d/%d (f %.2f): E %.6g (stretch %.4g bend %.4g contact %.4g; not comparable between stages), z-range %.2f R, %.0f s' % (k, g.ramp, f, e['total'], e['stretch'], e['bend'], e['contact'], z, time.time() - t), flush=True)
     return rec
 
+def fsync_dir(d):
+    try: fd = os.open(d, os.O_RDONLY); os.fsync(fd); os.close(fd)
+    except OSError: pass          # directories cannot be opened on Windows
+
+def savetxt_atomic(path, A, **kw):
+    """np.savetxt through a temporary file, fsync and rename: a power cut leaves the old file or the complete new one, never a truncated result (2026-11-26)."""
+    tmp = path + '.tmp'
+    with open(tmp, 'w') as fh: np.savetxt(fh, A, **kw); fh.flush(); os.fsync(fh.fileno())
+    os.replace(tmp, path)
+
+def load_checkpoint(path, sim):
+    """Load and check a checkpoint (task 12): every array present, the shapes of this fabric, all values finite. Raises on anything else."""
+    with np.load(path, allow_pickle=False) as z: ck = {k: z[k] for k in z.files}
+    if int(ck['k']) < 0: raise ValueError('negative round')
+    for i, y in enumerate(sim.yarns):
+        if ck['X%d' % i].shape != y.X.shape or ck['l%d' % i].shape != y.l0.shape: raise ValueError('yarn %d has another shape (not this fabric)' % i)
+        if not (np.isfinite(ck['X%d' % i]).all() and np.isfinite(ck['l%d' % i]).all()): raise ValueError('yarn %d holds non-finite values' % i)
+    if not np.isfinite(ck['kb0']).all(): raise ValueError('kb0 holds non-finite values')
+    json.loads(str(ck['elog'])); return ck
+
 def parse_law(s):
     """'strain:cN,strain:cN,...' (strain as a fraction, force in cN as a tensile tester reports it) -> [(strain, force in N)]."""
     try: return [(float(a), 0.01*float(b)) for a, b in (t.split(':') for t in s.split(','))]
@@ -241,7 +261,8 @@ def main():
     if g.seed_stitch and g.shell: sys.exit('--seed-stitch is for runs without the shell')
     if g.seed_stitch and 'matrix' not in meta: sys.exit('the stitch seed needs the stitch matrix in meta.json (result built by an older pipeline)')
     kxy = None
-    ck_path = os.path.join(g.folder, 'checkpoint.npz'); resuming = bool(g.resume and os.path.exists(ck_path) and not g.seed_only)
+    ck_path = os.path.join(g.folder, 'checkpoint.npz'); ck_prev = os.path.join(g.folder, 'checkpoint.prev.npz')
+    resuming = bool(g.resume and (os.path.exists(ck_path) or os.path.exists(ck_prev)) and not g.seed_only)
     if g.resume and not resuming: sys.exit('--resume: no checkpoint.npz in %s' % g.folder)
     shp = os.path.join(g.folder, 'shell.npz'); reuse_shell = bool(g.shell and resuming and os.path.exists(shp))
     if g.shell and not reuse_shell:
@@ -314,10 +335,15 @@ def main():
     for y in sim.yarns: y.X[:, 2] += g.perturb*sim.R*rng.standard_normal(len(y.X))
     k0 = 0
     if resuming:
-        ck = np.load(ck_path, allow_pickle=False); k0 = int(ck['k'])
+        ck, used, why = None, None, []
+        for path in (ck_path, ck_prev):          # task 12 (2026-11-26): a checkpoint cut short by a power cut is detected, and the previous one (one outer round older) is used instead
+            try: ck = load_checkpoint(path, sim); used = path; break
+            except Exception as e: why.append('%s: %s' % (os.path.basename(path), e))
+        if ck is None: sys.exit('--resume: no usable checkpoint (%s)' % '; '.join(why))
+        k0 = int(ck['k'])
         for i, y in enumerate(sim.yarns): y.X[:] = ck['X%d' % i]; y.l0[:] = ck['l%d' % i]
         sim.kb0 = ck['kb0'].copy(); sim.energy_log = json.loads(str(ck['elog']))
-        print('resume: checkpoint loaded, continuing at outer iteration %d of %d' % (k0 + 1, g.outer), flush=True)
+        print('resume: %s loaded%s, continuing at outer iteration %d of %d' % (os.path.basename(used), (' (newer one unusable: %s)' % why[0]) if why else '', k0 + 1, g.outer), flush=True)
     print('curl %g, feeder tension %g cN (strain %.3g), creep tau %g h over %g h' % (g.curl, g.tension, ten_strain, g.creep_tau, g.hours), flush=True)
     print('start: E %.6g (stretch %.4g bend %.4g contact %.4g), min axis distance %.4f = %.1f%% of 2R' % (e0['total'], e0['stretch'], e0['bend'], e0['contact'], d0, 100*d0/(2*sim.R)), flush=True)
     mp = os.path.join(g.folder, 'meta.json')
@@ -338,7 +364,15 @@ def main():
     def save_checkpoint(knext):
         """Atomic: positions, rest lengths, reference curvature and energy log after outer iteration knext-1. A power cut loses at most one outer iteration."""
         d = {'X%d' % i: y.X for i, y in enumerate(sim.yarns)}; d.update({'l%d' % i: y.l0 for i, y in enumerate(sim.yarns)})
-        tmp = os.path.join(g.folder, 'checkpoint.tmp.npz'); np.savez(tmp, k=knext, kb0=sim.kb0, elog=json.dumps(sim.energy_log), **d); os.replace(tmp, ck_path)
+        tmp = os.path.join(g.folder, 'checkpoint.tmp.npz')
+        with open(tmp, 'wb') as fh: np.savez(fh, k=knext, kb0=sim.kb0, elog=json.dumps(sim.energy_log), **d); fh.flush(); os.fsync(fh.fileno())          # durable before the rename (task 12)
+        if os.path.exists(ck_path):          # keep the previous checkpoint as the fallback; a hard link keeps checkpoint.npz present all the time (campaign.py and the web UI look for that name)
+            try:
+                lt = ck_prev + '.tmp'
+                if os.path.exists(lt): os.replace(lt, ck_prev)
+                os.link(ck_path, lt); os.replace(lt, ck_prev)
+            except OSError: shutil.copyfile(ck_path, ck_prev)
+        os.replace(tmp, ck_path); fsync_dir(g.folder)
         json.dump(dict(next_outer_iteration=knext, outer=g.outer, saved=time.strftime('%Y-%m-%dT%H:%M:%S')), open(os.path.join(g.folder, 'checkpoint.json.tmp'), 'w')); os.replace(os.path.join(g.folder, 'checkpoint.json.tmp'), os.path.join(g.folder, 'checkpoint.json'))
     def on_round(k, E, dmax):
         pr = sv.energy_parts(sim, g.k_contact, g.E)
@@ -380,8 +414,8 @@ def main():
         for y, (c, l) in zip(sim.yarns, l0_start): np.add.at(base, c, l); np.add.at(dl, c, y.l0 - l)
         wale = (dl/np.maximum(base, 1e-12)).tolist(); w = np.array(wale)
         print('rest-length change per wale: min %.3e (wale %d), max %.3e (wale %d), total %.3e' % (w.min(), w.argmin(), w.max(), w.argmax(), dl.sum()/base.sum()))
-    np.savetxt(os.path.join(g.folder, 'relaxed_axis.csv'), np.vstack([np.c_[np.full(len(y.X), y.course), y.X] for y in sim.yarns]), delimiter=',', header='course,x,y,z', comments='', fmt=['%d', '%.6f', '%.6f', '%.6f'])
-    np.savetxt(os.path.join(g.folder, 'relaxed_l0.csv'), np.vstack([np.c_[np.full(len(y.l0), y.course), np.arange(len(y.l0)), y.l0] for y in sim.yarns]), delimiter=',', header='course,seg,l0', comments='', fmt=['%d', '%d', '%.10g'])     # rest length of every segment after the relaxation (segment i joins rows i and i+1 of relaxed_axis.csv of that course); read by the run viewer for the axial strain
+    savetxt_atomic(os.path.join(g.folder, 'relaxed_axis.csv'), np.vstack([np.c_[np.full(len(y.X), y.course), y.X] for y in sim.yarns]), delimiter=',', header='course,x,y,z', comments='', fmt=['%d', '%.6f', '%.6f', '%.6f'])
+    savetxt_atomic(os.path.join(g.folder, 'relaxed_l0.csv'), np.vstack([np.c_[np.full(len(y.l0), y.course), np.arange(len(y.l0)), y.l0] for y in sim.yarns]), delimiter=',', header='course,seg,l0', comments='', fmt=['%d', '%d', '%.10g'])     # rest length of every segment after the relaxation (segment i joins rows i and i+1 of relaxed_axis.csv of that course); read by the run viewer for the axial strain
     write_obj(os.path.join(g.folder, 'relaxed_tube.obj'), [y.X for y in sim.yarns], sim.R, g.sides, 'relaxed state of %s' % os.path.basename(os.path.abspath(g.folder)))
     d = json.load(open(os.path.join(g.folder, 'state.json'))); d['summary'] = dict(start=e0, end=e1, min_dist_over_2R_start=d0/(2*sim.R), min_dist_over_2R_end=d1/(2*sim.R), wale_length_change=wale)
     if dv: d['summary']['shell'] = dict(w=g.shell_w, rms_dev_over_R=dv['rms']/sim.R, max_dev_over_R=dv['max']/sim.R)
@@ -389,7 +423,7 @@ def main():
     if ramp_rec: d['summary']['ramp'] = ramp_rec
     if fold_rec: d['summary']['fold_search'] = fold_rec
     json.dump(d, open(os.path.join(g.folder, 'state.json.tmp'), 'w'), indent=1); os.replace(os.path.join(g.folder, 'state.json.tmp'), os.path.join(g.folder, 'state.json'))
-    for f in ('checkpoint.npz', 'checkpoint.json', 'job_stage.json'):
+    for f in ('checkpoint.npz', 'checkpoint.prev.npz', 'checkpoint.json', 'job_stage.json'):
         try: os.remove(os.path.join(g.folder, f))
         except OSError: pass
     sys.exit(0 if sim.state == rs.S.SETTLED else 2)

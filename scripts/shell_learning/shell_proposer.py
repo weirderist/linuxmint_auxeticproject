@@ -3,8 +3,10 @@
 Camp.enqueue, so the approved policy is enforced in code: ESSENTIAL settings are never touched, CPI/WPI stay inside the approved ratio range at constant density, the pattern is a slight edit of a seed.
 Phase 1 (while the proposer gate is closed, see PROPOSER_MIN_ORIGINALS_FINISHED below; and in any case before MIN_RESULTS = 100 finished runs): nothing proposed - the seeds, variants and the deterministic
 filler are the space-filling random sampling. After the gate opens, the total number of proposer runs in the campaign is capped at PROPOSER_MAX_TOTAL.
-Phase 2: a Gaussian process (RBF kernel, hyper-parameters by marginal likelihood on a grid) per target (thickness_rel, shrink_y, fold_turn_x_rad) on standardised pattern features + ln(CPI/WPI). Candidates are
-slight edits of the seeds with a random ratio; the batch is chosen greedily by the largest mean predictive standard deviation (uncertainty sampling; the posterior variance does not depend on the unknown
+Phase 2: Gaussian-process uncertainty sampling on standardised pattern features + ln(CPI/WPI). What propose() really does (docstring corrected 2026-11-26): it uses the GP posterior standard deviation
+with a FIXED RBF length scale 1.4 and noise 1e-2 (UNSOURCED), which does not depend on any outcome, so it is a space-filling design in feature space; gp_fit (hyper-parameters by marginal likelihood on a grid)
+and PROP_TARGETS are used only by evaluate(). Proposals that are queued or running count as known points, so a later poll does not propose near-copies of them. Candidates are
+slight edits of the seeds with a random ratio (tiles 4 only); the batch is chosen greedily by the largest predictive standard deviation (uncertainty sampling; the posterior variance does not depend on the unknown
 outcomes, so adding a chosen point lowers the variance around it: batch selection without waiting for results). Objective: where a measured reference exists (only Pattern 1 at the success settings, which has no free
 setting left), nothing is tuned; elsewhere the aim is to explore the fold space and record descriptors. evaluate() judges the proposer against random sampling on a fixed held-out test of finished runs.
 Usage: python3 shell_proposer.py <campaign> [--once] [--dry-run] [--batch 3] [--poll-s 600]"""
@@ -91,7 +93,7 @@ def evaluate(rows, repeats=6, seed=0, target='thickness_rel', start=10, budgets=
     return {b: dict(random_rmse=float(np.mean(v['random'])), gp_rmse=float(np.mean(v['gp'])), repeats=len(v['random'])) for b, v in out.items() if v['random']}
 
 
-def candidates(policy, seeds, rows, rng, n=400, tiles=4):
+def candidates(policy, seeds, rows, rng, n=400, tiles=4, bases=None):
     """Policy-valid candidates: slight edits of a seed, ratio log-uniform in the approved range at constant density. Returns a list of (settings, features)."""
     rg = policy['ranges']; lo, hi = rg['ratio_cpi_over_wpi']; out = []; tries = 0; seen = set()
     while len(out) < n and tries < n * 20:
@@ -102,6 +104,7 @@ def candidates(policy, seeds, rows, rng, n=400, tiles=4):
         h = sp._sha(s)
         if h in seen: continue
         seen.add(h); out.append((s, sf.features(M, tiles, cpi, wpi)))
+        if bases is not None: bases.append(base['id'])          # the seed this candidate edits (recorded in the label: rule checks grouped by seed family need it)
     return out
 
 
@@ -156,12 +159,15 @@ def propose(camp, batch=3, dry=False, seed=None):
     if sum(1 for x in camp.pending() if x.get('tier') == 5) >= 2: return dict(status='enough proposals queued', proposed=[])
     plan = camp.spec_().get('plan') or {}; base = os.path.dirname(plan['seeds_file']); sj = json.load(open(plan['seeds_file'], encoding='utf8'))
     seeds = [dict(id=x['id'], matrix=sc.matrix_from_text(open(os.path.join(base, x['file']), encoding='utf8').read())) for x in sj['seeds']]
-    rng = random.Random(seed if seed is not None else len(rows)); cand = candidates(pol, seeds, rows, rng)
+    qn = len(camp.queue_items()); bases = []
+    rng = random.Random(seed if seed is not None else len(rows) * 100003 + qn); cand = candidates(pol, seeds, rows, rng, bases=bases)          # the queue length also seeds it: an unchanged run count gave the same candidates again
     Xtr, mu, sd = design(rows); Xc = (np.array([[f[k] for k in PROP_FEATURES] for _, f in cand]) - mu) / sd
+    pend = [x['settings'] for x in camp.pending() if x.get('tier', PROPOSER_TIER) == PROPOSER_TIER]          # queued / running proposals are known points too (2026-11-26)
+    if pend: Xtr = np.vstack([Xtr, (np.array([[sf.features(s['matrix'], s['tiles'], s['cpi'], s['wpi'])[k] for k in PROP_FEATURES] for s in pend]) - mu) / sd])
     chosen = select_batch(Xtr, Xc, min(batch, g['room'])); ids = []
     for j in chosen:
         s, f = cand[j]
-        if not dry: ids.append(camp.enqueue(s, source='proposer:gp', tier=5, label='GP uncertainty sampling, R %.3f' % (s['cpi'] / s['wpi'])))
+        if not dry: ids.append(camp.enqueue(s, source='proposer:gp', tier=5, label='GP uncertainty sampling, seed %s, R %.3f' % (bases[j] if j < len(bases) else '?', s['cpi'] / s['wpi'])))
         else: ids.append(None)
     return dict(status='proposed' if not dry else 'dry run', proposed=ids, n_finished=len(rows), batch=batch)
 

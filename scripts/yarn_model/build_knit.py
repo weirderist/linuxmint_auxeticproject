@@ -6,7 +6,9 @@ P = (a_x*W, a_y*C, a_z*R) from the paper's Table 1, optimised once with the pape
 (eq. 10) for any knit/purl pattern.  Defaults are the paper's: W = 16, C = 9, R = 1.  Cost is evaluated in units of R, as in the paper.
 
 Usage: python3 build_knit.py --matrix "1 1 2 2 1/2 1 1 2 2" --tiles 4 --out run_knit [--name "my fabric"] [--id custom_id]
-       (digits: 1 = front loop = purl frame, 2 = back loop = knit frame; rows separated by '/', first row = bottom course)
+       (digits: 1 = knit stitch seen from the technical face = front loop = red in the grid PNGs, 2 = purl stitch = back loop = green; this is the ONE project convention (K, 2026-11-26: the fabrics
+        are the same on both faces, so only consistency matters; shell_sim, shell_features, relax_state and png_to_matrix all use it). 'purl frame' / 'knit frame' are the names of the paper's
+        Table 2 cell frames, not of the stitch: digit 1 is built in the paper's purl frame. Rows separated by '/', first row = bottom course)
        Optional physical sizing instead of W, C, R:  --ne 10 --cpi 14 --wpi 18   (W = 25.4/WPI, C = 25.4/CPI, R = d/2, d = 25.4/(28 sqrt Ne) mm)
 Output: fab_axis.csv (course,x,y,z), fab_nodes.csv (control points), fab_tube.obj (swept tube), meta.json (written last, atomically).
 Tube: circular cross-section of radius R swept along each course axis with rotation-minimising frames (double reflection method,
@@ -180,21 +182,31 @@ def optimise_cell(cid, Wn, Cn, solved, tol=0.03, max_rounds=6, verbose=True):
         for c in comps: N[(nm, i)][c] = v[k]; k += 1
     return N, dict(info, ok=bool(ok), alpha=alpha)
 
+def write_json_atomic(path, obj, **kw):
+    """Write JSON so that a power cut leaves either the old file or the complete new one: temporary file in the same folder, fsync, rename (os.replace is atomic on one file system)."""
+    tmp = '%s.tmp.%d' % (path, os.getpid())
+    with open(tmp, 'w') as fh:
+        json.dump(obj, fh, **kw); fh.flush(); os.fsync(fh.fileno())
+    os.replace(tmp, path)
+
 def optimise_all(Wn, Cn, cache_dir=None, verbose=True):
     key = 'cells_W%.4f_C%.4f.json' % (Wn, Cn)
     if cache_dir:
         os.makedirs(cache_dir, exist_ok=True); path = os.path.join(cache_dir, key)
         if os.path.exists(path):
-            raw = json.load(open(path))
-            return ({int(c): {(k.split(':')[0], int(k.split(':')[1])): np.array(x) for k, x in d.items()} for c, d in raw['cells'].items()},
-                    {int(c): r for c, r in raw['report'].items()})
+            try:
+                with open(path) as fh: raw = json.load(fh)
+                return ({int(c): {(k.split(':')[0], int(k.split(':')[1])): np.array(x) for k, x in d.items()} for c, d in raw['cells'].items()},
+                        {int(c): r for c, r in raw['report'].items()})
+            except (ValueError, KeyError, TypeError, AttributeError) as e:      # a cache cut short by a power cut (written in place before 2026-11-25): rebuild it instead of failing every build
+                print('cell cache %s unreadable (%s): optimising the cells again' % (path, e), flush=True)
     solved, rep = {}, {}
     for cid in range(1, 9):
         solved[cid], rep[cid] = optimise_cell(cid, Wn, Cn, solved, verbose=verbose)
     if cache_dir:
         cells_json = {str(c): {'%s:%d' % k: x.tolist() for k, x in d.items()} for c, d in solved.items()}
         rep_json = {str(c): {k: (v if isinstance(v, bool) else float(v)) for k, v in r.items()} for c, r in rep.items()}
-        json.dump(dict(cells=cells_json, report=rep_json), open(path, 'w'))
+        write_json_atomic(path, dict(cells=cells_json, report=rep_json))
     return solved, rep
 
 
@@ -332,8 +344,9 @@ def write_obj(path, curves_tube, R, sides, header, vn_max=200000, obj_max=300000
         Vs.append(V); Ns.append(N); Fs.append(F + off); off += len(V)
     V = np.vstack(Vs); N = np.vstack(Ns); F = np.vstack(Fs) + 1
     base = os.path.splitext(path)[0]
-    with open(base + '.bin', 'wb') as o:                                       # binary mesh: 'KMSH', version 1, nv, nf (uint32 LE), float32 xyz, uint32 triangle indices (0-based)
-        o.write(b'KMSH'); np.array([1, len(V), len(F)], dtype='<u4').tofile(o); V.astype('<f4').tofile(o); (F - 1).astype('<u4').tofile(o)
+    with open(base + '.bin.tmp', 'wb') as o:                                   # binary mesh: 'KMSH', version 1, nv, nf (uint32 LE), float32 xyz, uint32 triangle indices (0-based)
+        o.write(b'KMSH'); np.array([1, len(V), len(F)], dtype='<u4').tofile(o); V.astype('<f4').tofile(o); (F - 1).astype('<u4').tofile(o); o.flush(); os.fsync(o.fileno())
+    os.replace(base + '.bin.tmp', base + '.bin')                               # atomic (2026-11-26): a power cut left a truncated .bin that the viewer served for good
     if len(V) <= obj_max:
         with open(path, 'w') as f:
             f.write('# %s\n' % header)
@@ -373,7 +386,7 @@ def main():
     physical = False
     if (g.ne or g.cpi or g.wpi) and not (g.ne and g.cpi and g.wpi): sys.exit('error: give all of --ne --cpi --wpi, or none')
     if g.ne and g.cpi and g.wpi:
-        R = 25.4/(28.0*math.sqrt(g.ne))/2; W = 25.4/g.wpi; C = 25.4/g.cpi; physical = True
+        R = 25.4/(28.0*math.sqrt(g.ne))/2; W = 25.4/g.wpi; C = 25.4/g.cpi; physical = True          # d = 1/(28 sqrt Ne) inch: Peirce's cotton-yarn diameter rule as commonly quoted; NOT in the project's source folder (checked 2026-11-26, Spencer has only 'diameter proportional to count'): UNSOURCED here
     print('W = %.4f  C = %.4f  R = %.4f   (W/R = %.2f, C/R = %.2f)' % (W, C, R, W/R, C/R))
     t0 = time.time(); solved, rep = optimise_all(W/R, C/R, cache_dir=g.cache, verbose=True)
     opt_time = time.time()-t0

@@ -71,14 +71,23 @@ _locks, _glock = {}, threading.Lock()
 
 def _progress_path(c, name): return c / ("progress_%s.json" % name)
 
+def kmsh_ok(p):
+    """True if the KMSH file p is complete: its size equals 16 + 12 nv + 12 nf from its own header (2026-11-26; a cut-short file was served for good)."""
+    try:
+        with open(p, "rb") as f: h = f.read(16)
+        if len(h) < 16 or h[:4] != b"KMSH": return False
+        nv, nf = int.from_bytes(h[8:12], "little"), int.from_bytes(h[12:16], "little")
+        return Path(p).stat().st_size == 16 + 12 * nv + 12 * nf
+    except OSError: return False
+
 def ensure_tube(rid, d, rel):
     """Folder that holds the tube mesh of this variant. The run keeps the relaxed_tube.bin that relax_job.py wrote; anything else is generated, niced, into the cache folder."""
-    if rel and (d / "relaxed_tube.bin").exists(): return d
+    if rel and kmsh_ok(d / "relaxed_tube.bin"): return d          # an incomplete one is regenerated into the cache below
     name = ("relaxed" if rel else "fab") + "_tube.bin"
     src = d / ("relaxed_axis.csv" if rel else "fab_axis.csv")
     if not src.exists(): raise HTTPException(404, "no %s to build the tube from" % src.name)
     c = cache_dir(rid); out = c / name
-    def fresh(): return out.exists() and out.stat().st_size > 16 and out.stat().st_mtime >= src.stat().st_mtime
+    def fresh(): return kmsh_ok(out) and out.stat().st_mtime >= src.stat().st_mtime
     if fresh(): return c
     with _glock: lk = _locks.setdefault(str(out), threading.Lock())
     with lk:
@@ -178,7 +187,7 @@ def fields(d):
     key = (str(d), "v3") + tuple((f.stat().st_mtime_ns if f.exists() else 0) for f in files)
     if key in _FCACHE: return _FCACHE[key]
     meta = _rjson(d / "meta.json") or {}
-    st = meta.get("structure") or {}; R = meta.get("R"); W = st.get("W") or meta.get("W"); C = st.get("C") or meta.get("C")
+    st = meta.get("structure") or {}; R = meta.get("R"); W = lg.wale_spacing(meta); C = meta.get("C") or st.get("C")          # full-precision W, C first: structure values are rounded to 6 digits and break the exact loop boundaries (loop_grade.wale_spacing)
     M = meta.get("matrix"); tiles = meta.get("tiles")
     if not (R and W and C and M and tiles) or not (d / "fab_axis.csv").exists(): raise HTTPException(409, "this folder has no R, W, C, matrix and fab_axis.csv: no loop data")
     f = Fields(); f.d = d; f.meta = meta; f.R, f.W, f.C = float(R), float(W), float(C)
@@ -265,15 +274,17 @@ LOOP_NOTES = {"looplen": "geometric arc length - does not show migration", "rest
 
 def colour_values(field, vals, flip, clip):
     """(uint8 RGB per value, legend dict). Loop fields: the range is 1 +- h, h = max(clip-th percentile of |value - 1|, LOOP_HALF_MIN): yellow = shorter than the as-built mean, dark blue = longer,
-    so a few outlier loops cannot compress everything else into one colour (the old min-to-max range did)."""
+    so a few outlier loops cannot compress everything else into one colour (the old min-to-max range did). Non-finite values (a failed run) get the centre colour and are left out of the
+    range, so the legend stays valid JSON (a NaN in X-Legend broke JSON.parse in the page, 2026-11-26)."""
+    vals = np.asarray(vals, float); fin = np.isfinite(vals); fv = vals[fin] if fin.any() else np.zeros(1)
     if field in ("looplen", "restlen"):
-        h = max(float(np.percentile(np.abs(vals - 1.0), clip)), LOOP_HALF_MIN); lo, hi = 1.0 - h, 1.0 + h
-        t = (vals - lo) / (2 * h)
+        h = max(float(np.percentile(np.abs(fv - 1.0), clip)), LOOP_HALF_MIN); lo, hi = 1.0 - h, 1.0 + h
+        t = np.where(fin, (vals - lo) / (2 * h), 0.5)
         lab = "loop yarn length (relaxed geometry)" if field == "looplen" else "loop rest length l0"
-        return ramp(LOOP_STOPS, t).round().astype(np.uint8), dict(vmin=lo, vmax=hi, centre=1.0, half_width=h, min_half_width=LOOP_HALF_MIN, data_min=float(vals.min()), data_max=float(vals.max()), clip_percentile=clip,
+        return ramp(LOOP_STOPS, t).round().astype(np.uint8), dict(vmin=lo, vmax=hi, centre=1.0, half_width=h, min_half_width=LOOP_HALF_MIN, data_min=float(fv.min()), data_max=float(fv.max()), clip_percentile=clip, non_finite=int((~fin).sum()),
                                                                   stops=LOOP_STOPS.astype(int).tolist(), label=lab + (" / as-built mean" if field == "looplen" else " / its own as-built rest length"), centre_label=("as-built mean" if field == "looplen" else "own as-built"), note=LOOP_NOTES[field], field=field, ticks=[lo, 1.0, hi], end_labels=["shorter", "longer"])
-    c = float(np.percentile(np.abs(vals), clip)) or 1e-12
-    t = np.clip(vals / c, -1, 1)[:, None]
+    c = float(np.percentile(np.abs(fv), clip)) or 1e-12
+    t = np.clip(np.where(fin, vals, 0.0) / c, -1, 1)[:, None]
     pos, neg = (STRAIN_GREEN, STRAIN_RED) if flip else (STRAIN_RED, STRAIN_GREEN)       # default: tension red, compression green
     rgb = np.where(t >= 0, STRAIN_NEUTRAL + (pos - STRAIN_NEUTRAL) * t, STRAIN_NEUTRAL + (neg - STRAIN_NEUTRAL) * (-t))
     return rgb.round().astype(np.uint8), dict(vmin=-c, vmax=c, tension=("green" if flip else "red"), compression=("red" if flip else "green"), neutral=STRAIN_NEUTRAL.astype(int).tolist(),
@@ -410,7 +421,9 @@ def fold(rid: str):
     """Height profile of the relaxed fabric along each direction: the cell-mean heights after removing a best-fit plane (campaigns/README.md, fold_amplitude_mm), averaged across the other direction."""
     d = view_dir(rid); f = fields(d)
     if f.Xr is None: raise HTTPException(404, "no relaxed axis for this folder")
-    P = np.vstack(f.Xr); x, y, z = P[:, 0], P[:, 1], P[:, 2]; xc, yc = x - x.mean(), y - y.mean()
+    P = np.vstack(f.Xr); P = P[np.isfinite(P).all(1)]          # non-finite rows (a failed run) are left out (they made this route fail with 500, 2026-11-26)
+    if len(P) < 20: raise HTTPException(409, "the relaxed axis has too few finite points for a height profile")
+    x, y, z = P[:, 0], P[:, 1], P[:, 2]; xc, yc = x - x.mean(), y - y.mean()
     A = np.c_[xc, yc, np.ones_like(xc)]; res = z - A @ np.linalg.lstsq(A, z, rcond=None)[0]
     xe = np.linspace(x.min(), x.max(), f.ncol + 1); ye = np.linspace(y.min(), y.max(), f.nrow + 1)
     cnt, _, _ = np.histogram2d(y, x, bins=[ye, xe])

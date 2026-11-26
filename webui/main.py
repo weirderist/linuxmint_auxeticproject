@@ -4,7 +4,7 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from fastapi.middleware.gzip import GZipMiddleware
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 app = FastAPI()
 app.add_middleware(GZipMiddleware, minimum_size=1000)
@@ -15,14 +15,14 @@ SCRIPTS = HERE.parent / "scripts"
 ID_RE = re.compile(r"^[0-9A-Za-z_-]{1,64}$")
 RUNNING = ("loaded", "armed", "released", "relaxing")      # every state a live job can be in; "loaded" and "armed" last only while the tile / shell stages run
 STAGE_FILE = "job_stage.json"
-CKPT_FILES = ("checkpoint.npz", "checkpoint.json")
+CKPT_FILES = ("checkpoint.npz", "checkpoint.prev.npz", "checkpoint.json")          # .prev: the fallback checkpoint of relax_job (task 12)
 PRESET_FILE = HERE / "presets.json"
 JOBS = {}                                    # result id -> subprocess.Popen (one at a time)
 
 # Sourced inputs offered to the form. Everything else the solver needs (mu) is entered by the user.
 CONFIG = {
-    "yarn_E_MPa": 3700.0,
-    "yarn_E_source": "Kharkova, Kononova, Krasnikovs, Eiduks, Machanovskis, Dzelzitis (2011), 'Elastic properties of cotton fabric based "
+    "yarn_E_MPa": 500.0,          # 2026-11-26 (K approved): was 3700 (Kharkova 2011, below); see yarn_E_source
+    "yarn_E_source": "500 MPa = EA 26.9 N on the Peirce area of Ne 12 (R 0.1309 mm). Derived, not measured: Xiong et al. 2026, Materials 19, 560, cotton ring-spun yarns ASTM D2256, Fig. 8b p. 9 and Table 1 p. 4: 36.9 tex (the count nearest to Ne 12 = 49.2 tex) has E 594 MPa on its SEM diameter 0.208 mm, i.e. EA 20.2 N = 0.547 N/tex, scaled to 49.2 tex. Xiong range for 14.8-36.9 tex: 0.55-0.96 N/tex, i.e. 500-880 MPa here. Replace by a measured EA (--ea) from K's tensile test (task 17). Previous default: Kharkova, Kononova, Krasnikovs, Eiduks, Machanovskis, Dzelzitis (2011), 'Elastic properties of cotton fabric based "
                      "polymer composites', Engineering for Rural Development, Jelgava, 26-27 May 2011: experimentally obtained cotton yarn "
                      "elastic modulus 3.7 GPa (yarn tension tests; yarn modelled as a homogeneous elastic rod).",
     "tension_cN": 10.0,
@@ -38,12 +38,23 @@ CONFIG = {
     "shell_w": 1.0,                          # hold on the shell fold, x EA/R per vertex. Numerical choice, not tested on the real solver.
 }
 
+def _orphan(d):
+    """The job recorded in d/job.json if that process is still alive although this web service did not start it (the service was restarted while the job ran:
+    KillMode=process and start_new_session keep the job alive, but JOBS lives in memory only). Same test as the campaign runner: pid, boot id and start ticks (2026-11-26)."""
+    j = _read_json(Path(d) / "job.json") or {}
+    if not j.get("pid") or not j.get("start_ticks"): return None
+    try: return j if campaign_api._cm().alive(j) else None
+    except Exception: return None
+
 def _alive(rid):
     p = JOBS.get(rid)
-    return p is not None and p.poll() is None
+    if p is not None: return p.poll() is None
+    return _orphan(RESULTS / rid) is not None
 
 def _any_running():
-    return any(p.poll() is None for p in JOBS.values())
+    if any(p.poll() is None for p in JOBS.values()): return True
+    try: return any(_orphan(j.parent) for j in RESULTS.glob("*/job.json") if j.parent.name not in JOBS)
+    except OSError: return False
 
 sys.path.insert(0, str(HERE)); import campaign_api          # Campaigns page and its API (webui/campaign_api.py)
 campaign_api.setup(app, _any_running)
@@ -98,10 +109,30 @@ def _file(rid, pattern, media, variant="baseline"):
         raise HTTPException(404)
     return FileResponse(hits[0], media_type=media)
 
+_TUBE_LOCK = threading.Lock()          # two first-time /mesh requests (two tabs) built the same fab_tmp.obj at once (2026-11-26)
+
+def _ensure_relaxed_tube(d):
+    """A relaxed_tube.bin cut short (power cut while relax_job wrote it, before the 2026-11-26 atomic write) is rebuilt from relaxed_axis.csv instead of being served for good."""
+    b, ax = d / "relaxed_tube.bin", d / "relaxed_axis.csv"
+    if not b.exists() or runview.kmsh_ok(b) or not ax.exists(): return
+    meta = _read_json(d / "meta.json") or {}
+    if not meta.get("R"): return
+    import numpy as np
+    if str(SCRIPTS / "yarn_model") not in sys.path: sys.path.insert(0, str(SCRIPTS / "yarn_model"))
+    from build_knit import write_obj
+    with _TUBE_LOCK:
+        if runview.kmsh_ok(b): return
+        A = np.loadtxt(ax, delimiter=",", skiprows=1)
+        write_obj(str(d / "relaxed_tube.obj"), [A[A[:, 0] == c][:, 1:] for c in np.unique(A[:, 0])], meta["R"], 8, "relaxed state of %s (rebuilt: the saved mesh was incomplete)" % d.name)
+
 def _ensure_baseline_tube(d):
     """Results built with build_knit --no-tube have no baseline tube mesh. Build it once from fab_axis.csv (same tube writer as the pipeline, 8 sides) and cache it as fab_tube.obj."""
-    if any(h for h in list(d.glob("*_tube.obj")) + list(d.glob("*_tube.bin")) if not h.name.startswith("relaxed_")):
+    if any(h for h in list(d.glob("*_tube.obj")) + list(d.glob("*_tube.bin")) if not h.name.startswith("relaxed_") and (h.suffix != ".bin" or runview.kmsh_ok(h))):
         return
+    with _TUBE_LOCK: _build_baseline_tube(d)
+
+def _build_baseline_tube(d):
+    if any(h for h in d.glob("fab_tube.bin") if runview.kmsh_ok(h)): return          # built by another request while this one waited
     meta, ax = _read_json(d / "meta.json") or {}, d / "fab_axis.csv"
     if not meta.get("R") or not ax.exists():
         raise HTTPException(404, "no baseline mesh and no fab_axis.csv to build one from")
@@ -111,7 +142,7 @@ def _ensure_baseline_tube(d):
     from build_knit import write_obj
     A = np.loadtxt(ax, delimiter=",", skiprows=1)
     lines = [A[A[:, 0] == c][:, 1:] for c in np.unique(A[:, 0])]
-    tmp = d / "fab_tmp.obj"
+    tmp = d / ("fab_tmp_%d.obj" % os.getpid())
     write_obj(str(tmp), lines, meta["R"], 8, "baseline tube of %s" % d.name)
     os.replace(tmp.with_suffix(".bin"), d / "fab_tube.bin")            # the binary mesh is what the viewer reads
     if tmp.exists():
@@ -172,6 +203,7 @@ def axis(rid: str, v: str = "baseline", view: int = 0):
 
 # ---------------------------------------------------------------- simulation
 class SimBody(BaseModel):
+    model_config = ConfigDict(allow_inf_nan=False)          # pydantic v2 accepts inf/nan in float fields by default; an Infinity saved in job_request.json then broke every later resume (2026-11-26)
     E: float = Field(gt=0, description="yarn modulus: MPa (N/mm^2) for mm results, any positive number for R-unit results")
     mu: float = Field(ge=0, le=2, description="yarn-yarn friction coefficient")
     kc_ratio: float = Field(gt=0, le=10000)
@@ -210,9 +242,14 @@ class SimBody(BaseModel):
     loop_grade: float = Field(0.0, ge=-0.4, le=1.0, description="opt-in STARTING loop-length field (0 = off, the uniform start): rest length grows toward the boundary of every section of one loop type and along TM axes; a = length difference between the target loops and the farthest loops as a fraction of the section mean. UNSOURCED")
     loop_grade_target: str = Field('both', pattern='^(boundary|tm|both)$', description="which term the grade uses (UNSOURCED weights 1 and 1); only with a non-zero grade")
     loop_grade_min_strength: float = Field(0.2, ge=0, le=1, description="smallest TM-axis strength s = 2 (f - 0.5) that counts as an axis (UNSOURCED); only with a non-zero grade")
+    slip_friction_load: float = Field(0.0, ge=0, le=10, description="load-dependent slip limit mu_n (0 = off): T_hi <= max(T_lo,0) exp(mu phi) + mu_n F_n. UNSOURCED (task 25)")
+    slip_drive: float = Field(0.0, ge=-0.1, le=0.1, description="persistent slip drive e (0 = off) from the sectioned loop field (grade target and minimum strength). UNSOURCED (task 25)")
+    slip_drive_decay: float = Field(0.0, ge=0, le=1000, description="drive decay N in outer rounds (0 = none); needs a slip drive. UNSOURCED (task 25)")
+    diagnostics: bool = Field(False, description="write diagnostics.csv, one row per outer round; no effect on the result (task 25)")
     stall_tol: float = Field(0.0, ge=0, le=0.01, description="early stop: relative energy change per outer round below this for 3 rounds (0 = off)")
 
 class TileBody(BaseModel):
+    model_config = ConfigDict(allow_inf_nan=False)
     E: float = Field(gt=0); kc_ratio: float = Field(30.0, gt=0, le=10000)
     ref_scale: float = Field(0.5, ge=0, le=1, description="initial rest curvature = ref_scale x baseline loop curvature")
     reset: float = Field(0.0, ge=0, le=1, description="fraction of the way the rest shape moves to the current state per reset (Sperl et al. 7.2)")
@@ -253,19 +290,38 @@ def _sim_cmd(d, b, R):
     if b.ea: cmd += ["--ea", repr(b.ea)]
     if b.ei: cmd += ["--ei", repr(b.ei)]
     if b.stretch_law: cmd += ["--stretch-law", b.stretch_law]
-    if b.loop_grade: cmd += ["--loop-grade", repr(b.loop_grade), "--loop-grade-target", b.loop_grade_target, "--loop-grade-min-strength", repr(b.loop_grade_min_strength)]      # only when on: a run without the grade gets exactly the command it got before
+    if b.loop_grade: cmd += ["--loop-grade", repr(b.loop_grade), "--loop-grade-target", b.loop_grade_target, "--loop-grade-min-strength", repr(b.loop_grade_min_strength)]
+    elif b.slip_drive or b.diagnostics: cmd += ["--loop-grade-target", b.loop_grade_target, "--loop-grade-min-strength", repr(b.loop_grade_min_strength)]          # the drive field and the diagnostics regions use these even without a grade (task 25)
+    if b.slip_friction_load: cmd += ["--slip-friction-load", repr(b.slip_friction_load)]          # task 25: each flag only when on, so a run without them gets exactly the command of before
+    if b.slip_drive: cmd += ["--slip-drive", repr(b.slip_drive)] + (["--slip-drive-decay", repr(b.slip_drive_decay)] if b.slip_drive_decay else [])
+    if b.diagnostics: cmd += ["--diagnostics"]      # only when on: a run without the grade gets exactly the command it got before
     return cmd, kc
 
 def _boot_id():
     try: return Path("/proc/sys/kernel/random/boot_id").read_text().strip()
     except OSError: return ""
 
+_START = threading.Lock()
+def _one_start(fn):
+    """Simulate, Resume and Tile check 'nothing is running' and then start a job; FastAPI runs these handlers in a thread pool, so two requests (two tabs) could both pass the check.
+    The lock makes check and start one step (2026-11-26)."""
+    import functools
+    @functools.wraps(fn)
+    def wrapped(*a, **kw):
+        with _START: return fn(*a, **kw)
+    return wrapped
+
 def _launch(rid, d, cmd, resume=False):
     log = open(d / "job.log", "a" if resume else "w")
-    (d / "job.json").write_text(json.dumps({"started": time.time(), "boot_id": _boot_id()}))          # before the job starts, so it can always read it; boot_id as in campaign runner.lock
-    JOBS[rid] = subprocess.Popen(cmd + (["--resume"] if resume else []), stdout=log, stderr=subprocess.STDOUT, cwd=str(SCRIPTS), start_new_session=True)
+    t0 = time.time(); (d / "job.json").write_text(json.dumps({"started": t0, "boot_id": _boot_id()}))          # before the job starts, so it can always read it; boot_id as in campaign runner.lock
+    p = JOBS[rid] = subprocess.Popen(cmd + (["--resume"] if resume else []), stdout=log, stderr=subprocess.STDOUT, cwd=str(SCRIPTS), start_new_session=True)
+    try:          # pid and start ticks: a later web service (after a restart) still recognises the job as running (2026-11-26)
+        pi = campaign_api._cm().proc_info(p.pid)
+        (d / "job.json").write_text(json.dumps({"started": t0, "boot_id": _boot_id(), "pid": p.pid, "start_ticks": pi[0] if pi else ""}))
+    except Exception: pass
 
 @app.post("/api/results/{rid}/simulate")
+@_one_start
 def simulate(rid: str, b: SimBody):
     d = _folder(rid)
     if _any_running():
@@ -291,6 +347,10 @@ def simulate(rid: str, b: SimBody):
         raise HTTPException(422, "growth stages are for runs without the shell: untick the shell or set the stages to 0")
     if b.loop_grade and not (meta.get("matrix") and meta.get("tiles") and ((meta.get("structure") or {}).get("W") or meta.get("W"))):
         raise HTTPException(422, "the starting loop grade needs the stitch matrix, tiles and W in meta.json (result built by an older pipeline)")
+    if b.slip_drive_decay and not b.slip_drive:
+        raise HTTPException(422, "the drive decay needs a slip drive (set the drive, or the decay to 0)")
+    if (b.slip_drive or b.diagnostics) and not (meta.get("matrix") and meta.get("tiles") and ((meta.get("structure") or {}).get("W") or meta.get("W"))):
+        raise HTTPException(422, "the slip drive and the diagnostics need the stitch matrix, tiles and W in meta.json (result built by an older pipeline)")
     if b.seed_stitch and (b.shell or not meta.get("matrix")):
         raise HTTPException(422, "the stitch seed needs the stitch matrix and is for runs without the shell")
     if (b.ea or b.ei or b.stretch_law) and (meta.get("structure") or {}).get("units") != "mm":
@@ -305,7 +365,7 @@ def simulate(rid: str, b: SimBody):
         try: _law_points(b.stretch_law)
         except (ValueError, ZeroDivisionError) as e: raise HTTPException(422, "stretch curve: %s (format strain:cN,strain:cN with both rising)" % e)
     cmd, kc = _sim_cmd(d, b, R)
-    for f in ("relaxed_axis.csv", "relaxed_l0.csv", "relaxed_axis.view.csv", "relaxed_tube.obj", "relaxed_tube.bin", "state.json", "job.json", STAGE_FILE, "shell.npz") + CKPT_FILES:
+    for f in ("relaxed_axis.csv", "relaxed_l0.csv", "relaxed_axis.view.csv", "relaxed_tube.obj", "relaxed_tube.bin", "state.json", "job.json", STAGE_FILE, "shell.npz", "diagnostics.csv") + CKPT_FILES:          # diagnostics.csv is appended to, so a new run must not continue the old rows
         (d / f).unlink(missing_ok=True)          # never leave a previous run's files next to a new one
     (d / "job_request.json").write_text(json.dumps(b.model_dump()))      # lets a power cut be resumed with exactly these settings
     _preset_write("_last", b.model_dump())
@@ -336,6 +396,7 @@ def _resume(rid):
     cmd, _ = _sim_cmd(d, b, meta["R"]); _launch(rid, d, cmd, resume=True)
 
 @app.post("/api/results/{rid}/resume")
+@_one_start
 def resume(rid: str):
     d = _folder(rid)
     if _any_running():
@@ -345,7 +406,8 @@ def resume(rid: str):
         raise HTTPException(409, busy)
     if not _resumable(d):
         raise HTTPException(409, "nothing to resume: no checkpoint for an interrupted run")
-    _resume(rid)
+    try: _resume(rid)
+    except ValidationError as e: raise HTTPException(409, "job_request.json of this run is outside the current limits, so it cannot be resumed: %s" % e.errors()[:3])
     return {"resumed": rid}
 
 @app.on_event("startup")
@@ -360,17 +422,21 @@ def auto_resume():
     for d in sorted((p for p in RESULTS.iterdir() if p.is_dir() and not p.name.startswith(".")), key=lambda p: p.name, reverse=True):
         if not _resumable(d):
             continue
-        why = _auto_block(d)
+        why = _auto_block(d)          # only the MOST RECENT resumable folder is considered (2026-11-26): an older interrupted run is never revived by itself on every restart
         if why:
             logging.getLogger("uvicorn.error").warning("auto-resume: %s left alone (%s); the Resume button still works", d.name, why)
-            continue
-        _resume(d.name); break
+            break
+        try: _resume(d.name)
+        except Exception as e:          # one unreadable or out-of-range job_request.json must not stop the web service from starting (it is needed most after a power cut)
+            logging.getLogger("uvicorn.error").warning("auto-resume: %s skipped, its job request could not be used (%s); the Resume button reports why", d.name, e)
+        break
 
 def _tile_alive(rid):
     p = JOBS.get(rid + "#tile")
     return p is not None and p.poll() is None
 
 @app.post("/api/results/{rid}/tile")
+@_one_start
 def tile_start(rid: str, b: TileBody):
     d = _folder(rid)
     if _any_running():
@@ -467,6 +533,8 @@ def mesh(rid: str, v: str = "baseline"):
         d = runview.ensure_tube(rid, d, rel)            # a campaign run: its own relaxed_tube.bin, anything else generated into campaigns/<name>/cache/<id>/
     elif not rel and d.is_dir():
         _ensure_baseline_tube(d)
+    elif rel and d.is_dir():
+        _ensure_relaxed_tube(d)
     cand = sorted(h for h in d.glob("*_tube.bin") if h.name.startswith("relaxed_") == rel)
     if not cand:
         objs = sorted(h for h in d.glob("*_tube.obj") if h.name.startswith("relaxed_") == rel)
@@ -478,6 +546,10 @@ def mesh(rid: str, v: str = "baseline"):
 def cancel(rid: str):
     d = _folder(rid)
     p = JOBS.get(rid)
+    if (p is None or p.poll() is not None) and _orphan(d):          # a job this service did not start (it was restarted): stop its process group by the recorded pid
+        try: os.killpg(int(_orphan(d)["pid"]), signal.SIGTERM)
+        except Exception as e: raise HTTPException(409, "could not stop the job: %s" % e)
+        return {"cancelled": rid}
     if p is None or p.poll() is not None:
         p = JOBS.get(rid + "#tile")
         if p is None or p.poll() is not None:

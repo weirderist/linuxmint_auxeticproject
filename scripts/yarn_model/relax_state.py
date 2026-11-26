@@ -4,7 +4,11 @@ Reads a build_knit.py result folder (fab_axis.csv, meta.json). Writes state.json
 
 Sourced models this layout is meant for:
   * rod bending + twist energy: Bergou, Wardetzky, Robinson, Audoly, Grinspun (2008) "Discrete Elastic Rods", ACM Trans. Graphics 27(3).
-  * frictional slip over a curved contact: capstan (Euler-Eytelwein) relation, T_high / T_low <= exp(mu * phi); standard mechanics.
+  * frictional slip over a curved contact: capstan (Euler-Eytelwein) relation, T_high / T_low <= exp(mu * phi); standard mechanics. The same stick test and length-conserving
+    redistribution between adjacent elements, sliding toward the greater force, is Shiryaev et al. 2018, Lubricants 6, 33, Eqs. 20-23 (p. 5) and p. 8 (found in the literature review of 2026-11-25).
+    Known limit (same review): the elastic solve has no tangential contact force, so at equilibrium a contact carries nearly equal tension on both sides and this test rarely fires; Shiryaev ties the
+    contact nodes during the elastic step (Eq. 53), Cirio et al. use persistent sliding contacts.
+  UNSOURCED numerical choices: wrap-angle window k = 3 vertices (wrap_angle), contact reach 1.15 x 2R and the coarse 4-vertex crossing cell (build_contacts), slip cap 20 % of a segment per pass
 UNSOURCED, supplied by the user, no defaults: mu, EA, EI, GJ, contact stiffness. release() refuses to start while any is None.
 Slip is carried by REST LENGTH transfer between adjacent segments at a contact node, not by renumbering vertices; vertex count and
 connectivity never change, so the solver mesh stays valid.

@@ -78,10 +78,13 @@ def main():
         print('shell stage: %d x %d stitches, sub %d, %d growth steps, h %.4g, digit-1 curvature kx %.4g ky %.4g (1/mm, > 0 toward +z)' % (len(s['matrix'][0]) * s['tiles'], len(s['matrix']) * s['tiles'], s['sub'], s['steps'], h, *kxy), flush=True)
         X0, X, tri, (nx, ny), log = ss.fold(s['matrix'], W, C, kappa=kappa, h=h, nu=s['nu'], sub=s['sub'], ntile=(s['tiles'], s['tiles']), steps=s['steps'], maxiter=s['iter'], springs=s['springs'], seed=s['seed'], verbose=True, kx=kxy[0], ky=kxy[1])
     Xg = np.asarray(X).reshape(ny * s['sub'] + 1, nx * s['sub'] + 1, 3)
-    with open(os.path.join(g.out, 'shell.npz.tmp'), 'wb') as f: np.savez(f, X=Xg, W=W, C=C, sub=s['sub'], nx=nx, ny=ny, kappa=kappa, h=h)
+    with open(os.path.join(g.out, 'shell.npz.tmp'), 'wb') as f: np.savez(f, X=Xg, W=W, C=C, sub=s['sub'], nx=nx, ny=ny, kappa=kappa, h=h); f.flush(); os.fsync(f.fileno())          # fsync (2026-11-26): metrics.json, fsynced later, marks the run complete, so the heavy files must reach the disk first
     os.replace(os.path.join(g.out, 'shell.npz.tmp'), os.path.join(g.out, 'shell.npz'))
-    with open(os.path.join(g.out, 'shell.bin.tmp'), 'wb') as f: f.write(sm.kmsh_bytes(Xg))
+    with open(os.path.join(g.out, 'shell.bin.tmp'), 'wb') as f: f.write(sm.kmsh_bytes(Xg)); f.flush(); os.fsync(f.fileno())
     os.replace(os.path.join(g.out, 'shell.bin.tmp'), os.path.join(g.out, 'shell.bin'))
+    try:
+        fd = os.open(g.out, os.O_RDONLY); os.fsync(fd); os.close(fd)          # the two renames reach the disk too (no-op where directories cannot be opened, e.g. Windows)
+    except OSError: pass
     wjson(os.path.join(g.out, 'provenance.json'), provenance())
     m = sm.describe(Xg, W, C, s['sub'], float(s.get('fold_min_turn_rad', 0.2)))
     m.update(steps_at_cap=int(sum(1 for r in log if r[2] >= s['iter'])), steps=len(log), iterations_total=int(sum(r[2] for r in log)), U_final=float(log[-1][1]), W=W, C=C, kappa=kappa, h=h, solver_seconds=round(time.time() - t0, 1))

@@ -22,7 +22,7 @@ WEB_RESULTS = os.path.join(ROOT, 'webui', 'results')
 ACCEPTED_EXIT = (0, 2)            # relax_job: 0 = settled, 2 = ended as "failed" (not settled, e.g. outer cap reached). Both leave a usable relaxed state.
 BUILD_PARAMS = {'tiles': int, 'ne': float, 'cpi': float, 'wpi': float}
 RESERVED_RELAX = {'--folder', '--resume'}
-FOREIGN_JOB_SCRIPTS = ('relax_job.py', 'tile_sim.py', 'shell_run.py')      # shell_run.py: one pure-shell run (shell_campaign.py); one job at a time across all job types
+FOREIGN_JOB_SCRIPTS = ('relax_job.py', 'tile_sim.py', 'shell_run.py', 'shell_fold.py', 'shell_target.py')      # shell_fold / shell_target run relax_job in-process (task 47), added 2026-11-26      # shell_run.py: one pure-shell run (shell_campaign.py); one job at a time across all job types
 METRIC_COLS = ['exit_code', 'relax_state', 'settled_by', 'build_s', 'wall_s', 'vertices', 'rounds_used', 'outer_max', 'E_start', 'E_final', 'rel_dE_last', 'E_stretch', 'E_bend', 'E_contact',
                'min_dist_over_2R_start', 'min_dist_over_2R_end', 'rest_len_change_total', 'rest_len_change_max_abs_wale', 'shrink_x', 'shrink_y', 'z_range_over_R_end',
                'fold_kx_per_mm', 'fold_ky_per_mm', 'fold_turn_x_rad', 'fold_turn_y_rad', 'fold_direction', 'fold_amplitude_mm', 'fold_local_amplitude_mm',
@@ -35,7 +35,7 @@ def say(msg): print('%s  %s' % (time.strftime('%Y-%m-%d %H:%M:%S'), msg), flush=
 # ------------------------------------------------------------------ files
 def wjson(path, obj):
     """Atomic and durable: write a temporary file, fsync it, rename it over the target."""
-    tmp = path + '.tmp'
+    tmp = '%s.tmp.%d' % (path, os.getpid())          # per-process name: the runner and the web page may write the same file at once (2026-11-26)
     with open(tmp, 'w') as f:
         json.dump(obj, f, indent=1); f.flush(); os.fsync(f.fileno())
     os.replace(tmp, path)
@@ -184,6 +184,8 @@ def design_points(spec):
         p = {}
         for v, c in zip(vs, cols):
             u = c[i]
+            if v['integer'] and v['scale'] == 'linear':          # equal strata per integer value: round() gave the two end values half the weight of the others (2026-11-26)
+                p[v['name']] = min(int(v['max']), int(math.floor(v['min'] + u * (v['max'] - v['min'] + 1)))); continue
             x = v['min'] + u * (v['max'] - v['min']) if v['scale'] == 'linear' else math.exp(math.log(v['min']) + u * (math.log(v['max']) - math.log(v['min'])))
             p[v['name']] = int(round(x)) if v['integer'] else sig6(x)
         pts.append(p)
@@ -281,7 +283,7 @@ def write_results(name):
         met = rjson(os.path.join(rdir(name, r['run']), 'metrics.json'), {})
         row = [r['run'], st.get('status', ''), len(st.get('attempts', [])), st.get('interrupted_count', 0)] + [fmt(r['params'].get(k)) for k in pcols] + [fmt(met.get(k, '')) for k in METRIC_COLS]
         rows.append(row)
-    p = os.path.join(cdir(name), 'results.csv'); tmp = p + '.tmp'
+    p = os.path.join(cdir(name), 'results.csv'); tmp = '%s.tmp.%d' % (p, os.getpid())
     with open(tmp, 'w', newline='') as f:
         w = csv.writer(f); w.writerow(head); w.writerows(rows); f.flush(); os.fsync(f.fileno())
     os.replace(tmp, p)
@@ -586,7 +588,7 @@ def cmd_run(a):
     write_results(name); say('runner finished')
 
 def main():
-    if len(sys.argv) > 1 and sys.argv[1] in ('shell-plan', 'shell-enqueue', 'shell-run', 'shell-status', 'shell-control', 'shell-freeze'):          # pure shell campaigns: scripts/campaigns/shell_campaign.py
+    if len(sys.argv) > 1 and sys.argv[1] in ('shell-plan', 'shell-enqueue', 'shell-run', 'shell-status', 'shell-control', 'shell-freeze', 'shell-approve'):          # pure shell campaigns: scripts/campaigns/shell_campaign.py
         import shell_campaign; return shell_campaign.cli(sys.argv[1], sys.argv[2:])
     ap = argparse.ArgumentParser(description=__doc__.split('\n')[0]); sub = ap.add_subparsers(dest='cmd', required=True)
     for c in ('plan', 'status', 'stop', 'run'): sp = sub.add_parser(c); sp.add_argument('name')

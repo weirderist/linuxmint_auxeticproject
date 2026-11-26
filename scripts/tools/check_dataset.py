@@ -181,9 +181,11 @@ def check_csv(path, kind, err, warn):
         if kind == 'npr_curve':
             use = [(ln, v) for (ln, v), r in zip(vals, rows) if r['usable'].strip() == '1']
             usable_n = len(use)
-            neg_all = [ln for ln, v in vals if v < 0]
-            if neg_all:
-                err.append("data.csv: negative eps_long at line(s) %s" % neg_all[:5])
+            neg_use = [ln for ln, v in use if v < 0]; neg_off = [ln for ln, v in vals if v < 0 and ln not in set(l for l, _ in use)]
+            if neg_use:          # as data/README.md says: the strain checks apply to the usable rows (2026-11-26: negative values on excluded rows were errors too)
+                err.append("data.csv: negative eps_long on usable row(s) at line(s) %s" % neg_use[:5])
+            if neg_off:
+                warn.append("data.csv: negative eps_long on excluded row(s) (usable = 0) at line(s) %s" % neg_off[:5])
             if usable_n == 0:
                 err.append("data.csv: no row has usable = 1")
             else:
@@ -254,6 +256,9 @@ def main(argv):
             print("no data/ folder at %s" % os.path.normpath(root))
             return 2
         folders = sorted(os.path.join(root, d) for d in os.listdir(root) if os.path.isdir(os.path.join(root, d)))
+        other = [f for f in folders if not os.path.exists(os.path.join(f, 'meta.json')) and not os.path.exists(os.path.join(f, 'data.csv'))]
+        for f in other: print("note: %s has neither meta.json nor data.csv, so it is not a dataset; skipped (check it by name to see the errors)" % os.path.basename(f))          # e.g. data/ten_patterns_pure_shell (pattern images), 2026-11-26
+        folders = [f for f in folders if f not in other]
     if not folders:
         print("no datasets found")
         return 2

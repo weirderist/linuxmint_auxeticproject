@@ -91,6 +91,11 @@ dialog#newDlg::backdrop{background:#0006}
   <label><span>Grade target &mdash; UNSOURCED weights</span><select id="fGradeT"><option value="both">both</option><option value="boundary">boundary</option><option value="tm">tm</option></select></label>
   <label><span>Grade: minimum TM-axis strength &mdash; UNSOURCED</span><input id="fGradeS" type="number" step="any" min="0" max="1"></label>
   <div class="note" style="grid-column:1/-1">Starting loop-length grade: a = how much longer the loops at the target are than the farthest loops of their section (0.02 = 2 %); the total rest length of every section is kept. Target: <b>boundary</b> = toward the boundary of each region of one loop type (the fabric edge counts), <b>tm</b> = along wales or courses that are mostly one type (stronger the purer they are), <b>both</b> = the two added. Minimum strength: the purity (0 = half and half, 1 = pure) below which a line is not an axis. Works with and without the shell. Creep (above) moves rest lengths without conserving the total and can partly erase the grade. Every value here is UNSOURCED until loop length has been measured by region.</div>
+  <label><span>Slip friction load &mu;<sub>n</sub> (0 = off) &mdash; UNSOURCED</span><input id="fSlipFL" type="number" step="any" min="0" max="10"></label>
+  <label><span>Slip drive e (0 = off) &mdash; UNSOURCED</span><input id="fSlipD" type="number" step="any" min="-0.1" max="0.1"></label>
+  <label><span>Slip drive decay N, outer rounds (0 = none) &mdash; UNSOURCED</span><input id="fSlipDec" type="number" step="any" min="0" max="1000"></label>
+  <label class="row"><input id="fDiag" type="checkbox"><span>Per-round diagnostics (diagnostics.csv; no effect on the result)</span></label>
+  <div class="note" style="grid-column:1/-1">Slip extensions (tests/NOTES_slip_model.md): &mu;<sub>n</sub> raises the slip limit by &mu;<sub>n</sub> times the contact force, so a tight fabric slips less; the drive e keeps rest length flowing toward the section boundaries / TM axes, using the Grade target and minimum-strength fields above (no grade needed); the decay N fades it as exp(-round/N). All three constants are UNSOURCED.</div>
   <label><span>Fold search steps (0 = off)</span><input id="fFold" type="number" step="1" min="0" max="200"></label>
   <label><span>Fold search: iterations per trial</span><input id="fFoldIt" type="number" step="1" min="10" max="5000"></label>
   <label><span>Fold search: first step (1/mm, 0 = auto)</span><input id="fFoldD" type="number" step="any" min="0" max="1"></label>
@@ -383,8 +388,8 @@ function infoText() {
   let t = rec.info && rec.info.length ? rec.info.join('\n') : (rec.id + '\n' + JSON.stringify(rec.settings) + '\n\n' + rec.report);
   if (st && ((st.state && st.state !== 'none') || st.running)) {
     t += '\n\n--- simulation ---\nstate: ' + stateLabel(st);
-    if (st.last) t += '\niteration ' + st.iter + '/' + (st.outer || '?') + ', energy ' + (+st.last.E).toPrecision(6) + ', largest rest-length change ' + (+st.last.max_dl0).toExponential(2);
-    if (st.summary) {
+    if (st.last && st.last.E != null && st.last.max_dl0 != null) t += '\niteration ' + st.iter + '/' + (st.outer || '?') + ', energy ' + (+st.last.E).toPrecision(6) + ', largest rest-length change ' + (+st.last.max_dl0).toExponential(2);
+    if (st.summary) try {          // a failed run can store null (NaN) energies: show a note instead of breaking the page (2026-11-26)
       const a = st.summary.start, b = st.summary.end;
       t += '\nenergy start ' + a.total.toPrecision(5) + ' (stretch ' + a.stretch.toPrecision(3) + ', bend ' + a.bend.toPrecision(3) + ', contact ' + a.contact.toPrecision(3) + ')';
       t += '\nenergy end   ' + b.total.toPrecision(5) + ' (stretch ' + b.stretch.toPrecision(3) + ', bend ' + b.bend.toPrecision(3) + ', contact ' + b.contact.toPrecision(3) + ')';
@@ -393,7 +398,7 @@ function infoText() {
       if (st.summary.dims) t += '\nrelaxed size against the built size: x ' + (100 * st.summary.dims.shrink_x).toFixed(1) + '%, y ' + (100 * st.summary.dims.shrink_y).toFixed(1) + '% (folding also shrinks these); thickness ' + st.summary.dims.z_range_over_R_start.toFixed(2) + ' R -> ' + st.summary.dims.z_range_over_R_end.toFixed(2) + ' R' + (st.summary.dims.rest_length_per_stitch != null ? '; rest length per stitch ' + st.summary.dims.rest_length_per_stitch.toPrecision(5) : '');
       if (st.state === 'settled' && st.summary.settled_by && st.summary.settled_by.startsWith('stalled')) t += '\nstopped early: ' + st.summary.settled_by;
       if (st.state === 'failed') t += '\nthe iteration limit was reached before the energy and rest lengths settled; the relaxed shape is the last iterate';
-    }
+    } catch (e) { t += '\n(the end summary holds missing or non-finite values: ' + e.message + ')'; }
   }
   if (st && st.log && (st.running || st.state === 'none' || st.state === 'interrupted' || st.state === 'failed')) t += '\n\n' + st.log;
   return t;
@@ -483,7 +488,9 @@ function setupSim() {
     $('#fCurl').value = 0; $('#fAniso').checked = false; $('#fRef').value = 1; $('#fTen').value = mm ? CFG.tension_cN : 0; $('#fTau').value = 0; $('#fHours').value = 0; $('#fTen').disabled = !mm;
     $('#fShell').checked = true; $('#fShellW').value = CFG.shell_w; $('#fShellTile').checked = false; $('#fTileRef').value = 0.5; $('#fKScale').value = 1; $('#fStretch').value = 1; $('#fSeedOnly').checked = false; $('#fStr').value = CFG.straight; $('#fShellF').checked = true; $('#fBend').value = 0.003; $('#fLenRatio').value = 1; $('#fRamp').value = CFG.ramp || 0; $('#fRampIt').value = CFG.ramp_iter || 200; $('#fSeedSt').value = CFG.seed_stitch || 0; $('#fStall').value = CFG.stall_tol || 0; $('#fFold').value = 0; $('#fFoldIt').value = 200; $('#fFoldD').value = 0; $('#fMacro').checked = false; $('#fWarpX').value = 0; $('#fWarpY').value = 0; $('#fEA').value = 0; $('#fEI').value = 0; $('#fLaw').value = '';
     $('#fGrade').value = 0; $('#fGradeT').value = 'both'; $('#fGradeS').value = 0.2;
+    $('#fSlipFL').value = 0; $('#fSlipD').value = 0; $('#fSlipDec').value = 0; $('#fDiag').checked = false;
     $('#fKc').value = CFG.kc_ratio; $('#fPert').value = CFG.perturb; $('#fOuter').value = CFG.outer; $('#fMax').value = CFG.maxiter;
+    DEF_BODY = getBody();          // the form defaults: a preset without a key resets that field to them, not to the previous preset's value (2026-11-26)
     applyBody(PRES._last, mm);
     $('#eNote').textContent = mm ? '' : 'R-unit result: no physical modulus.';
   }
@@ -504,10 +511,13 @@ const FLD = { E: ['#fE', 'n'], mu: ['#fMu', 'n'], kc_ratio: ['#fKc', 'n'], pertu
   tension_cN: ['#fTen', 'n'], creep_tau_h: ['#fTau', 'n'], hours: ['#fHours', 'n'], shell: ['#fShell', 'b'], shell_w: ['#fShellW', 'n'], shell_kappa: ['#fShellTile', 'k'], tile_ref: ['#fTileRef', 'n'],
   kappa_scale: ['#fKScale', 'n'], stretch_scale: ['#fStretch', 'n'], bend_scale: ['#fBend', 'n'], straight: ['#fStr', 'n'], shell_frame: ['#fShellF', 'b'], length_ratio: ['#fLenRatio', 'n'], seed_only: ['#fSeedOnly', 'b'],
   loop_grade: ['#fGrade', 'n'], loop_grade_target: ['#fGradeT', 's'], loop_grade_min_strength: ['#fGradeS', 'n'],
+  slip_friction_load: ['#fSlipFL', 'n'], slip_drive: ['#fSlipD', 'n'], slip_drive_decay: ['#fSlipDec', 'n'], diagnostics: ['#fDiag', 'b'],
   ramp: ['#fRamp', 'n'], ramp_iter: ['#fRampIt', 'n'], seed_stitch: ['#fSeedSt', 'n'], stall_tol: ['#fStall', 'n'], fold_search: ['#fFold', 'n'], fold_iter: ['#fFoldIt', 'n'], fold_delta: ['#fFoldD', 'n'], macro: ['#fMacro', 'b'], warp_kx: ['#fWarpX', 'n'], warp_ky: ['#fWarpY', 'n'], ea: ['#fEA', 'n'], ei: ['#fEI', 'n'], stretch_law: ['#fLaw', 's'] };
 function getBody() { const o = {}; for (const [k, [id, t]] of Object.entries(FLD)) o[k] = t === 'n' ? +$(id).value : t === 'b' ? $(id).checked : t === 's' ? $(id).value.trim() : ($(id).checked ? 'tile' : 'guess'); return o; }
+let DEF_BODY = null;
 function applyBody(b, mm) {
   if (!b) return;
+  b = Object.assign({}, DEF_BODY || {}, b);
   for (const [k, [id, t]] of Object.entries(FLD)) { if (!(k in b) || (!mm && (k === 'E' || k === 'tension_cN'))) continue; if (t === 'n') $(id).value = b[k]; else if (t === 'b') $(id).checked = !!b[k]; else if (t === 's') $(id).value = b[k]; else $(id).checked = b[k] === 'tile'; }
   updateSimButtons();
 }

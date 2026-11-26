@@ -46,6 +46,12 @@ def loop_sum(v, beta):
     a = cum_at(np.r_[0.0, np.cumsum(v)], beta)
     return a[1:] - a[:-1]
 
+def wale_spacing(meta):
+    """Wale spacing W of a build. The top-level meta['W'] (full precision) comes first: structure['W'] is rounded to 6 significant digits (build_knit.fnum), and with that rounding x / W of the
+    k-th loop boundary misses an integer by more than the 1e-6 tolerance of boundaries() for most WPI (all of 10..40 except 10, 16, 20, 25, 32 and 40 at 48 wales; checked 2026-11-25), so the exact rule
+    silently fell back to the x = k W crossing. Identical for WPI 16 (25.4/16 = 1.5875 exactly), so the fixtures and golden fingerprints do not change."""
+    return meta.get('W') or (meta.get('structure') or {}).get('W')
+
 def boundaries(P, W, ncol):
     """Fine-curve sample indices of the ncol + 1 loop boundaries of one course, from the build itself: build_knit.py builds every stitch from control points that start and end exactly on x = k W (16 per
     stitch) and the Catmull-Rom curve passes through its control points, so the samples with x / W an integer are the loop boundaries. None if that does not give ncol + 1 boundaries."""
@@ -152,7 +158,7 @@ def segment_overlaps(beta, nseg, ncol):
 def segment_field(sim, folder, meta, target='both', s_min=DEFAULT_MIN_STRENGTH):
     """The loop field mapped onto the solver's segments, WITHOUT changing anything: dict(T, lab, ns, info, G (per loop), Gs (per yarn: G per segment, overlap-weighted), secs (per yarn: section of each segment, the
     loop with the larger overlap), wts (per yarn: current l0), betas (per yarn: loop boundaries in segment units), ov (per yarn: segment x loop overlap fractions), nfall). Call right after relax_state.load()."""
-    st = meta.get('structure') or {}; W = st.get('W') or meta.get('W'); M = meta.get('matrix'); tiles = meta.get('tiles')
+    M = meta.get('matrix'); tiles = meta.get('tiles'); W = wale_spacing(meta)
     if not (W and M and tiles): raise ValueError('the starting loop grade needs the stitch matrix, tiles and W in meta.json (result built by an older pipeline)')
     T = tiled_matrix(M, tiles); nrow, ncol = T.shape
     G, lab, ns, info = loop_G(T, target, s_min)
@@ -178,7 +184,7 @@ def drive_field(f):
 
 def mean_loop_length(folder, meta):
     """Mean as-built yarn length per loop (mm in mm results), from the fine fab_axis.csv curve between the exact loop boundaries; None if the boundaries or the matrix are not available."""
-    st = meta.get('structure') or {}; W = st.get('W') or meta.get('W'); M = meta.get('matrix'); tiles = meta.get('tiles')
+    M = meta.get('matrix'); tiles = meta.get('tiles'); W = wale_spacing(meta)
     if not (W and M and tiles): return None
     ncol = len(M[0]) * int(tiles); A = np.loadtxt(os.path.join(folder, 'fab_axis.csv'), delimiter=',', skiprows=1); tot, n = 0.0, 0
     for c in np.unique(A[:, 0]):

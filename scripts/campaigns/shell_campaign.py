@@ -34,6 +34,8 @@ TERMINAL = ('done', 'failed', 'timeout', 'needs_approval', 'rejected')
 # ------------------------------------------------------------------ settings
 def matrix_from_text(text):
     """'1 1 2/2 2 1' (rows separated by /, digits 1 and 2, optional spaces; first row = bottom course) -> list of lists."""
+    bad = sorted(set(ch for ch in text if ch not in '12/ \t\r\n'))
+    if bad: raise ValueError('matrix text may hold only the digits 1 and 2, spaces and /; found %s' % ''.join(bad))          # was silently dropped (2026-11-26): '1 3/1 3' became [[1],[1]]
     rows = [[int(ch) for ch in r if ch in '12'] for r in text.strip().split('/')]
     return rows
 
@@ -64,7 +66,13 @@ def timeout_for(s, lim):
 
 # ------------------------------------------------------------------ small file tools
 def append_line(path, obj):
-    with open(path, 'a') as f: f.write(json.dumps(obj, sort_keys=True) + '\n'); f.flush(); os.fsync(f.fileno())
+    lead = ''
+    try:          # a line torn by a power cut has no newline: start on a new line, or the next record is glued to it and lost as well (2026-11-26)
+        with open(path, 'rb') as f:
+            f.seek(0, 2)
+            if f.tell() > 0: f.seek(-1, 2); lead = '' if f.read(1) == b'\n' else '\n'
+    except OSError: pass
+    with open(path, 'a') as f: f.write(lead +json.dumps(obj, sort_keys=True) + '\n'); f.flush(); os.fsync(f.fileno())
 
 def read_lines(path):
     out = []
@@ -268,7 +276,7 @@ class Camp:
     def write_results(s):
         rows = s.rows()
         if not rows: return
-        head = list(rows[0].keys()); tmp = s.results + '.tmp'
+        head = list(rows[0].keys()); tmp = '%s.tmp.%d' % (s.results, os.getpid())          # per-process name: the page's delete also rewrites results.csv (2026-11-26)
         with open(tmp, 'w', newline='') as f:
             w = csv.writer(f); w.writerow(head); [w.writerow(['' if r[k] is None else r[k] for k in head]) for r in rows]; f.flush(); os.fsync(f.fileno())
         os.replace(tmp, s.results)
@@ -285,6 +293,7 @@ class Camp:
         lim = s.limits(); rn = cm.rjson(s.runner, {}) or {}; last = s.index_last(); fin = s.finished_ids(); counts = dict(queued=0, running=0, done=0, failed=0, timeout=0, needs_approval=0, rejected=0)
         for q in s.queue_items():
             st = (last.get(q['id']) or {}).get('status', 'done' if q['id'] in fin else 'queued')
+            if st == 'approved': st = 'queued'          # shell-approve put it back in the queue
             if st == 'queued' and rn.get('current') == q['id'] and s.runner_alive(): st = 'running'
             counts[st] = counts.get(st, 0) + 1
         walls = [x.get('wall_s') for x in last.values() if x.get('status') == 'done' and isinstance(x.get('wall_s'), (int, float))]
@@ -367,7 +376,13 @@ def reconcile(c):
         wk = cm.rjson(os.path.join(d, 'worker.json'), {}) or {}
         try: alive = bool(wk.get('pid') and cm.alive(wk))
         except Exception: alive = False
-        if alive: return 'worker of %s is still running (pid %s)' % (rid, wk.get('pid'))
+        if alive:
+            try:          # a worker adopted from an earlier runner still gets its time limit (it had none, 2026-11-26)
+                tmo = timeout_for(normalise(cm.rjson(os.path.join(d, 'settings.json'), {}) or {}), c.limits())
+                if time.time() - float(wk.get('t_start') or time.time()) > tmo:
+                    cm.say('adopted worker of %s exceeded %.0f s: terminating its process group' % (rid, tmo)); os.killpg(int(wk['pid']), signal.SIGTERM)
+            except (ValueError, KeyError, TypeError, OSError, AttributeError): pass
+            return 'worker of %s is still running (pid %s)' % (rid, wk.get('pid'))
         if os.path.exists(os.path.join(c.runs, rid)): c.quarantine(d, rid, 'duplicate'); continue
         if os.path.exists(os.path.join(d, 'metrics.json')):                       # finished, the runner died before the rename
             try: wall = round(os.path.getmtime(os.path.join(d, 'metrics.json')) - float(wk.get('t_start') or 0), 1)
@@ -378,23 +393,23 @@ def reconcile(c):
     for rid in sorted(x for x in os.listdir(c.runs) if ID_RE.match(x)) if os.path.isdir(c.runs) else []:      # published but not indexed (cut between rename and index line)
         if rid not in c.index_last():
             st = cm.rjson(os.path.join(c.runs, rid, 'status.json'), {}) or {}; m = cm.rjson(os.path.join(c.runs, rid, 'metrics.json'), {}) or {}
-            append_line(c.index, dict(id=rid, status='done', t=cm.now(), metrics=m, wall_s=st.get('wall_s'), recovered=True)); c.write_results()
+            append_line(c.index, dict(id=rid, status='done', t=cm.now(), metrics=m, wall_s=st.get('wall_s'), recovered=True, code=st.get('code')))          # code = provenance, as on a normal publish (was missing, 2026-11-26); c.write_results()
     return ''
 
 def run_one(c, item, poll=1.0):
     rid = item['id']; s = item['settings']; lim = c.limits(); att = 1 + len(glob.glob(os.path.join(c.quar, rid + '.*'))) + len(glob.glob(os.path.join(c.tmp, rid + '.*')))
     tmp = os.path.join(c.tmp, '%s.%d' % (rid, att)); os.makedirs(tmp)
     sp = os.path.join(tmp, 'settings.json'); cm.wjson(sp, dict(s, fold_min_turn_rad=(c.spec_().get('thresholds') or {}).get('fold_min_turn_rad', 0.2)))
-    cmd = [sys.executable, '-u', os.path.join(HERE, 'shell_run.py'), '--settings', sp, '--out', tmp]; tmo = timeout_for(s, lim); t0 = time.time()
+    cmd = [sys.executable, '-u', os.path.join(HERE, 'shell_run.py'), '--settings', sp, '--out', tmp]; tmo = timeout_for(s, lim); t0 = time.time(); m0 = time.monotonic()          # elapsed time on the monotonic clock: a clock step after a power cut must not kill or spare a run (2026-11-26)
     log = open(os.path.join(tmp, 'shell.log'), 'a')
     kw = dict(start_new_session=True, preexec_fn=lambda: signal.signal(signal.SIGHUP, signal.SIG_IGN)) if os.name == 'posix' else {}      # own session and SIGHUP ignored, like the runner
     p = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, cwd=HERE, close_fds=True, env=dict(os.environ, PYTHONDONTWRITEBYTECODE='1'), **kw)      # no .pyc written next to the frozen code
     pi = cm.proc_info(p.pid); cm.wjson(os.path.join(tmp, 'worker.json'), dict(pid=p.pid, boot_id=cm.boot_id(), start_ticks=pi[0] if pi else '', t_start=t0))
     c.set_runner(state='running', current=rid, timeout_s=round(tmo), worker_pid=p.pid); cm.say('run %s started (pid %d, timeout %.0f s)' % (rid, p.pid, tmo)); killed = False
     while p.poll() is None:
-        if time.time() - t0 > tmo: killed = True; cm.say('run %s exceeded %.0f s: terminating its own process group' % (rid, tmo)); kill_group(p); p.wait(); break
+        if time.monotonic() - m0 > tmo: killed = True; cm.say('run %s exceeded %.0f s: terminating its own process group' % (rid, tmo)); kill_group(p); p.wait(); break
         time.sleep(poll)
-    log.close(); wall = round(time.time() - t0, 1)
+    log.close(); wall = round(time.monotonic() - m0, 1)
     if killed: c.fail(tmp, rid, 'timeout', 'timeout after %.0f s (limit %.0f s, UNSOURCED rule)' % (wall, tmo), wall)
     elif p.returncode == 0 and os.path.exists(os.path.join(tmp, 'metrics.json')): c.publish(tmp, rid, dict(wall_s=wall, attempt=att)); cm.say('run %s done in %.0f s' % (rid, wall))
     else: c.fail(tmp, rid, 'failed', 'exit %s: %s' % (p.returncode, last_line(os.path.join(tmp, 'shell.log')) or 'no output'), wall); cm.say('run %s failed (exit %s)' % (rid, p.returncode))
@@ -503,6 +518,7 @@ def cli(cmd, argv):
     if cmd == 'shell-enqueue': ap.add_argument('file', help='JSON file: one settings object or a list of them')
     if cmd == 'shell-run': ap.add_argument('--detach', action='store_true'); ap.add_argument('--poll-s', type=float, default=5.0); ap.add_argument('--stop-when-empty', action='store_true'); ap.add_argument('--allow-unfrozen', action='store_true', help='run a campaign that has no code/ folder from the live scripts (not recommended)')
     if cmd == 'shell-control': ap.add_argument('state', choices=['run', 'pause', 'stop'])
+    if cmd == 'shell-approve': ap.add_argument('run_id', help='a run marked needs_approval or timeout'); ap.add_argument('--why', default='approved by K on the command line')
     a = ap.parse_args(argv)
     if FROZEN and cmd in ('shell-run', 'shell-plan', 'shell-freeze') and os.path.basename(os.path.dirname(HERE)) != a.name: sys.exit('this is the frozen copy of campaign %s; it refuses to run campaign %s' % (os.path.basename(os.path.dirname(HERE)), a.name))
     if cmd == 'shell-plan':
@@ -521,7 +537,11 @@ def cli(cmd, argv):
     c = Camp(a.name)
     if not c.exists(): sys.exit('no such shell campaign: %s' % a.name)
     if cmd == 'shell-enqueue':
-        j = json.load(open(a.file)); ids = [c.enqueue(x, source='file') for x in (j if isinstance(j, list) else [j])]; print('queued: %s' % ids)
+        j = json.load(open(a.file)); ids = [c.enqueue(x, source='file', tier=4) for x in (j if isinstance(j, list) else [j])]; print('queued: %s' % ids)          # tier 4 (2026-11-26): ahead of the proposer and the filler, and never counted as a proposer run (tier 5)
+    elif cmd == 'shell-approve':          # a needs_approval / timeout run goes back to the queue: pending() reads only the last index line, and 'approved' is not terminal (works for a frozen runner too)
+        x = c.index_last().get(a.run_id)
+        if not x or x.get('status') not in ('needs_approval', 'timeout'): sys.exit('%s is not marked needs_approval or timeout (status %s)' % (a.run_id, (x or {}).get('status')))
+        append_line(c.index, dict(id=a.run_id, status='approved', t=cm.now(), reason=a.why)); c.write_results(); print('%s approved: it goes back to the queue (one more attempt per approval)' % a.run_id)
     elif cmd == 'shell-control': c.set_control(a.state, why='command line'); print('control = %s' % a.state)
     elif cmd == 'shell-status': print(json.dumps(c.status(), indent=1))
     elif cmd == 'shell-freeze': c.freeze(); print('frozen copy written: %s (MANIFEST.json holds the git commit and the file hashes)' % c.code_dir())
