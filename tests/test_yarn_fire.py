@@ -52,5 +52,16 @@ w = np.linalg.eigvalsh(0.5*(H + H.T)); scale = np.abs(w).max()
 neg = w[w < -1e-8*scale]
 check('(4) no negative curvature beyond the rigid modes at the FIRE minimum', len(neg) == 0, 'lowest %s (scale %.2e)' % (np.round(w[:6]/scale, 9).tolist(), scale))
 
+# (5) contact: yarn B starts overlapping yarn A (axis distance 0.15 < 2R = 0.2); both minimisers must separate them to about 2R and agree; FIRE with frequent contact-list rebuilds too
+def overlap_sim():
+    sim = make_sim(1); n = len(sim.yarns[1].X); rng = np.random.default_rng(7)          # B crosses A at a vertex of both (contact is vertex-vertex; real meshes have vertex spacing below 2R)
+    sim.yarns[1].X = np.c_[np.full(n, 5.0), np.arange(n) - 5.0, np.full(n, 0.15)] + 0.005*rng.standard_normal((n, 3)); sim.yarns[1].l0 = np.full(n - 1, 1.0)
+    sim.yarns[0].X = np.c_[np.arange(n)*1.0, np.zeros(n), np.zeros(n)] + 0.005*rng.standard_normal((n, 3)); sim.yarns[0].l0 = np.full(n - 1, 1.0); return sim
+o0 = overlap_sim(); d0 = sv.min_axis_distance(o0)
+o_l, _ = run(copy.deepcopy(o0), 'lbfgs'); o_f, _ = run(copy.deepcopy(o0), 'fire'); keep = sv.FIRE_REBUILD; sv.FIRE_REBUILD = 200; o_r, _ = run(copy.deepcopy(o0), 'fire'); sv.FIRE_REBUILD = keep
+dl, df, dr = (sv.min_axis_distance(x) for x in (o_l, o_f, o_r)); el, ef, er = (parts_and_grad(x)[0]['total'] for x in (o_l, o_f, o_r)); st0 = parts_and_grad(o0)[0]['total']
+print('overlap start: axis distance %.4f, energy %.6g | L-BFGS d %.4f E %.6g | FIRE d %.4f E %.6g | FIRE rebuild 200: d %.4f E %.6g' % (d0, st0, dl, el, df, ef, dr, er))
+check('(5) contact separates the yarns (FIRE, both rebuild settings): axis distance within 2 %% of 2R', df > 0.98*2*0.1 and dr > 0.98*2*0.1, (df, dr))
+check('(5) FIRE agrees with L-BFGS on the contact case (energy, 1e-6 of the start energy)', abs(ef - el) < 1e-6*st0 and abs(er - el) < 1e-6*st0, (el, ef, er))
 sv.SOLVER = 'lbfgs'
 print('ALL OK' if not fails else 'FAILED: %s' % fails); sys.exit(1 if fails else 0)

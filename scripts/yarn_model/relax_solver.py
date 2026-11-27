@@ -84,6 +84,7 @@ def set_law(law):
     global LAW, _vg
     global _vgm
     LAW = law; _vg = jax.jit(jax.value_and_grad(_energy)); _vgm = jax.jit(jax.value_and_grad(_energy_macro))
+    _FIRE.clear()          # the FIRE functions trace _vg: rebuild them with the new law (review 2026-11-27)
 
 def pack(sim):
     off = np.r_[0, np.cumsum([len(y.X) for y in sim.yarns])]; seg, tri, l0, lbar = [], [], [], []
@@ -151,6 +152,7 @@ def energy_parts(sim, kc, E):
 SOLVER = 'lbfgs'          # 'lbfgs' (default) or 'fire'
 FIRE_CHUNK = 200          # steps per jitted call (UNSOURCED numerical choice)
 FIRE_MAXIT = 20000         # step cap per relaxation round (UNSOURCED)
+FIRE_REBUILD = 1000        # FIRE steps between rebuilds of the contact pair list (UNSOURCED; review 2026-11-27: one list for a whole 20000-step solve let yarns pass through each other)
 FIRE_GTOL_REL = 1e-6      # converged when max |grad| < FIRE_GTOL_REL x EA (dimensionless strain 1e-6; UNSOURCED)
 _FIRE = {}
 
@@ -203,15 +205,22 @@ def relax(sim, E, kc, maxiter=300, rounds=4, verbose=False):
             f = lambda v: tuple(np.asarray(t, float) for t in _vgm(v, c, sc, *args)); res = minimize(f, np.r_[np.zeros(3), x0], jac=True, method='L-BFGS-B', options=dict(maxiter=maxiter, maxcor=30, ftol=1e-13, gtol=1e-9))
             k3 = res.x[:3]*sc; X = np.asarray(_warp(k3, res.x[3:].reshape(-1, 3), c), float); sim.macro_k = getattr(sim, 'macro_k', np.zeros(3)) + k3
         else:
-            if SOLVER == 'fire':
-                xf, Ef, gmax, steps, conv = fire_min(x0, args, maxit=FIRE_MAXIT)          # FIRE needs thousands of steps; the L-BFGS maxiter does not apply
-                res = type('R', (), dict(x=xf, fun=Ef, nit=steps, message=('FIRE converged' if conv else 'FIRE step cap'), gmax=gmax))(); X = xf.reshape(-1, 3)
+            if SOLVER == 'fire':          # FIRE needs thousands of steps (the L-BFGS maxiter does not apply); the contact list is rebuilt every FIRE_REBUILD steps
+                xf, done, conv, gtol = x0, 0, False, FIRE_GTOL_REL*max(EA, 1e-30)
+                while done < FIRE_MAXIT:
+                    xf, Ef, gmax, steps, conv = fire_min(xf, args, maxit=min(FIRE_REBUILD, FIRE_MAXIT - done), gtol=gtol); done += steps
+                    for y, o in zip(sim.yarns, off): y.X = xf.reshape(-1, 3)[o:o+len(y.X)].copy()
+                    pairs, pm, npair = near_pairs(sim, off); args = (l0, seg, tri, lbar, kb0, pairs, pm, EA, EI, kc, 2*sim.R, *sa)
+                    gmax = float(np.abs(np.asarray(_fire_fns()['gfun'](jnp.asarray(xf), *(jnp.asarray(a) for a in args)))).max()); Ef = float(_vg(xf, *args)[0])
+                    if gmax < gtol: conv = True; break          # converged WITH the rebuilt contact list
+                    conv = False
+                res = type('R', (), dict(x=xf, fun=Ef, nit=done, message=('FIRE converged' if conv else 'FIRE step cap'), gmax=gmax, conv=conv))(); X = xf.reshape(-1, 3)
             else:
                 f = lambda x: tuple(np.asarray(v, float) for v in _vg(x, *args))
                 res = minimize(f, x0, jac=True, method='L-BFGS-B', options=dict(maxiter=maxiter, maxcor=30, ftol=1e-13, gtol=1e-9)); X = res.x.reshape(-1, 3)
         for y, o in zip(sim.yarns, off): y.X = X[o:o+len(y.X)].copy()
         if verbose: print('   relax round %d: %d pairs, E %.6g, %d its, %s' % (r+1, npair, res.fun, res.nit, res.message if isinstance(res.message, str) else res.message.decode()) + ('' if not MACRO else '   macro bend kx %+.4g ky %+.4g twist %+.4g (added this round)' % tuple(k3)), flush=True)
-        if res.nit < maxiter and (SOLVER != 'fire' or getattr(res, 'gmax', 0) < FIRE_GTOL_REL*max(EA, 1e-30)): break
+        if (getattr(res, 'conv', False) if (SOLVER == 'fire' and not MACRO) else res.nit < maxiter): break          # FIRE: stop when converged (review 2026-11-27); L-BFGS: as before
 
 def min_axis_distance(sim, skip=6):
     P = np.vstack([y.X for y in sim.yarns]); yid = np.concatenate([[k]*len(y.X) for k, y in enumerate(sim.yarns)]); ix = np.concatenate([np.arange(len(y.X)) for y in sim.yarns])
