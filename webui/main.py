@@ -215,6 +215,9 @@ class SimBody(BaseModel):
     ref_scale: float = Field(0.0, ge=0, le=1, description="stress-free curvature = ref_scale x baseline loop curvature")
     tension_cN: float = Field(0.0, ge=0, le=200)
     creep_tau_h: float = Field(0.0, ge=0)
+    device: str = Field("cpu", pattern="^(cpu|gpu)$", description="cpu = SciPy L-BFGS (the default, faster on CPU); gpu = FIRE on the JAX device (2026-11-27). This machine has no GPU: gpu is refused here")
+    where: str = Field("server", pattern="^(server|workstation|kaggle)$", description="where the run executes; only server is built (workstation and kaggle yarn runs are not built yet)")
+    tpi: float = Field(0.0, ge=0, le=50, description="twists per inch: RECORDED ONLY, no effect on the physics yet (the yarn model has no torque term)")
     hours: float = Field(0.0, ge=0)
     shell: bool = False
     shell_kappa: str = Field('guess', pattern='^(guess|tile)$', description='shell curvature: fixed guess (Niu et al.) or from the periodic yarn tile')
@@ -272,11 +275,13 @@ def _law_points(s):
     return p
 
 def _sim_cmd(d, b, R):
+    if b.where != "server": raise HTTPException(422, "where = %s is not built yet: yarn runs execute on the server only" % b.where)
+    if b.device == "gpu": raise HTTPException(422, "no GPU on this machine (JAX sees the CPU only): choose cpu, or run gpu on Kaggle once that path is built")
     EA_in = b.ea or (_law_points(b.stretch_law)[0][1]/_law_points(b.stretch_law)[0][0] if b.stretch_law else None)
     kc = b.kc_ratio * (EA_in if EA_in else b.E * math.pi * R**2) / R          # kc = ratio * EA / R; EA = E pi R^2 unless EA or a stretch law is entered (then the entered EA)
     cmd = [sys.executable, str(SCRIPTS / "yarn_model" / "relax_job.py"), "--folder", str(d), "--E", repr(b.E), "--mu", repr(b.mu),
            "--k-contact", repr(kc), "--perturb", repr(b.perturb), "--outer", str(b.outer), "--maxiter", str(b.maxiter),
-           "--curl", repr(b.curl), "--tension", repr(b.tension_cN), "--creep-tau", repr(b.creep_tau_h), "--hours", repr(b.hours)] + (["--curl-aniso"] if b.curl_aniso else []) + ["--ref-scale", repr(b.ref_scale)]
+           "--curl", repr(b.curl), "--tension", repr(b.tension_cN), "--creep-tau", repr(b.creep_tau_h), "--hours", repr(b.hours), "--solver", "lbfgs"] + (["--curl-aniso"] if b.curl_aniso else []) + ["--ref-scale", repr(b.ref_scale)]
     if b.shell:
         cmd += ["--shell", "--shell-w", repr(b.shell_w), "--shell-kappa", b.shell_kappa, "--kappa-scale", repr(b.kappa_scale), "--tile-ref", repr(b.tile_ref)]
         if b.seed_only: cmd += ["--seed-only"]
