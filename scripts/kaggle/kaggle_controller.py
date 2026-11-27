@@ -125,7 +125,7 @@ s.worker(slot['name']), len(chosen), budget + cf['lease_margin_s'], 'kaggle %s' 
     def tick(s):
         cf = s.config(); st = s.state(); slots = {x['name']: x for x in cf['slots']}
         if not s.user: say('no KAGGLE_USERNAME in .env'); return
-        if cf.get('enabled') and not s.ensure_dataset(): return
+        ds_ok = (not cf.get('enabled')) or s.ensure_dataset()          # a Kaggle outage must not stop finishing and importing sessions (bug found 2026-11-27): only new pushes wait
         aw = st.setdefault('_awaiting', {})          # finished on Kaggle, output not downloaded yet (server internet down; the workstation fetches it): leases renewed, download retried every 30 min
         for slug, ent in list(aw.items()):
             name = ent.get('slot') or slug.split('-')[2]
@@ -152,7 +152,7 @@ s.worker(slot['name']), len(chosen), budget + cf['lease_margin_s'], 'kaggle %s' 
                 elif 'complete' in low: s.log(event='session_hours', slot=name, slug=ent['slug'], session_h=round((time.time() - ent['t_push']) / 3600, 2), gpu=ent.get('gpu'))
                 elif not (done or old) or not s.finish(name, ent, cf, 'error/cancel' if done else 'too old'): continue
                 ent = dict(status='idle', last=ent['slug'], t_last=cm.now()); st[name] = ent; s.save(st)          # finished: the same tick may start the next batch
-            if cf.get('enabled') and s.c.get_control() != 'stop' and not slot.get('retire'):          # retire: finish and import, no new session (K 2026-11-27: Kaggle GPU only)
+            if ds_ok and cf.get('enabled') and s.c.get_control() != 'stop' and not slot.get('retire'):          # retire: finish and import, no new session (K 2026-11-27: Kaggle GPU only)
                 new = s.start(slot, cf)
                 if new: st[name] = new; s.save(st)
         st['_tick'] = cm.now(); s.save(st)

@@ -140,7 +140,8 @@ def proposer_runs_created(camp):
 
 def gate(camp):
     """State of the proposer gate and the hard cap. 'open' is True only if the gate is open AND the cap leaves room; 'room' = proposals that may still be created."""
-    lo = PROPOSER_MIN_ORIGINALS_FINISHED; cap = PROPOSER_MAX_TOTAL
+    ov = (camp.spec_().get('proposer') or {}) if hasattr(camp, 'spec_') else {}          # per-campaign values (K 2026-11-27: shell2 gate 1000 originals, cap 300); absent = the defaults above
+    lo = int(ov.get('min_originals_finished', PROPOSER_MIN_ORIGINALS_FINISHED)); cap = int(ov.get('max_total', PROPOSER_MAX_TOTAL))
     n = originals_finished(camp); p = proposer_runs_created(camp); out = dict(originals_finished=n, min_originals_finished=lo, proposer_runs=p, max_total=cap, open=False, room=0)
     if n is None or p is None: out.update(status='gate closed (count unreadable)', note='the finished count could not be read: fail safe, nothing is proposed'); return out
     if n < lo: out.update(status='gate closed', note='%d original runs finished, the proposer starts at %d' % (n, lo)); return out
