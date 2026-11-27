@@ -43,7 +43,8 @@ class Ctl:
         rc, o = kc.run(['datasets', 'status', '%s/%s' % (s.user, s.ds)])
         if rc == 0 and 'ready' in o.lower(): return True
         dd = os.path.join(s.d, 'dataset'); os.makedirs(dd, exist_ok=True)
-        for f in os.listdir(s.c.code_dir()): shutil.copy2(os.path.join(s.c.code_dir(), f), os.path.join(dd, f))
+        man = s.c.manifest() or {}
+        for f in list((man.get('files') or {}).keys()) + ['MANIFEST.json']: shutil.copy2(os.path.join(s.c.code_dir(), f), os.path.join(dd, f))          # only the frozen files (the folder may also hold __pycache__)
         json.dump(dict(title=s.ds, id='%s/%s' % (s.user, s.ds), licenses=[dict(name='CC0-1.0')]), open(os.path.join(dd, 'dataset-metadata.json'), 'w'))
         rc, o = kc.run(['datasets', 'create', '-p', dd, '-q'], timeout=900); say('dataset create:', rc, o.strip()[-200:]); return False          # ready at a later poll
 
@@ -129,7 +130,11 @@ def main():
         try: fcntl.flock(lk, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError: sys.exit('another kaggle controller already runs for %s' % g.campaign)
         pi = cm.proc_info(os.getpid()); info = dict(pid=os.getpid(), boot_id=cm.boot_id(), start_ticks=pi[0] if pi else '', started=cm.now(), poll_s=g.poll_s)
+    watch = [os.path.abspath(__file__), os.path.join(HERE, 'kaggle_cli.py'), os.path.join(HERE, 'worker_kernel.py'), sc.__file__]
+    mt = {f: os.path.getmtime(f) for f in watch if os.path.exists(f)}
     while True:
+        if not g.once and any(os.path.exists(f) and os.path.getmtime(f) != t for f, t in mt.items()):          # a git pull changed the code: restart in place (the lock fd is close-on-exec, so it is released)
+            say('code changed on disk: restarting the controller with the new code'); os.execv(sys.executable, [sys.executable, '-u', os.path.abspath(__file__)] + sys.argv[1:])
         if not g.once: cm.wjson(os.path.join(c.d, 'controller.json'), dict(info, t=cm.now(), t_epoch=time.time()))
         try: c.tick()
         except Exception as e: say('tick error (retried next poll):', repr(e))
