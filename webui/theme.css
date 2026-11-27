@@ -15,6 +15,7 @@
   /* charts: restrained palette readable on the dark grey */
   --chart-1: #8ab4f8; --chart-2: #d9a45b; --chart-3: #e0786f; --chart-4: #9a9a94; --chart-5: #8fd0b0; --chart-6: #c3a2e6; --chart-7: #e6d58a; --chart-8: #7fc6d9;
   --chart-line: #7f9fd6; --chart-grid: #3d3d39; --chart-axis: #8a8a84; --chart-text: #c4c4be;
+  --w-server: #2e9e5b; --w-kaggle: #e0832f; --w-workstation: #3b7ddd; --w-failed: #c0392b;          /* workers (K 2026-11-26): server green, Kaggle orange, workstation blue; failed red */
   /* size and spacing */
   --radius: 8px; --radius-s: 6px; --pad: 16px; --gap: 16px; --btn-h: 36px; --ctl-h: 32px;
   --fs: 16px; --fs-sm: 14px; --fs-xs: 13px;
@@ -191,3 +192,17 @@ details.box > summary { cursor: pointer; font-weight: 600; }
   .topbar { gap: 8px 18px; }
   .topbar h1 { flex-basis: 100%; }
 }
+
+/* ---- workers of a shell campaign (2026-11-27): boxes on /shell, row colours, home page cards (/campaigns) */
+.workers { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; margin: 10px 0; }
+.wbox { border: 1px solid var(--line-strong); border-left: 6px solid var(--line-strong); border-radius: var(--radius-s); padding: 8px 10px; background: var(--card); }
+.wbox h3 { margin: 0 0 4px; font-size: var(--fs-sm); } .wbox .small { line-height: 1.5; }
+.wbox.server { border-left-color: var(--w-server); } .wbox.server h3 { color: var(--w-server); } .wbox.kaggle { border-left-color: var(--w-kaggle); } .wbox.kaggle h3 { color: var(--w-kaggle); } .wbox.workstation { border-left-color: var(--w-workstation); } .wbox.workstation h3 { color: var(--w-workstation); }
+.num5 { width: 5em; }
+tbody tr.w-server td:first-child { box-shadow: inset 5px 0 0 var(--w-server); } tbody tr.w-kaggle td:first-child { box-shadow: inset 5px 0 0 var(--w-kaggle); } tbody tr.w-workstation td:first-child { box-shadow: inset 5px 0 0 var(--w-workstation); }
+tbody tr.w-server { background: color-mix(in srgb, var(--w-server) 9%, transparent); } tbody tr.w-kaggle { background: color-mix(in srgb, var(--w-kaggle) 11%, transparent); } tbody tr.w-workstation { background: color-mix(in srgb, var(--w-workstation) 10%, transparent); }
+.cgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: var(--gap); }
+.wbar { display: flex; height: 10px; border-radius: 5px; overflow: hidden; background: var(--line); margin: 8px 0 6px; } .wbar span { display: block; height: 100%; }
+.b-server { background: var(--w-server); } .b-kaggle { background: var(--w-kaggle); } .b-workstation { background: var(--w-workstation); } .b-failed { background: var(--w-failed); }
+.wleg { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: var(--fs-sm); color: var(--mut); } .wleg i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
+.bignum { font-size: 22px; font-weight: 600; }

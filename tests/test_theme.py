@@ -11,7 +11,7 @@ def check(name, ok, info=''):
     print('%s  %s %s' % ('PASS' if ok else 'FAIL', name, info)); ok or bad.append(name)
 read = lambda f: open(os.path.join(W, f), encoding='utf8').read()
 css = read('theme.css'); kit = read('chartkit.js')
-PAGES = {f: read(f) for f in ('campaigns.html', 'campaigns.js', 'shell.html', 'shell.js', 'shellview.html', 'shellview.js')}
+PAGES = {f: read(('legacy/' if f.startswith('campaigns') else '') + f) for f in ('campaigns.html', 'campaigns.js', 'shell.html', 'shell.js', 'shellview.html', 'shellview.js')}
 root = re.search(r':root\s*\{(.*?)\n\}', css, re.S).group(1); defined = set(re.findall(r'(--[a-z0-9-]+)\s*:', root))
 var = lambda name: re.search(r'%s:\s*([^;]+);' % re.escape(name), root).group(1).strip()
 rgb = lambda h: tuple(int(h[i:i + 2], 16) for i in (1, 3, 5))
@@ -73,6 +73,6 @@ try:
     app = FastAPI(); ca.setup(app, lambda: False); cl = TestClient(app)
     for u, ct in (('/theme.css', 'text/css'), ('/chartkit.js', 'javascript')):
         r = cl.get(u); check('%s is served (%s)' % (u, ct), r.status_code == 200 and ct in r.headers['content-type'] and len(r.text) > 500)
-    check('the pages link the stylesheet and load chartkit.js before their own script', all('href="/theme.css"' in cl.get(p).text for p in ('/campaigns', '/shell', '/shellview')) and all('src="/chartkit.js"' in cl.get(p).text and cl.get(p).text.index('/chartkit.js') < cl.get(p).text.index(s) for p, s in (('/campaigns', '/campaigns.js'), ('/shell', '/shell.js'))))
+    check('the pages link the stylesheet and load chartkit.js before their own script', all('href="/theme.css"' in cl.get(p).text for p in ('/campaigns', '/legacy/campaigns', '/shell', '/shellview')) and all('src="/chartkit.js"' in cl.get(p).text and cl.get(p).text.index('/chartkit.js') < cl.get(p).text.index(s) for p, s in (('/legacy/campaigns', '/legacy/campaigns.js'), ('/shell', '/shell.js'))))
 except ImportError: print('SKIP  fastapi not installed: route test skipped')
 print('\n' + ('ALL OK' if not bad else 'FAILURES: ' + ', '.join(bad))); sys.exit(1 if bad else 0)

@@ -13,7 +13,7 @@ function fmt(v, k) {
   return String(v);
 }
 function dur(s) { if (s == null) return ""; s = Math.round(s); const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60); return h ? h + " h " + m + " min" : m ? m + " min" : s + " s"; }
-let cur = null, data = null, busy = false, sortKey = "run", sortDir = 1, openRun = null; const sel = new Set();
+let cur = new URLSearchParams(location.search).get("c"), data = null, busy = false, sortKey = "run", sortDir = 1, openRun = null; const sel = new Set();
 const COLS = ["status", "worker", "source", "label", "tiles", "cpi", "wpi", "ratio", "stitch_density", "tf_rel", "tf_c_rel", "tf_w_rel", "matrix", "knit_fraction", "plan_x", "plan_y", "thickness", "shrink_x", "shrink_y", "wave_k", "wave_amp_median_mm", "mid_over_end", "steps_at_cap", "score", "wall_s", "git_commit"];
 const NUM = ["tiles", "cpi", "wpi", "ratio", "stitch_density", "tf_rel", "tf_c_rel", "tf_w_rel", "knit_fraction", "plan_x", "plan_y", "thickness", "shrink_x", "shrink_y", "fold_kx_per_mm", "fold_ky_per_mm", "wave_k", "wave_amp_median_mm", "mid_over_end", "steps_at_cap", "iterations_total", "wall_s", "solver_seconds", "tier", "score"];
 const TEXTCOL = ["run", "label", "source", "status", "matrix", "git_commit"];
@@ -223,7 +223,7 @@ async function workers() {
   const seen = ws.agent_seen_s_ago == null ? "agent never seen" : ws.agent_seen_s_ago < 180 ? "agent online" : "agent last seen " + dur(ws.agent_seen_s_ago) + " ago";
   const wk = "<div class=\"wbox workstation\"><h3>Workstation</h3><div class=\"small\">" + (ws.enabled ? "allowed: " + ws.allowance_left + " of " + ws.n + " run(s) left" : "not allowed") + ", " + esc(seen) +
     (ws.agent_current ? "<br>running " + esc(ws.agent_current) : "") + "<br>runs there now " + ws.leased + ", finished there " + ws.done + "</div>" +
-    "<div class=\"btnrow\"><label>runs <input id=\"wsN\" type=\"number\" min=\"1\" max=\"2000\" value=\"" + (ws.n || 5) + "\" style=\"width:5em\"></label><button id=\"bWsOk\">Allow</button><button id=\"bWsNo\"" + (ws.enabled ? "" : " disabled") + ">Cancel</button></div>" +
+    "<div class=\"btnrow\"><label>runs <input id=\"wsN\" type=\"number\" min=\"1\" max=\"2000\" value=\"" + (ws.n || 5) + "\" class=\"num5\"></label><button id=\"bWsOk\">Allow</button><button id=\"bWsNo\"" + (ws.enabled ? "" : " disabled") + ">Cancel</button></div>" +
     "<div class=\"btnrow\"><label>specific runs (optional) <input id=\"wsIds\" placeholder=\"S000123 S000124\" value=\"" + esc((ws.ids || []).join(" ")) + "\"></label></div>" +
     "<div class=\"small mut\">" + esc(ws.note) + ". Cancel stops its run; the run goes back to the server and Kaggle.</div></div>";
   box.innerHTML = sv + kg + wk;

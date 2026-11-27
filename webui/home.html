@@ -1,0 +1,39 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Campaigns</title>
+<link rel="stylesheet" href="/theme.css">
+</head><body>
+<header class="topbar"><h1>Campaigns <span class="mut">home</span></h1><a href="/shell">Pure shell runs</a><a href="/">Simulator and 3D viewer</a><a href="/legacy/campaigns">Older yarn campaigns</a></header>
+<main class="stack page">
+<div id="msg" class="small mut"></div>
+<div id="grid" class="cgrid"></div>
+<p class="small mut">Colours: green server, orange Kaggle, blue workstation (the worker that finished the runs); red failed. A campaign opens on its own page with its runs, 3D viewer, rules and analysis.</p>
+</main>
+<script>
+const $ = s => document.querySelector(s);
+const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+async function get(p) { const r = await fetch(p); if (!r.ok) throw new Error(p + ": HTTP " + r.status); return r.json(); }
+function card(c, w) {
+  const n = c.counts || {}, total = Object.values(n).reduce((a, b) => a + (b || 0), 0) || 1, by = { server: (w && w.server.done) || 0, kaggle: (w && w.kaggle.done) || 0, workstation: (w && w.workstation.done) || 0 };
+  const seg = (k, v) => v ? '<span class="b-' + k + '" style="width:' + (100 * v / total).toFixed(2) + '%" title="' + k + " " + v + '"></span>' : "";
+  const pct = (100 * (n.done || 0) / total).toFixed(1);
+  const kag = w ? (w.kaggle.enabled ? "Kaggle on (" + Object.values(w.kaggle.slots || {}).filter(s => s.status === "running").length + " session(s) running)" : "Kaggle off") : "";
+  const srv = w ? (w.server.runner_alive ? "server runner " + esc(w.server.state || "alive") : "no server runner") : "";
+  const ws = w ? (w.workstation.enabled ? "workstation allowed (" + w.workstation.allowance_left + " left)" : "workstation off") : "";
+  return '<section class="card"><div class="card-h"><span class="card-t">' + esc(c.name) + '</span><a class="open" href="/shell?c=' + encodeURIComponent(c.name) + '">Open</a></div>' +
+    '<div class="bignum">' + (n.done || 0) + ' <span class="small mut">of ' + total + ' runs done (' + pct + ' %)</span></div>' +
+    '<div class="wbar">' + seg("server", by.server) + seg("kaggle", by.kaggle) + seg("workstation", by.workstation) + seg("failed", (n.failed || 0) + (n.timeout || 0)) + "</div>" +
+    '<div class="wleg"><span><i class="b-server"></i>server ' + by.server + '</span><span><i class="b-kaggle"></i>Kaggle ' + by.kaggle + '</span><span><i class="b-workstation"></i>workstation ' + by.workstation +
+    '</span><span><i class="b-failed"></i>failed ' + ((n.failed || 0) + (n.timeout || 0)) + "</span><span>queued " + (n.queued || 0) + "</span></div>" +
+    '<div class="small mut" style="margin-top:8px">control ' + esc(c.control) + (srv ? " | " + srv : "") + (kag ? " | " + kag : "") + (ws ? " | " + ws : "") + "</div></section>";
+}
+async function load() {
+  try {
+    const j = await get("/api/shell"); if (!j.campaigns.length) { $("#grid").innerHTML = '<div class="mut">No campaigns yet.</div>'; return; }
+    const ws = await Promise.all(j.campaigns.map(c => get("/api/shell/" + encodeURIComponent(c.name) + "/workers").catch(() => null)));
+    $("#grid").innerHTML = j.campaigns.map((c, i) => card(c, ws[i])).join(""); $("#msg").textContent = "updated " + new Date().toLocaleTimeString();
+  } catch (e) { $("#msg").textContent = e.message; }
+}
+load(); setInterval(load, 30000);
+</script>
+</body></html>

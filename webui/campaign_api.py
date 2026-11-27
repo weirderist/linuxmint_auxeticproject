@@ -613,11 +613,17 @@ def campaign_help():
 # ------------------------------------------------------------------ the page (re-read each time, like index.html: editing needs no restart)
 @router.get("/campaigns", response_class=HTMLResponse)
 def page():
-    return (HERE / "campaigns.html").read_text(encoding="utf8")
+    """Home page of the campaigns (2026-11-27, K): shell1, shell2 and later Kaggle campaigns. The older yarn campaign page (fidelity, screen1, ...) moved to webui/legacy/ and is served at /legacy/campaigns."""
+    return (HERE / "home.html").read_text(encoding="utf8")
 
+@router.get("/legacy/campaigns", response_class=HTMLResponse)
+def legacy_page():
+    return (HERE / "legacy" / "campaigns.html").read_text(encoding="utf8")
+
+@router.get("/legacy/campaigns.js")
 @router.get("/campaigns.js")
 def page_js():
-    return Response((HERE / "campaigns.js").read_text(encoding="utf8"), media_type="application/javascript")
+    return Response((HERE / "legacy" / "campaigns.js").read_text(encoding="utf8"), media_type="application/javascript")
 
 @router.get("/chartkit.js")
 def page_chartkit():

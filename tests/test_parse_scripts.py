@@ -10,7 +10,7 @@ def parse(body, typ, label):
         else: esprima.parseScript(body)
         print("OK   ", label, "(%d chars)" % len(body))
     except Exception as e: bad += 1; print("ERROR", label, "->", str(e)[:200])
-for f in ("index.html", "campaigns.html", "strain.html", "run.html"):
+for f in ("index.html", "home.html", "legacy/campaigns.html", "strain.html", "run.html", "shell.html"):
     t = (W / f).read_text(encoding="utf8")
     blocks = list(re.finditer(r"<script([^>]*)>(.*?)</script>", t, re.S | re.I))
     if not blocks: print("(no script block in %s)" % f)
@@ -21,7 +21,7 @@ for f in ("index.html", "campaigns.html", "strain.html", "run.html"):
             if src[1].startswith(("http", "//")): print("SKIP ", label, "remote"); continue
             body = (W / src[1].lstrip("/")).read_text(encoding="utf8")
         parse(body, typ, label)
-for f, typ in (("campaigns.js", "script"), ("strain.js", "module"), ("viewer_core.js", "module"), ("run.js", "script")):
+for f, typ in (("legacy/campaigns.js", "script"), ("shell.js", "script"), ("strain.js", "module"), ("viewer_core.js", "module"), ("run.js", "script")):
     parse((W / f).read_text(encoding="utf8"), typ, f + " (standalone, " + typ + ")")
 for f in ("main.py", "campaign_api.py", "runview.py"): ast.parse((W / f).read_text(encoding="utf8")); print("OK    %s (python)" % f)
 for f in ("yarn_model/relax_job.py", "yarn_model/relax_state.py", "yarn_model/loop_grade.py", "yarn_model/slip_ext.py", "yarn_model/round_diag.py", "campaigns/campaign.py"): ast.parse((W.parent / "scripts" / f).read_text(encoding="utf8")); print("OK    scripts/%s (python)" % f)

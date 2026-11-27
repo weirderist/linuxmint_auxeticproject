@@ -30,5 +30,5 @@ check('Kaggle on writes enabled true and starts the controller for this campaign
 r = cl.post('/api/shell/demo/kaggle', json={'enabled': True}); check('a second start right after is refused (409)', r.status_code == 409 and len(started) == 1, r.text[:120])
 api.subprocess.Popen = real
 r = cl.post('/api/shell/demo/kaggle', json={'enabled': 'maybe'}); check('a non-boolean is refused (422)', r.status_code == 422)
-html = cl.get('/shell').text; check('/shell page has the worker boxes and colours', 'id="workers"' in html and '--w-kaggle' in html and '#e0832f' in html)
+html = cl.get('/shell').text; css = open(os.path.join(ROOT, 'webui', 'theme.css'), encoding='utf8').read(); check('/shell page has the worker boxes; the colours are theme.css variables', 'id="workers"' in html and 'var(--w-kaggle)' in css and '--w-kaggle: #e0832f' in css)
 print('ALL OK' if not bad else 'FAILED: %s' % bad); sys.exit(1 if bad else 0)
