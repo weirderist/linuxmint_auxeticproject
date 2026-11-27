@@ -1,7 +1,17 @@
 <!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Pure shell runs</title>
-<link rel="stylesheet" href="/theme.css">
+<link rel="stylesheet" href="/theme.css">
+<style>
+/* workers (2026-11-27): server green, Kaggle orange, workstation blue (K's colours); a run row is coloured by the worker that holds or finished it, queued rows have no colour */
+:root { --w-server: #2e9e5b; --w-kaggle: #e0832f; --w-workstation: #3b7ddd; }
+.workers { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; margin: 10px 0; }
+.wbox { border: 1px solid var(--line-strong); border-left: 6px solid var(--wc); border-radius: 8px; padding: 8px 10px; background: var(--card); }
+.wbox h3 { margin: 0 0 4px; font-size: var(--fs-sm); color: var(--wc); } .wbox .small { line-height: 1.5; }
+.wbox.server { --wc: var(--w-server); } .wbox.kaggle { --wc: var(--w-kaggle); } .wbox.workstation { --wc: var(--w-workstation); }
+tbody tr.w-server td:first-child { box-shadow: inset 5px 0 0 var(--w-server); } tbody tr.w-kaggle td:first-child { box-shadow: inset 5px 0 0 var(--w-kaggle); } tbody tr.w-workstation td:first-child { box-shadow: inset 5px 0 0 var(--w-workstation); }
+tbody tr.w-server { background: color-mix(in srgb, var(--w-server) 9%, transparent); } tbody tr.w-kaggle { background: color-mix(in srgb, var(--w-kaggle) 11%, transparent); } tbody tr.w-workstation { background: color-mix(in srgb, var(--w-workstation) 10%, transparent); }
+</style>
 </head><body>
 <header class="topbar"><h1>Pure shell runs <span class="mut">thin-shell fold only, no yarn mesh</span></h1><a href="/campaigns">Campaigns</a><a href="/">Simulator and 3D viewer</a></header>
 <main>
@@ -19,6 +29,7 @@
    <p class="hint"><b>Stop after current run</b> lets the run in progress finish, then the runner exits.</p>
   </div>
   <div id="msg"></div>
+  <div class="workers" id="workers" aria-label="workers"></div>
   <div class="stat" id="stat"></div>
   <div class="small mut" id="code"></div>
  </section>

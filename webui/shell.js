@@ -14,7 +14,7 @@ function fmt(v, k) {
 }
 function dur(s) { if (s == null) return ""; s = Math.round(s); const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60); return h ? h + " h " + m + " min" : m ? m + " min" : s + " s"; }
 let cur = null, data = null, busy = false, sortKey = "run", sortDir = 1, openRun = null; const sel = new Set();
-const COLS = ["status", "source", "label", "tiles", "cpi", "wpi", "ratio", "stitch_density", "tf_rel", "tf_c_rel", "tf_w_rel", "matrix", "knit_fraction", "plan_x", "plan_y", "thickness", "shrink_x", "shrink_y", "wave_k", "wave_amp_median_mm", "mid_over_end", "steps_at_cap", "score", "wall_s", "git_commit"];
+const COLS = ["status", "worker", "source", "label", "tiles", "cpi", "wpi", "ratio", "stitch_density", "tf_rel", "tf_c_rel", "tf_w_rel", "matrix", "knit_fraction", "plan_x", "plan_y", "thickness", "shrink_x", "shrink_y", "wave_k", "wave_amp_median_mm", "mid_over_end", "steps_at_cap", "score", "wall_s", "git_commit"];
 const NUM = ["tiles", "cpi", "wpi", "ratio", "stitch_density", "tf_rel", "tf_c_rel", "tf_w_rel", "knit_fraction", "plan_x", "plan_y", "thickness", "shrink_x", "shrink_y", "fold_kx_per_mm", "fold_ky_per_mm", "wave_k", "wave_amp_median_mm", "mid_over_end", "steps_at_cap", "iterations_total", "wall_s", "solver_seconds", "tier", "score"];
 const TEXTCOL = ["run", "label", "source", "status", "matrix", "git_commit"];
 // display-only tightness columns (computed by the server from the recorded CPI and WPI; definitions in the note under the table)
@@ -55,7 +55,7 @@ function rowsView() {
 function table() {
   const rows = rowsView(), head = ["run"].concat(COLS), left = h => TEXTCOL.includes(h) ? ' class="l"' : "";
   $("#tbl").innerHTML = "<thead><tr><th></th>" + head.map(h => '<th data-k="' + h + '"' + left(h) + ">" + esc(hname(h)) + (h === sortKey ? (sortDir > 0 ? " &uarr;" : " &darr;") : "") + "</th>").join("") + "</tr></thead><tbody>" +
-    rows.slice(0, 1500).map(r => '<tr data-r="' + esc(r.run) + '" class="' + (r.run === openRun ? "sel" : "") + '"><td><input type="checkbox" data-c="' + esc(r.run) + '"' + (sel.has(r.run) ? " checked" : "") + (r.status === "done" ? "" : " disabled") + "></td>" +
+    rows.slice(0, 1500).map(r => '<tr data-r="' + esc(r.run) + '" class="' + (r.run === openRun ? "sel" : "") + wclass(r) + '"><td><input type="checkbox" data-c="' + esc(r.run) + '"' + (sel.has(r.run) ? " checked" : "") + (r.status === "done" ? "" : " disabled") + "></td>" +
     head.map(h => "<td" + left(h) + ">" + (h === "status" ? esc(r.status) + (r.heavy_deleted ? " (3D deleted)" : "") + (r.control ? ' <span class="tag">control</span>' : "") : esc(fmt(r[h], h))) + "</td>").join("") + "</tr>").join("") + "</tbody>";
   $("#tbl").querySelectorAll("th[data-k]").forEach(th => th.onclick = () => { const k = th.dataset.k; if (sortKey === k) sortDir = -sortDir; else { sortKey = k; sortDir = 1; } table(); });
   $("#tbl").querySelectorAll("tbody tr").forEach(tr => tr.onclick = ev => { if (ev.target.tagName === "INPUT") return; openRun = tr.dataset.r; table(); showDetail(openRun); });
@@ -209,7 +209,22 @@ $("#bDel").onclick = async () => {
   } catch (e) { msg(e.message, true); }
   refresh();
 };
-async function refresh() { try { await loadList(); if (!cur) return; data = await api("/api/shell/" + encodeURIComponent(cur)); header(); table(); charts(); rules(); analysis(); if (openRun && !$("#detail").firstChild) showDetail(openRun); } catch (e) { msg(e.message, true); } }
+function wkind(w) { w = String(w || ""); return w.startsWith("kaggle") ? "kaggle" : w.startsWith("workstation") ? "workstation" : w === "server" ? "server" : ""; }
+function wclass(r) { const k = wkind(r.worker); return k && (r.status === "done" || r.leased || r.status === "running") ? " w-" + k : ""; }          // queued runs stay uncoloured
+async function workers() {
+  const box = $("#workers"); let w;
+  try { w = await api("/api/shell/" + encodeURIComponent(cur) + "/workers"); } catch (e) { box.innerHTML = '<div class="small mut">' + esc(e.message) + "</div>"; return; }
+  const s = w.server, k = w.kaggle, ws = w.workstation;
+  const sv = "<div class=\"wbox server\"><h3>Server</h3><div class=\"small\">" + (s.runner_alive ? "runner " + esc(s.state || "alive") + (s.current ? ", running " + esc(s.current) : "") : "no runner") + "<br>control " + esc(s.control) + ", finished here " + s.done + "</div></div>";
+  const sl = Object.entries(k.slots || {}).map(([n, v]) => esc(n) + (v.gpu ? " (GPU)" : " (CPU)") + ": " + esc(v.status) + (v.status === "running" ? ", " + v.n_runs + " runs, pushed " + esc(v.t_push_iso || "") : "")).join("<br>");
+  const kg = "<div class=\"wbox kaggle\"><h3>Kaggle</h3><div class=\"small\">" + (k.enabled ? "on" : "off") + ", controller " + (k.controller_alive ? "running" : "not running") + (k.last_tick ? ", last check " + esc(k.last_tick) : "") +
+    "<br>" + (sl || "no session yet") + "<br>runs on Kaggle now " + k.leased + ", finished there " + k.done + "</div><div class=\"btnrow\"><button id=\"bKag\">" + (k.enabled ? "Turn Kaggle off" : "Turn Kaggle on") + "</button></div>" +
+    "<div class=\"small mut\">Off: no new sessions; sessions already on Kaggle finish and are imported.</div></div>";
+  const wk = "<div class=\"wbox workstation\"><h3>Workstation</h3><div class=\"small mut\">" + esc(ws.note) + "</div></div>";
+  box.innerHTML = sv + kg + wk;
+  $("#bKag").onclick = async () => { busy = true; msg("Working"); try { const j = await api("/api/shell/" + encodeURIComponent(cur) + "/kaggle", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled: !k.enabled }) }); msg(j.message, false); } catch (e) { msg(e.message, true); } busy = false; workers(); };
+}
+async function refresh() { try { await loadList(); if (!cur) return; data = await api("/api/shell/" + encodeURIComponent(cur)); header(); workers(); table(); charts(); rules(); analysis(); if (openRun && !$("#detail").firstChild) showDetail(openRun); } catch (e) { msg(e.message, true); } }
 let resizeTimer = null;
 window.addEventListener("resize", () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(() => { if (data) { charts(); analysis(); } }, 150); });
 refresh(); setInterval(() => { if (!document.hidden) refresh(); }, 15000);

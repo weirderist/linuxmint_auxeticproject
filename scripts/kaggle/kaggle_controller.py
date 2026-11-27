@@ -123,7 +123,14 @@ s.worker(slot['name']), len(chosen), budget + cf['lease_margin_s'], 'kaggle %s' 
 def main():
     a = argparse.ArgumentParser(); a.add_argument('campaign'); a.add_argument('--once', action='store_true'); a.add_argument('--poll-s', type=float, default=300); g = a.parse_args()
     c = Ctl(g.campaign); say('kaggle controller for %s (user %s)' % (g.campaign, 'set' if c.user else 'MISSING'))
+    if not g.once:          # one controller per campaign (flock, released by the kernel when the process dies, also after a power cut); controller.json tells the page that it is alive
+        import fcntl
+        lk = open(os.path.join(c.d, 'controller.lock'), 'a+')
+        try: fcntl.flock(lk, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError: sys.exit('another kaggle controller already runs for %s' % g.campaign)
+        pi = cm.proc_info(os.getpid()); info = dict(pid=os.getpid(), boot_id=cm.boot_id(), start_ticks=pi[0] if pi else '', started=cm.now(), poll_s=g.poll_s)
     while True:
+        if not g.once: cm.wjson(os.path.join(c.d, 'controller.json'), dict(info, t=cm.now(), t_epoch=time.time()))
         try: c.tick()
         except Exception as e: say('tick error (retried next poll):', repr(e))
         if g.once: break

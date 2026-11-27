@@ -7,3 +7,7 @@
 # Line 4 (added 2026-11-21, installed by  bash deploy/analysis_job.sh install , not by hand): the scheduled analysis job at nice 19 and ionice idle. At every 100 finished runs of shell1 it runs
 # shell_proposer_eval.py then shell_rules_sr.py, one at a time, and keeps each result per run count in campaigns/shell_runs/shell1/analysis/scheduled/. Lock, atomic writes and interrupted attempts: see the script.
 @reboot sleep 210 && /usr/bin/setsid /usr/bin/ionice -c 3 /usr/bin/nice -n 19 /home/sarvesh/auxetic_project/venv/bin/python /home/sarvesh/auxetic_project/scripts/shell_learning/shell_analysis_job.py shell1 --poll-s 600 >> /home/sarvesh/shell_logs/analysis_shell1.log 2>&1 &
+# Lines 5 and 6 (added 2026-11-27, for shell2): the runner of shell2 from its frozen copy, and its Kaggle controller (one per campaign, flock; it pushes NEW sessions only while
+# campaigns/shell_runs/shell2/kaggle/config.json says enabled, which the Kaggle box on /shell switches). Both are harmless when shell2 is paused or Kaggle is off.
+@reboot sleep 120 && /home/sarvesh/auxetic_project/venv/bin/python /home/sarvesh/auxetic_project/campaigns/shell_runs/shell2/code/campaign.py shell-run shell2 --detach
+@reboot sleep 240 && /usr/bin/setsid /home/sarvesh/auxetic_project/venv/bin/python -u /home/sarvesh/auxetic_project/scripts/kaggle/kaggle_controller.py shell2 >> /home/sarvesh/auxetic_project/campaigns/shell_runs/shell2/kaggle/controller.log 2>&1 &

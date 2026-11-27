@@ -389,6 +389,44 @@ def shell_stop(name: str):
     sc, c = _shell(name); c.set_control("stop", why="page: stop after current run")
     return {"control": "stop", "message": "Stop requested: the run in progress finishes, then the runner exits. Nothing is killed."}
 
+# ---- workers of a shell campaign (2026-11-27): server runner, Kaggle controller, workstation (not built yet). Colours on the page: server green, Kaggle orange, workstation blue.
+def _kdir(c): return Path(c.d) / "kaggle"
+
+def _kaggle_info(sc, c):
+    cm = sc.cm; d = _kdir(c); cfg = cm.rjson(str(d / "config.json"), {}) or {}; st = cm.rjson(str(d / "state.json"), {}) or {}; ctl = cm.rjson(str(d / "controller.json"), {}) or {}
+    try: alive = bool(ctl.get("pid") and cm.alive(ctl))
+    except Exception: alive = False
+    slots = {k: {kk: v.get(kk) for kk in ("status", "slug", "gpu", "t_push_iso", "last", "t_last")} | {"n_runs": len(v.get("ids") or [])} for k, v in st.items() if not k.startswith("_") and isinstance(v, dict)}
+    return {"enabled": bool(cfg.get("enabled")), "controller_alive": alive, "controller": {k: ctl.get(k) for k in ("pid", "started", "t", "poll_s")}, "last_tick": st.get("_tick"), "slots": slots,
+            "configured_slots": cfg.get("slots"), "credentials": "from .env on the server (never shown)"}
+
+@router.get("/api/shell/{name}/workers")
+def shell_workers(name: str):
+    sc, c = _shell(name); st = c.status(); rn = st.get("runner") or {}
+    return {"server": {"runner_alive": st["runner_alive"], "state": rn.get("state"), "current": rn.get("current"), "control": st["control"], "done": (st.get("done_by_worker") or {}).get("server", 0)},
+            "kaggle": dict(_kaggle_info(sc, c), done=(st.get("done_by_worker") or {}).get("kaggle", 0), leased=(st.get("leased_by_worker") or {}).get("kaggle", 0)),
+            "workstation": {"built": False, "note": "not built yet: comes after the server and Kaggle work (K 2026-11-26)", "done": (st.get("done_by_worker") or {}).get("workstation", 0)}}
+
+class KaggleSet(BaseModel):
+    enabled: bool
+
+@router.post("/api/shell/{name}/kaggle")
+def shell_kaggle(name: str, b: KaggleSet):
+    """Turn Kaggle work on or off for this campaign (config.json 'enabled'; the other keys stay). On: the controller is started detached if none is alive. Off: no NEW sessions are pushed; sessions on
+    Kaggle finish and are imported (nothing is cancelled)."""
+    sc, c = _shell(name); cm = sc.cm; d = _kdir(c); d.mkdir(exist_ok=True); cfg = cm.rjson(str(d / "config.json"), {}) or {}; cfg["enabled"] = b.enabled; cm.wjson(str(d / "config.json"), cfg)
+    info = _kaggle_info(sc, c)
+    if not b.enabled: return {"enabled": False, "message": "Kaggle off: no new sessions; sessions already on Kaggle finish and their runs are imported."}
+    if info["controller_alive"]: return {"enabled": True, "message": "Kaggle on; the controller is already running."}
+    script = SCRIPTS / "kaggle" / "kaggle_controller.py"; py = str(PROJECT_PY) if PROJECT_PY.exists() else sys.executable
+    with _start_lock:
+        if time.time() - _last_start.get("kaggle:" + name, 0) < START_GUARD_S: raise HTTPException(409, "A start was requested a moment ago. Reload in a few seconds.")
+        _last_start["kaggle:" + name] = time.time()
+    log = open(str(d / "controller.log"), "a")
+    kw = dict(start_new_session=True) if os.name == "posix" else {}
+    subprocess.Popen([py, "-u", str(script), name], stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, cwd=str(SCRIPTS), close_fds=True, **kw)
+    return {"enabled": True, "message": "Kaggle on; the controller was started (log: campaigns/shell_runs/%s/kaggle/controller.log)." % name}
+
 class ShellDelete(BaseModel):
     ids: list[str]
     confirm: str = ""

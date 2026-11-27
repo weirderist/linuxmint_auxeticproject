@@ -92,3 +92,4 @@ campaigns/*/runner.lock
 
 # K private command list
 K_COMMANDS.txt
+campaigns/shell_runs_legacy/
