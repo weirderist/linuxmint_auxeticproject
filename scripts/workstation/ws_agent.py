@@ -168,7 +168,15 @@ def main(argv=None):
     a = argparse.ArgumentParser(); a.add_argument('--campaign', required=True); a.add_argument('--python', default=sys.executable, help='interpreter with jax, numpy, scipy')
     a.add_argument('--work', default=os.path.join(os.path.expanduser('~'), 'auxetic_ws')); a.add_argument('--poll-s', type=float, default=60); a.add_argument('--host', default='server')
     a.add_argument('--remote-root', default='~/auxetic_project'); a.add_argument('--worker', default=''); a.add_argument('--once', action='store_true'); a.add_argument('--stub', action='store_true', help=argparse.SUPPRESS)
-    g = a.parse_args(argv); ag = Agent(g); say('workstation agent for %s as %s, work folder %s' % (g.campaign, ag.worker, ag.w))
+    g = a.parse_args(argv); ag = Agent(g)
+    lk = open(os.path.join(ag.w, 'agent.lock'), 'a+')          # one agent per work folder: a second start (logon task while one runs) exits at once; the OS releases the lock when the process dies
+    try:
+        if os.name == 'nt':
+            import msvcrt; lk.seek(0); msvcrt.locking(lk.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl; fcntl.flock(lk, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError: say('another agent already runs in %s: exiting' % ag.w); return 0
+    say('workstation agent for %s as %s, work folder %s' % (g.campaign, ag.worker, ag.w))
     while True:
         try: ag.tick()
         except Exception as e: say('tick error (retried next poll):', repr(e))
