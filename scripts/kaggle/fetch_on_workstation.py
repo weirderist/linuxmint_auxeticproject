@@ -30,7 +30,11 @@ def main(camp):
         rc, o = kc.run(['kernels', 'status', '%s/%s' % (user, ent['slug'])]); print(name, o.strip())
         if 'complete' not in o.lower(): continue
         folder = '%s_%d' % (name, int(ent['t_push'])); ld = os.path.join(local, folder); os.makedirs(ld, exist_ok=True)
-        for attempt in range(5):
+        stg = os.path.join(os.path.expanduser('~'), 'auxetic_ws', 'kaggle_staging', ent['slug'])          # downloaded earlier while the server was away (2026-11-27): reuse it
+        if os.path.isfile(os.path.join(stg, 'manifest.json')) and (json.load(open(os.path.join(stg, 'manifest.json'))).get('finished')):
+            import shutil; shutil.copytree(stg, ld, dirs_exist_ok=True); rc = 0; print(name, 'using the staged download', stg)
+        else: rc = 1
+        for attempt in range(5 if rc else 0):
             rc, o = kc.run(['kernels', 'output', '%s/%s' % (user, ent['slug']), '-p', ld], timeout=3600)
             if rc == 0: break
             print('download attempt %d failed: %s' % (attempt + 1, o.strip()[-200:])); time.sleep(20)
