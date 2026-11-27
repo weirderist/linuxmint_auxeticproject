@@ -19,7 +19,7 @@ sys.path.insert(0, os.path.join(kc.ROOT, 'scripts', 'campaigns'))          # she
 import shell_campaign as sc, campaign as cm          # noqa: E402
 
 DEFAULT = dict(enabled=False, slots=[dict(name='k1', gpu=True), dict(name='k2', gpu=False)], budget_s=dict(cpu=10.5 * 3600, gpu=8.0 * 3600), est_s_per_stitch=dict(cpu=0.12, gpu=0.12),
-               lease_margin_s=3 * 3600, max_batch=80,
+               lease_margin_s=3 * 3600, max_batch=dict(gpu=300, cpu=80),          # GPU (2 x T4) measured 2026-11-27: 80 runs in 67 min (median 103 s per lane)
                notes='UNSOURCED operating choices (2026-11-27): Kaggle session limits taken as 12 h (CPU) and 9 h (GPU) from Kaggle documentation, NOT verified here, so the budgets leave 1.5 h / 1 h spare; '
                      'est_s_per_stitch from the server benchmark (774 s for 3360 stitches = 0.23 s) halved for Kaggle CPU (the probe ran 2x faster), refined from finished runs')
 
@@ -63,7 +63,8 @@ class Ctl:
         gpu = bool(slot.get('gpu')); budget = cf['budget_s']['gpu' if gpu else 'cpu']; lanes = 2 if gpu else 1; pend = s.c.pending()
         if not pend: return None
         chosen, tot = [], 0.0; ps = s.per_stitch(gpu, cf)
-        for it in pend[:cf['max_batch']]:
+        mb = cf['max_batch']; mb = mb.get('gpu' if gpu else 'cpu', 80) if isinstance(mb, dict) else mb
+        for it in pend[:mb]:
             e = s.estimate(it, gpu, cf, ps)
             if tot + e > budget * lanes * 0.9 and chosen: break
             chosen.append(it['id']); tot += e
@@ -93,7 +94,13 @@ s.worker(slot['name']), len(chosen), budget + cf['lease_margin_s'], 'kaggle %s' 
 
     def finish(s, name, ent, cf, why):
         od = os.path.join(s.d, 'downloads', '%s_%d' % (name, int(ent['t_push']))); os.makedirs(od, exist_ok=True)
-        rc, o = kc.run(['kernels', 'output', '%s/%s' % (s.user, ent['slug']), '-p', od, '-o'], timeout=1800)
+        rc, o = kc.run(['kernels', 'output', '%s/%s' % (s.user, ent['slug']), '-p', od], timeout=3600)          # no -o: files already here are skipped, so a retry resumes (one file at a time is slow: 31 runs in 20 min, 2026-11-27)
+        tarp = os.path.join(od, 'out.tar')
+        if rc == 0 and os.path.isfile(tarp) and not os.path.isdir(os.path.join(od, 'out')):          # workers since 2026-11-27 pack the run folders into one file
+            import tarfile
+            with tarfile.open(tarp) as tf:
+                try: tf.extractall(od, filter='data')          # refuses links and paths outside od
+                except TypeError: tf.extractall(od)          # Python before 3.12
         if rc != 0:
             say('download failed for', name, o.strip()[-200:])
             if why != 'too old': return False          # try again next poll; an overdue session is closed without output (its runs go back to the queue; review 2026-11-27)

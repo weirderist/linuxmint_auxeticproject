@@ -43,5 +43,9 @@ def lane(dev):
         save()
 
 save(); th = [threading.Thread(target=lane, args=(dv,)) for dv in lanes]; [x.start() for x in th]; [x.join() for x in th]
-with lock: man['not_started'] = [it['id'] for it in queue]; man['finished'] = True
+with lock: man['not_started'] = [it['id'] for it in queue]
+import shutil, tarfile          # one file to download instead of hundreds (Kaggle's output download fetches files one by one); the folders are moved out of the output area, not deleted
+with tarfile.open(os.path.join(W, 'out.tar.tmp'), 'w') as tf: tf.add(OUT, arcname='out')
+os.replace(os.path.join(W, 'out.tar.tmp'), os.path.join(W, 'out.tar')); import tempfile; shutil.move(OUT, os.path.join(tempfile.mkdtemp(prefix='out_moved_'), 'out'))
+with lock: man['finished'] = True; man['packed'] = 'out.tar'
 save(); print(json.dumps({k: v for k, v in man.items() if k != 'runs'}, indent=1)); print('runs:', {k: v['status'] for k, v in man['runs'].items()})
