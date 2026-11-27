@@ -25,8 +25,8 @@ def main(camp):
     kd = '%s/campaigns/shell_runs/%s/kaggle' % (ROOT, camp); rc, o = sh('cat %s/state.json' % kd)
     if rc != 0: sys.exit('server not reachable: %s' % o[-200:])
     st = json.loads(o); local = os.path.join(os.path.expanduser('~'), 'auxetic_ws', 'kaggle_downloads'); os.makedirs(local, exist_ok=True)
-    for name, ent in st.items():
-        if name.startswith('_') or not isinstance(ent, dict) or ent.get('status') != 'running': continue
+    ents = [(n, e) for n, e in st.items() if not n.startswith('_') and isinstance(e, dict) and e.get('status') == 'running'] + [(e.get('slot') or k.split('-')[2], e) for k, e in (st.get('_awaiting') or {}).items()]
+    for name, ent in ents:
         rc, o = kc.run(['kernels', 'status', '%s/%s' % (user, ent['slug'])]); print(name, o.strip())
         if 'complete' not in o.lower(): continue
         folder = '%s_%d' % (name, int(ent['t_push'])); ld = os.path.join(local, folder); os.makedirs(ld, exist_ok=True)

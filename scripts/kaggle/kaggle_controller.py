@@ -73,7 +73,7 @@ s.worker(slot['name']), len(chosen), budget + cf['lease_margin_s'], 'kaggle %s' 
         if not got: return None
         thr = (s.c.spec_().get('thresholds') or {}).get('fold_min_turn_rad', 0.2)
         batch = [dict(id=x['id'], settings=dict(x['settings'], fold_min_turn_rad=thr), est_s=round(s.estimate(x, gpu, cf, ps))) for x in got]
-        slug = 'auxetic-%s-%s' % (s.name, slot['name']); kd = os.path.join(s.d, 'kernels', slug); os.makedirs(kd, exist_ok=True)
+        slug = 'auxetic-%s-%s-%s' % (s.name, slot['name'], time.strftime('%m%d%H%M%S') + '%03d' % (int(time.time() * 1000) % 1000)); kd = os.path.join(s.d, 'kernels', slug); os.makedirs(kd, exist_ok=True)          # one kernel per session: a later push never replaces output not yet downloaded (2026-11-27)
         tpl = open(os.path.join(HERE, 'worker_kernel.py')).read().replace('__BATCH__', 'json.loads(%r)' % json.dumps(batch)).replace('__BUDGET_S__', repr(float(budget))).replace('__CAMPAIGN__', json.dumps(s.name))          # BATCH as a JSON string: JSON text is not Python (true, null; bug found by the test)
         open(os.path.join(kd, 'worker.py'), 'w').write(tpl)
         json.dump(dict(id='%s/%s' % (s.user, slug), title=slug, code_file='worker.py', language='python', kernel_type='script', is_private=True, enable_gpu=gpu, enable_internet=False,
@@ -81,7 +81,7 @@ s.worker(slot['name']), len(chosen), budget + cf['lease_margin_s'], 'kaggle %s' 
         rc, o = kc.run(['kernels', 'push', '-p', kd], timeout=600)
         if rc != 0 or 'successfully' not in o.lower():
             s.c.release([x['id'] for x in got], s.worker(slot['name']), 'push failed'); say('push failed for', slot['name'], o.strip()[-300:]); s.log(event='push_failed', slot=slot['name'], out=o.strip()[-300:]); return None
-        ent = dict(status='running', slug=slug, gpu=gpu, ids=[x['id'] for x in got], t_push=time.time(), t_push_iso=cm.now(), budget_s=budget)
+        ent = dict(status='running', slot=slot['name'], slug=slug, gpu=gpu, ids=[x['id'] for x in got], t_push=time.time(), t_push_iso=cm.now(), budget_s=budget)
         say('pushed %s: %d runs (est %.1f h on %d lane(s))' % (slug, len(got), tot / 3600, lanes)); s.log(event='pushed', slot=slot['name'], ids=ent['ids'], gpu=gpu); return ent
 
     def renew(s, name, ent, cf):
@@ -92,10 +92,10 @@ s.worker(slot['name']), len(chosen), budget + cf['lease_margin_s'], 'kaggle %s' 
                 if isinstance(x, dict) and x.get('state') == 'held' and x.get('worker') == s.worker(name) and float(x.get('expires', 0)) < time.time() + cf['lease_margin_s'] / 2:
                     x['expires'] = time.time() + cf['lease_margin_s']; x['renewed'] = cm.now(); cm.wjson(p, x)
 
-    def finish(s, name, ent, cf, why):
+    def finish(s, name, ent, cf, why, timeout=3600):
         od = os.path.join(s.d, 'downloads', '%s_%d' % (name, int(ent['t_push']))); os.makedirs(od, exist_ok=True)
         if os.path.isfile(os.path.join(od, 'COMPLETE')): rc, o = 0, 'downloaded on the workstation (fetch_on_workstation.py)'          # the server's own internet is slow / often down (2026-11-27)
-        else: rc, o = kc.run(['kernels', 'output', '%s/%s' % (s.user, ent['slug']), '-p', od], timeout=3600)          # no -o: files already here are skipped, so a retry resumes (one file at a time is slow: 31 runs in 20 min, 2026-11-27)
+        else: rc, o = kc.run(['kernels', 'output', '%s/%s' % (s.user, ent['slug']), '-p', od], timeout=timeout)          # no -o: files already here are skipped, so a retry resumes (one file at a time is slow: 31 runs in 20 min, 2026-11-27)
         tarp = os.path.join(od, 'out.tar')
         if rc == 0 and os.path.isfile(tarp) and not os.path.isdir(os.path.join(od, 'out')):          # workers since 2026-11-27 pack the run folders into one file
             import tarfile
@@ -126,6 +126,16 @@ s.worker(slot['name']), len(chosen), budget + cf['lease_margin_s'], 'kaggle %s' 
         cf = s.config(); st = s.state(); slots = {x['name']: x for x in cf['slots']}
         if not s.user: say('no KAGGLE_USERNAME in .env'); return
         if cf.get('enabled') and not s.ensure_dataset(): return
+        aw = st.setdefault('_awaiting', {})          # finished on Kaggle, output not downloaded yet (server internet down; the workstation fetches it): leases renewed, download retried every 30 min
+        for slug, ent in list(aw.items()):
+            name = ent.get('slot') or slug.split('-')[2]
+            if os.path.isfile(os.path.join(s.d, 'downloads', '%s_%d' % (name, int(ent['t_push'])), 'COMPLETE')) or time.time() - ent.get('t_try', 0) > 1800:
+                ent['t_try'] = time.time(); s.save(st)
+                if s.finish(name, ent, cf, 'complete (after waiting for the download)', timeout=900): aw.pop(slug); s.save(st); continue
+            if time.time() - ent.get('t_done', time.time()) > cf.get('await_max_s', 4 * 86400):          # never downloaded within 4 days (UNSOURCED): give its runs back to the queue
+                if s.finish(name, ent, cf, 'too old'): aw.pop(slug); s.save(st)
+                continue
+            s.renew(name, ent, cf)
         for name, slot in slots.items():
             ent = st.get(name) or dict(status='idle')
             if ent.get('status') == 'running':
@@ -136,9 +146,13 @@ s.worker(slot['name']), len(chosen), budget + cf['lease_margin_s'], 'kaggle %s' 
                 old = age > (cf.get('hard_limit_s', 13 * 3600) if alive else ent['budget_s'] + cf['lease_margin_s'])
                 if rc != 0 and not old: continue          # network trouble: ask again next time
                 done = any(w in low for w in ('complete', 'error', 'cancel'))
-                if not (done or old) or not s.finish(name, ent, cf, 'complete' if 'complete' in low else ('error/cancel' if done else 'too old')): continue
+                if 'complete' in low and not s.finish(name, ent, cf, 'complete', timeout=900):          # finished but the download failed: park it and free the slot for a new session
+                    ent = dict(ent, slot=name, status='awaiting_download', t_done=time.time(), t_try=time.time()); aw[ent['slug']] = ent
+                    say('%s complete on Kaggle; download pending (slot freed): %s' % (name, ent['slug'])); s.log(event='awaiting_download', slot=name, slug=ent['slug'], session_h=round((time.time() - ent['t_push']) / 3600, 2), gpu=ent.get('gpu'))
+                elif 'complete' in low: s.log(event='session_hours', slot=name, slug=ent['slug'], session_h=round((time.time() - ent['t_push']) / 3600, 2), gpu=ent.get('gpu'))
+                elif not (done or old) or not s.finish(name, ent, cf, 'error/cancel' if done else 'too old'): continue
                 ent = dict(status='idle', last=ent['slug'], t_last=cm.now()); st[name] = ent; s.save(st)          # finished: the same tick may start the next batch
-            if cf.get('enabled') and s.c.get_control() != 'stop':
+            if cf.get('enabled') and s.c.get_control() != 'stop' and not slot.get('retire'):          # retire: finish and import, no new session (K 2026-11-27: Kaggle GPU only)
                 new = s.start(slot, cf)
                 if new: st[name] = new; s.save(st)
         st['_tick'] = cm.now(); s.save(st)
