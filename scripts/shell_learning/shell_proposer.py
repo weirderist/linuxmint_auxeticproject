@@ -94,17 +94,32 @@ def evaluate(rows, repeats=6, seed=0, target='thickness_rel', start=10, budgets=
 
 
 def candidates(policy, seeds, rows, rng, n=400, tiles=4, bases=None):
-    """Policy-valid candidates: slight edits of a seed, ratio log-uniform in the approved range at constant density. Returns a list of (settings, features)."""
-    rg = policy['ranges']; lo, hi = rg['ratio_cpi_over_wpi']; out = []; tries = 0; seen = set()
+    """Policy-valid candidates. Policy version 1 (shell1): slight edits of a seed, ratio log-uniform in the approved range at constant density, the given tiles. Policy version 2 (shell2,
+    2026-11-27): the same mix as the campaign plan (policy 'mix': random blocks, pixel-random, resized seed edits), stitch density uniform in density_range (density is not a proposer feature:
+    the shell barely depends on it at fixed R, measured 2026-11-21), tiles = shell_policy.tiles_for (the largest within the stitch cap). Returns a list of (settings, features)."""
+    rg = policy['ranges']; lo, hi = rg['ratio_cpi_over_wpi']; out = []; tries = 0; seen = set(); v2 = 'density_range' in rg
+    mix = sorted((policy.get('mix') or {'edits': 1.0}).items())
     while len(out) < n and tries < n * 20:
-        tries += 1; base = seeds[rng.randrange(len(seeds))]; M = sp.edit_matrix(base['matrix'], rng, policy)
+        tries += 1; kind = 'edits'
+        if v2:
+            u = rng.random(); acc = 0.0
+            for k, w in mix:
+                acc += w
+                if u <= acc: kind = k; break
+        if kind == 'edits':
+            base = seeds[rng.randrange(len(seeds))]; B = sp.resize_matrix(base['matrix'], rng, rg['matrix_side'][0], rg['matrix_side'][1], rg['max_resize']) if v2 else base['matrix']
+            M = sp.edit_matrix(B, rng, policy); bid = base['id']
+        else:
+            sl, sh = rg['matrix_side']; M = (sp.random_blocks if kind == 'blocks' else sp.random_pixels)(rng, rng.randint(sl, sh), rng.randint(sl, sh)); bid = 'random:' + kind
         if M is None: continue
-        R = math.exp(math.log(lo) + rng.random() * (math.log(hi) - math.log(lo))); cpi, wpi = sp.cpi_wpi(R, rg['density_cpi_x_wpi']); s = sp._setting(policy, M, cpi, wpi, tiles)
-        if len(M) * len(M[0]) * tiles * tiles > rg['max_stitches']: continue
+        dens = rng.uniform(*rg['density_range']) if v2 else rg['density_cpi_x_wpi']; t = sp.tiles_for(policy, M) if v2 else tiles
+        if t is None: continue
+        R = math.exp(math.log(lo) + rng.random() * (math.log(hi) - math.log(lo))); cpi, wpi = sp.cpi_wpi(R, dens); s = sp._setting(policy, M, cpi, wpi, t)
+        if len(M) * len(M[0]) * t * t > rg['max_stitches'] or (v2 and sp.violations(s, policy)): continue
         h = sp._sha(s)
         if h in seen: continue
-        seen.add(h); out.append((s, sf.features(M, tiles, cpi, wpi)))
-        if bases is not None: bases.append(base['id'])          # the seed this candidate edits (recorded in the label: rule checks grouped by seed family need it)
+        seen.add(h); out.append((s, sf.features(M, t, cpi, wpi)))
+        if bases is not None: bases.append(bid)          # the seed this candidate edits (recorded in the label: rule checks grouped by seed family need it)
     return out
 
 
@@ -161,7 +176,7 @@ def propose(camp, batch=3, dry=False, seed=None):
     plan = camp.spec_().get('plan') or {}; base = os.path.dirname(plan['seeds_file']); sj = json.load(open(plan['seeds_file'], encoding='utf8'))
     seeds = [dict(id=x['id'], matrix=sc.matrix_from_text(open(os.path.join(base, x['file']), encoding='utf8').read())) for x in sj['seeds']]
     qn = len(camp.queue_items()); bases = []
-    rng = random.Random(seed if seed is not None else len(rows) * 100003 + qn); cand = candidates(pol, seeds, rows, rng, bases=bases)          # the queue length also seeds it: an unchanged run count gave the same candidates again
+    rng = random.Random(seed if seed is not None else len(rows) * 100003 + qn); cand = candidates(pol, seeds, rows, rng, n=max(400, 4 * batch), bases=bases)          # the queue length also seeds it: an unchanged run count gave the same candidates again
     Xtr, mu, sd = design(rows); Xc = (np.array([[f[k] for k in PROP_FEATURES] for _, f in cand]) - mu) / sd
     pend = [x['settings'] for x in camp.pending() if x.get('tier', PROPOSER_TIER) == PROPOSER_TIER]          # queued / running proposals are known points too (2026-11-26)
     if pend: Xtr = np.vstack([Xtr, (np.array([[sf.features(s['matrix'], s['tiles'], s['cpi'], s['wpi'])[k] for k in PROP_FEATURES] for s in pend]) - mu) / sd])
