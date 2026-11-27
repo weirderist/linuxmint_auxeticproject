@@ -1,0 +1,31 @@
+{
+ "version": 2,
+ "approved_by_K": "2026-11-26/27 (ranges, mix, sizes, E; solver and bending after the 2026-11-27 benchmark)",
+ "note": "Policy of the pure-shell campaign shell2 (scripts/campaigns/shell_policy.py build_plan_v2). ESSENTIAL settings are never varied by the sampler or a proposer; an automated entry that differs is refused by code. Differences from shell1 (campaigns/shell_policy.json): plate bending (task 51), FIRE solver with 2000 steps per growth step (task 32 benchmark), stability check, random patterns, resized seed edits, R and stitch density varied together.",
+ "essential": {"kappa_scale": 1.0, "h_scale": 1.0, "nu": 0.4, "springs": 0.0, "sub": 2, "steps": 15, "iter": 2000, "seed": 0, "bending": "plate", "solver": "fire", "check_stability": true},
+ "no_effect": {"ne": 12.0},
+ "no_effect_note": "Ne does not enter the shell (only W = 25.4/WPI and C = 25.4/CPI do); it is recorded as 12 (K's fabric, K 2026-11-26: Ne 12 stays for simulation).",
+ "free": ["matrix", "cpi", "wpi", "tiles"],
+ "mix": {"blocks": 0.4, "pixels": 0.2, "edits": 0.4},
+ "ranges": {
+  "ratio_cpi_over_wpi": [1.1, 1.7],
+  "density_range": [260.0, 730.0],
+  "tiles": [2, 4],
+  "max_stitches": 3600,
+  "matrix_side": [6, 30],
+  "max_resize": 3,
+  "knit_fraction_max_delta": 0.10,
+  "max_edit_operations": 3,
+  "max_rectangle_side": 3,
+  "max_boundary_shift": 2
+ },
+ "controls": {"allowed_keys": ["iter"], "max_per_campaign": 2},
+ "sources": [
+  {"claim": "CPI/WPI between about 1.29 and 1.60 for relaxed weft knits (Spencer R 1.3 fully relaxed; Hasani 2014 plain jersey 1.40-1.60; Amanatides 2022; Inui)", "source": "Spencer, Knitting Technology (2001) section 22.5 p. 281; Hasani et al. 2014 Tables 3-4; Amanatides et al. 2022; Inui (reference folder 'Auxetic Work'); range widened to 1.1-1.7 by K's request (2026-11-26: 'a slightly larger range is fine'), the ends beyond 1.29-1.60 are UNSOURCED"},
+  {"claim": "Stitch density CPI x WPI about 260 to 730 (stitches per square inch)", "source": "Amanatides et al. 2022, Table 2 (fabric gauges); TF_rel = sqrt(tex S) about 113-190 at Ne 12"},
+  {"claim": "K's fabric CPI 22, WPI 16 (R 1.375, S 352), used for the seeds", "source": "K's own measurement (project data)"},
+  {"claim": "Mix 60 % random (2/3 blocks, 1/3 pixels) / 40 % seed edits; random sides 6-30; seed edits resized by up to 3 rows/columns; 1000 runs in balanced order", "source": "K's decisions 2026-11-26 ('pattern mix is okay', 'random matrix up to 30x30', 'thousand is okay'); lower side 6 and resize 3 are UNSOURCED"},
+  {"claim": "Solver FIRE, 2000 steps per growth step; plate bending; stability check", "source": "this project: benchmark of 2026-11-27 on S000004 (~/shell2_dev/val/bench_fire.json): FIRE 2000 reached a lower energy (35.88) than L-BFGS 1200 (35.98) in 774 s against 1150 s; plate term tests/test_shell_plate.py; the budget 2000 is UNSOURCED (not fully converged)"},
+  {"claim": "Tiles 2 to 4 (largest within the cap), 3600 stitch cap", "source": "UNSOURCED run-time choice: FIRE 2000 took 774 s for 3360 stitches on the server, so the cap keeps one run near 15 minutes"}
+ ]
+}

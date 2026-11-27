@@ -37,8 +37,11 @@ def violations(s, policy, control=None):
         if s.get(k) != val: v.append('%s = %r differs from the recorded constant %r' % (k, s.get(k), val))
     R, d = s['cpi'] / s['wpi'], s['cpi'] * s['wpi']; lo, hi = rg['ratio_cpi_over_wpi']
     if not (lo - 1e-9 <= R <= hi + 1e-9): v.append('CPI/WPI = %.4f is outside the approved range %s' % (R, rg['ratio_cpi_over_wpi']))
-    if abs(d / rg['density_cpi_x_wpi'] - 1) > rg['density_tolerance']: v.append('CPI x WPI = %.2f differs from the constant density %.1f by more than %.1f %%' % (d, rg['density_cpi_x_wpi'], 100 * rg['density_tolerance']))
+    if 'density_range' in rg:          # policy v2 (shell2, 2026-11-27): the stitch density CPI x WPI varies within a range
+        if not (rg['density_range'][0] - 1e-6 <= d <= rg['density_range'][1] + 1e-6): v.append('CPI x WPI = %.2f is outside the approved range %s' % (d, rg['density_range']))
+    elif abs(d / rg['density_cpi_x_wpi'] - 1) > rg['density_tolerance']: v.append('CPI x WPI = %.2f differs from the constant density %.1f by more than %.1f %%' % (d, rg['density_cpi_x_wpi'], 100 * rg['density_tolerance']))
     if not (rg['tiles'][0] <= s['tiles'] <= rg['tiles'][1]): v.append('tiles = %d is outside %s' % (s['tiles'], rg['tiles']))
+    if 'matrix_side' in rg and not all(rg['matrix_side'][0] <= n <= rg['matrix_side'][1] for n in (len(s['matrix']), len(s['matrix'][0]))): v.append('matrix %dx%d: each side must be within %s' % (len(s['matrix']), len(s['matrix'][0]), rg['matrix_side']))
     if n_stitches(s) > rg['max_stitches']: v.append('%d stitches per sheet exceed the cap of %d' % (n_stitches(s), rg['max_stitches']))
     return v
 
@@ -119,4 +122,79 @@ def build_plan(policy, seeds, rng_seed, n_variants, n_filler, seed_tiles=4):
         feasible = [t for t in range(rg['tiles'][0], rg['tiles'][1] + 1) if len(M) * len(M[0]) * t * t <= rg['max_stitches']]
         if not feasible: continue
         if add(_setting(policy, M, cpi, wpi, rng2.choice(feasible)), 'filler:' + base['id'], 9, label='filler of %s' % base['id']): k += 1
+    return plan
+
+
+# ------------------------------------------------------------------ policy v2 (shell2, 2026-11-27): random patterns, resized seed edits, R and stitch density varied together
+def random_blocks(rng, rows, cols, min_side=2):
+    """Random block pattern: the rectangle is split recursively (guillotine cuts at random positions, every block at least min_side cells per side) and every block gets a random digit; redrawn until both digits occur."""
+    while True:
+        M = [[0] * cols for _ in range(rows)]; stack = [(0, 0, rows, cols)]
+        while stack:
+            r0, c0, h, w = stack.pop(); can_h, can_w = h >= 2 * min_side, w >= 2 * min_side
+            if (can_h or can_w) and rng.random() < 0.8 and h * w > 4 * min_side * min_side:
+                if can_h and (not can_w or rng.random() < h / float(h + w)): k = rng.randint(min_side, h - min_side); stack += [(r0, c0, k, w), (r0 + k, c0, h - k, w)]
+                else: k = rng.randint(min_side, w - min_side); stack += [(r0, c0, h, k), (r0, c0 + k, h, w - k)]
+            else:
+                d = rng.choice((1, 2))
+                for r in range(r0, r0 + h):
+                    for c in range(c0, c0 + w): M[r][c] = d
+        if 0 < knit_fraction(M) < 1: return M
+
+def random_pixels(rng, rows, cols):
+    """Pixel-random pattern: every cell knit with probability p, p uniform in [0.3, 0.7] per pattern (UNSOURCED bounds); redrawn until both digits occur."""
+    p = rng.uniform(0.3, 0.7)
+    while True:
+        M = [[1 if rng.random() < p else 2 for _ in range(cols)] for _ in range(rows)]
+        if 0 < knit_fraction(M) < 1: return M
+
+def resize_matrix(base, rng, lo, hi, maxd):
+    """Slight size change: add or remove 1..maxd rows and/or columns (an added row/column repeats a neighbouring one, so the block structure is kept); every side stays in [lo, hi]."""
+    M = [list(r) for r in base]
+    for axis in (0, 1):
+        if rng.random() < 0.5: continue
+        if axis == 1: M = [list(x) for x in zip(*M)]
+        n = len(M); d = rng.randint(1, maxd) * (1 if rng.random() < 0.5 else -1); d = max(lo - n, min(hi - n, d))
+        for _ in range(abs(d)):
+            i = rng.randrange(len(M))
+            if d > 0: M.insert(i, list(M[i]))
+            elif len(M) > lo: M.pop(i)
+        if axis == 1: M = [list(x) for x in zip(*M)]
+    return M
+
+def halton(i, b):
+    f, r = 1.0, 0.0
+    while i > 0: f /= b; r += f * (i % b); i //= b
+    return r
+
+def tiles_for(policy, M):
+    """The largest tile count in the policy range whose sheet stays within the stitch cap (None if none fits)."""
+    rg = policy['ranges']; ok = [t for t in range(rg['tiles'][0], rg['tiles'][1] + 1) if len(M) * len(M[0]) * t * t <= rg['max_stitches']]
+    return max(ok) if ok else None
+
+def build_plan_v2(policy, seeds, rng_seed, n_total):
+    """Plan of a v2 campaign (shell2). Tier 0: every seed at K's fabric (CPI 22, WPI 16). Tier 2: n_total generated runs in BALANCED order (every prefix of the queue has the target mix and
+    covers the (R, density) square): mix policy['mix'] {blocks, pixels, edits} (K 2026-11-26: 60 % random = 2/3 blocks + 1/3 pixels, 40 % seed edits), the next category is always the one furthest
+    below its target count; (R, density) from a Halton sequence (bases 2, 3) with a random shift, R log-uniform in ratio_cpi_over_wpi and density uniform in density_range. Random sizes: rows and
+    columns uniform in matrix_side; edits: resize_matrix (up to max_resize rows/columns) then edit_matrix. Tiles: tiles_for (largest within the stitch cap)."""
+    rg = policy['ranges']; lo, hi = rg['ratio_cpi_over_wpi']; dlo, dhi = rg['density_range']; slo, shi = rg['matrix_side']; mix = policy['mix']; plan = []; seen = set()
+    def add(M, cpi, wpi, source, tier, label):
+        t = tiles_for(policy, M)
+        if t is None: return False
+        st = _setting(policy, M, cpi, wpi, t)
+        if violations(st, policy): raise ValueError('plan entry %s breaks the policy: %s' % (label, violations(st, policy)))
+        h = _sha(st)
+        if h in seen: return False
+        seen.add(h); plan.append(dict(settings=st, source=source, tier=tier, control=None, label=label)); return True
+    for s in seeds: add(s['matrix'], 22.0, 16.0, 'seed:' + s['id'], 0, s['id'])
+    rng = random.Random(rng_seed); u0, v0 = rng.random(), rng.random(); counts = {k: 0 for k in mix}; k = 0; tries = 0
+    while k < n_total and tries < 50 * n_total:
+        tries += 1; cat = max(mix, key=lambda c: (mix[c] * (k + 1) - counts[c], c))
+        R = math.exp(math.log(lo) + ((halton(k + 1, 2) + u0) % 1.0) * (math.log(hi) - math.log(lo))); dens = dlo + ((halton(k + 1, 3) + v0) % 1.0) * (dhi - dlo); cpi, wpi = cpi_wpi(R, dens)
+        if cat == 'edits':
+            base = seeds[rng.randrange(len(seeds))]; B = resize_matrix(base['matrix'], rng, slo, shi, rg['max_resize']); M = edit_matrix(B, rng, policy); src = 'edit:' + base['id']
+            if M is None: continue
+        else:
+            M = (random_blocks if cat == 'blocks' else random_pixels)(rng, rng.randint(slo, shi), rng.randint(slo, shi)); src = 'random:' + cat
+        if add(M, cpi, wpi, src, 2, '%s %04d, %dx%d, R %.3f, CPI x WPI %.0f' % (src, k + 1, len(M), len(M[0]), cpi / wpi, cpi * wpi)): counts[cat] += 1; k += 1
     return plan

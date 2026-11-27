@@ -72,11 +72,14 @@ def main():
     s = json.load(open(g.settings)); t0 = time.time(); os.makedirs(g.out, exist_ok=True)
     W, C = 25.4 / s['wpi'], 25.4 / s['cpi']; kappa, h = SHELL_KAPPA_C / C, SHELL_H_C * C * s['h_scale']
     kxy = (s['kappa_scale'] * (-SHELL_KAPPA_C / C), s['kappa_scale'] * (SHELL_KAPPA_C / C))      # same expression order as relax_job.main with --shell-kappa guess
+    st = []
     if os.environ.get('SHELL_RUN_STUB') == '1': X, nx, ny, log = stub_fold(s, W, C)
     else:
         import shell_sim as ss
         print('shell stage: %d x %d stitches, sub %d, %d growth steps, h %.4g, digit-1 curvature kx %.4g ky %.4g (1/mm, > 0 toward +z)' % (len(s['matrix'][0]) * s['tiles'], len(s['matrix']) * s['tiles'], s['sub'], s['steps'], h, *kxy), flush=True)
-        X0, X, tri, (nx, ny), log = ss.fold(s['matrix'], W, C, kappa=kappa, h=h, nu=s['nu'], sub=s['sub'], ntile=(s['tiles'], s['tiles']), steps=s['steps'], maxiter=s['iter'], springs=s['springs'], seed=s['seed'], verbose=True, kx=kxy[0], ky=kxy[1])
+        extra = {k: s[k] for k in ('bending', 'solver', 'check_stability') if k in s}          # shell2 keys (2026-11-27); absent for shell1, whose call is unchanged
+        st = []; extra.update(stats=st) if extra.get('check_stability') else None
+        X0, X, tri, (nx, ny), log = ss.fold(s['matrix'], W, C, kappa=kappa, h=h, nu=s['nu'], sub=s['sub'], ntile=(s['tiles'], s['tiles']), steps=s['steps'], maxiter=s['iter'], springs=s['springs'], seed=s['seed'], verbose=True, kx=kxy[0], ky=kxy[1], **extra)
     Xg = np.asarray(X).reshape(ny * s['sub'] + 1, nx * s['sub'] + 1, 3)
     with open(os.path.join(g.out, 'shell.npz.tmp'), 'wb') as f: np.savez(f, X=Xg, W=W, C=C, sub=s['sub'], nx=nx, ny=ny, kappa=kappa, h=h); f.flush(); os.fsync(f.fileno())          # fsync (2026-11-26): metrics.json, fsynced later, marks the run complete, so the heavy files must reach the disk first
     os.replace(os.path.join(g.out, 'shell.npz.tmp'), os.path.join(g.out, 'shell.npz'))
@@ -88,6 +91,10 @@ def main():
     wjson(os.path.join(g.out, 'provenance.json'), provenance())
     m = sm.describe(Xg, W, C, s['sub'], float(s.get('fold_min_turn_rad', 0.2)))
     m.update(steps_at_cap=int(sum(1 for r in log if r[2] >= s['iter'])), steps=len(log), iterations_total=int(sum(r[2] for r in log)), U_final=float(log[-1][1]), W=W, C=C, kappa=kappa, h=h, solver_seconds=round(time.time() - t0, 1))
+    m.update(solver=s.get('solver', 'lbfgs'), bending=s.get('bending', 'hinge'), grad_max_end=(float(log[-1][4]) if len(log[-1]) > 4 else None))
+    stab = [x for x in st if isinstance(x, tuple) and x and x[0] == 'stability']
+    if stab:          # lowest Hessian eigenvalues / mean |diagonal|; up to 6 are rigid motions (about 0); a value below -1e-6 means a saddle, not a minimum
+        w = sorted(v / stab[-1][2] for v in stab[-1][1]); m.update(stability_lowest=w, stability_min=w[0], stability_saddle=bool(w[0] < -1e-6))
     wjson(os.path.join(g.out, 'metrics.json'), m)                      # last: its presence marks a complete run
     print('shell run complete in %.0f s: plan %.2f x %.2f mm, thickness %.2f mm' % (time.time() - t0, m['plan_x'], m['plan_y'], m['thickness']), flush=True)
 

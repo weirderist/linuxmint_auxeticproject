@@ -26,7 +26,7 @@ HEAVY = ('shell.npz', 'shell.bin')
 DEFAULT_LIMITS = dict(min_free_gb=20.0, max_total_gb=50.0, timeout_floor_s=900.0, timeout_factor=4.0, ref_time_s=285.0, ref_vertices=11737, max_interrupts=3)
 DEFAULTS = dict(kappa_scale=1.0, h_scale=1.0, sub=2, steps=15, iter=400, nu=0.4, springs=0.0, seed=0, ne=12.0)      # the 13 Nov success shell (relax_job defaults); ne is not used by the shell
 METRIC_COLS = ['plan_x', 'plan_y', 'thickness', 'shrink_x', 'shrink_y', 'fold_kx_per_mm', 'fold_ky_per_mm', 'fold_turn_x_rad', 'fold_turn_y_rad', 'fold_direction',
-               'wave_k', 'wave_power_fraction', 'wave_amp_median_mm', 'mid_over_end', 'steps_at_cap', 'iterations_total', 'U_final', 'solver_seconds']
+               'wave_k', 'wave_power_fraction', 'wave_amp_median_mm', 'mid_over_end', 'steps_at_cap', 'iterations_total', 'U_final', 'solver_seconds', 'grad_max_end', 'stability_min']
 SETTING_COLS = ['tiles', 'cpi', 'wpi', 'ne', 'kappa_scale', 'h_scale', 'sub', 'steps', 'iter', 'nu', 'springs', 'seed']
 TERMINAL = ('done', 'failed', 'timeout', 'needs_approval', 'rejected')
 
@@ -53,6 +53,10 @@ def normalise(s, max_stitches=6000):
     if not (1 <= out['tiles'] <= 8 and 1 <= out['sub'] <= 4 and 1 <= out['steps'] <= 60 and 10 <= out['iter'] <= 5000): raise ValueError('tiles 1-8, sub 1-4, steps 1-60, iter 10-5000')
     if not (5 <= out['cpi'] <= 80 and 5 <= out['wpi'] <= 80): raise ValueError('cpi and wpi must be between 5 and 80')
     if not (math.isfinite(out['kappa_scale']) and out['kappa_scale'] != 0 and out['h_scale'] > 0 and 0 <= out['nu'] < 0.5 and out['springs'] >= 0): raise ValueError('kappa_scale != 0, h_scale > 0, 0 <= nu < 0.5, springs >= 0')
+    # shell2 keys (2026-11-27): only present when set, so the settings (and hashes) of shell1 runs are unchanged
+    if 'bending' in out and out['bending'] not in ('hinge', 'plate'): raise ValueError("bending must be 'hinge' or 'plate'")
+    if 'solver' in out and out['solver'] not in ('lbfgs', 'fire', 'fire+newton', 'newton'): raise ValueError("solver must be lbfgs, fire, fire+newton or newton")
+    if 'check_stability' in out: out['check_stability'] = bool(out['check_stability'])
     if len(out['matrix']) * len(out['matrix'][0]) * out['tiles'] ** 2 > max_stitches: raise ValueError('more than %d stitches per sheet: refused (run time)' % max_stitches)
     return out
 
@@ -202,6 +206,7 @@ class Camp:
         s.freeze()
         spec = dict(name=name, kind='shell', code='code', created=time.strftime('%Y-%m-%dT%H:%M:%S'), limits=dict(DEFAULT_LIMITS), thresholds=dict(fold_min_turn_rad=0.2),
                     notes='limits are UNSOURCED (K approved 2026-11-21); fold_min_turn_rad 0.2 copied from campaigns/fidelity/spec.json (chosen by its author)')
+        if spec_extra and spec_extra.get('limits'): spec['notes'] += '; limits replaced at creation: ref_time_s and ref_vertices measured for this policy'
         spec.update(spec_extra or {}); cm.wjson(s.spec, spec); cm.wjson(s.control, dict(state='pause', t=cm.now())); open(s.nextid, 'w').write('1')
         return s
 
@@ -515,6 +520,7 @@ def cli(cmd, argv):
         ap.add_argument('--pattern1-file', default=os.path.join(CAMPAIGNS, 'pattern1_matrix.txt'), help='matrix file of the control run S000001 (13 Nov success shell: Ne 12, CPI 22, WPI 16, tiles 3, defaults)')
         ap.add_argument('--policy', help='policy JSON (campaigns/shell_policy.json): builds the full seeded queue (seeds, controls, variants, filler) and enforces the policy')
         ap.add_argument('--seeds', default=os.path.join(CAMPAIGNS, 'shell_seeds', 'seeds.json')); ap.add_argument('--variants', type=int, default=91); ap.add_argument('--filler', type=int, default=0); ap.add_argument('--rng-seed', type=int, default=20261121)
+        ap.add_argument('--n', type=int, default=1000, help='policy version 2 (shell2): number of generated runs after the seeds'); ap.add_argument('--ref-time-s', type=float, help='timeout reference: seconds of one run of --ref-vertices vertices with this policy'); ap.add_argument('--ref-vertices', type=int)
     if cmd == 'shell-enqueue': ap.add_argument('file', help='JSON file: one settings object or a list of them')
     if cmd == 'shell-run': ap.add_argument('--detach', action='store_true'); ap.add_argument('--poll-s', type=float, default=5.0); ap.add_argument('--stop-when-empty', action='store_true'); ap.add_argument('--allow-unfrozen', action='store_true', help='run a campaign that has no code/ folder from the live scripts (not recommended)')
     if cmd == 'shell-control': ap.add_argument('state', choices=['run', 'pause', 'stop'])
@@ -526,8 +532,11 @@ def cli(cmd, argv):
             import shell_policy as sp
             pol = sp.load(a.policy); sj = json.load(open(a.seeds, encoding='utf8')); base = os.path.dirname(os.path.abspath(a.seeds))
             seeds = [dict(id=x['id'], matrix=matrix_from_text(open(os.path.join(base, x['file']), encoding='utf8').read())) for x in sj['seeds']]
-            plan = sp.build_plan(pol, seeds, a.rng_seed, a.variants, a.filler)
-            c = Camp.create(a.name, dict(policy=pol, plan=dict(rng_seed=a.rng_seed, variants=a.variants, filler=a.filler, seeds_file=os.path.abspath(a.seeds), n_entries=len(plan), seeds_sha1=hashlib.sha1(open(a.seeds, 'rb').read()).hexdigest())))
+            v2 = pol.get('version', 1) >= 2
+            plan = sp.build_plan_v2(pol, seeds, a.rng_seed, a.n) if v2 else sp.build_plan(pol, seeds, a.rng_seed, a.variants, a.filler)
+            extra = dict(policy=pol, plan=dict(rng_seed=a.rng_seed, variants=a.variants, filler=a.filler, n=a.n if v2 else None, policy_version=pol.get('version', 1), seeds_file=os.path.abspath(a.seeds), n_entries=len(plan), seeds_sha1=hashlib.sha1(open(a.seeds, 'rb').read()).hexdigest()))
+            if a.ref_time_s and a.ref_vertices: extra['limits'] = dict(DEFAULT_LIMITS, ref_time_s=a.ref_time_s, ref_vertices=a.ref_vertices)
+            c = Camp.create(a.name, extra)
             n = 0
             for e in plan:
                 if c.enqueue(e['settings'], source=e['source'], tier=e['tier'], control=e['control'], label=e['label']): n += 1

@@ -224,6 +224,7 @@ Campaigns of thin-shell folds only (`scripts/shell_model/shell_sim.py`), about 5
 | Command (from `~/auxetic_project`, project interpreter `venv/bin/python scripts/campaigns/campaign.py ...`) | What it does |
 |---|---|
 | `shell-plan <name>` | creates the campaign, paused, with run S000001 = Pattern 1 at the 13 Nov success settings (control: its shell.npz must equal the old one bit for bit) |
+| `shell-plan shell2 --policy campaigns/shell2_policy.json --n 1000 --rng-seed 20261127 --ref-time-s 774 --ref-vertices 13673` | (2026-11-27) policy version 2: the seeds at CPI 22 / WPI 16, then 1000 generated runs in balanced order (40 % random blocks, 20 % pixel-random, 40 % resized seed edits; R 1.1-1.7 log-uniform and CPI x WPI 260-730 from a Halton sequence; sides 6-30; tiles 2-4 within a 3600-stitch cap); ESSENTIAL: plate bending, FIRE 2000 steps per growth step, stability check; the timeout reference is the measured FIRE benchmark (774 s for 13 673 vertices) |
 | `shell-enqueue <name> file.json` | queues one settings object or a list (matrix, tiles, cpi, wpi, optional kappa_scale, h_scale, sub, steps, iter, nu, springs, seed); identical settings are never queued twice |
 | `shell-control <name> run\|pause\|stop` | pause = finish the run in progress then wait; stop = finish it then exit |
 | `shell-run <name> [--detach]` | the runner; one run at a time, no campaign-wide time limit |
