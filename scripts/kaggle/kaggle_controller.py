@@ -15,7 +15,7 @@ The frozen code is uploaded once per campaign as the private dataset <user>/auxe
 import argparse, json, os, shutil, sys, time
 HERE = os.path.dirname(os.path.abspath(__file__)); sys.path.insert(0, HERE)
 import kaggle_cli as kc
-sys.path.insert(0, os.path.join(kc.ROOT, 'scripts')); import scriptdirs          # noqa: E402
+sys.path.insert(0, os.path.join(kc.ROOT, 'scripts', 'campaigns'))          # shell_campaign.py and campaign.py (scriptdirs.py is a tests/ helper, not on the server path: found at the first real start)
 import shell_campaign as sc, campaign as cm          # noqa: E402
 
 DEFAULT = dict(enabled=False, slots=[dict(name='k1', gpu=True), dict(name='k2', gpu=False)], budget_s=dict(cpu=10.5 * 3600, gpu=8.0 * 3600), est_s_per_stitch=dict(cpu=0.12, gpu=0.12),
