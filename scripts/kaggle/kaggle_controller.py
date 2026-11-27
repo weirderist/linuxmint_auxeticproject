@@ -83,10 +83,20 @@ s.worker(slot['name']), len(chosen), budget + cf['lease_margin_s'], 'kaggle %s' 
         ent = dict(status='running', slug=slug, gpu=gpu, ids=[x['id'] for x in got], t_push=time.time(), t_push_iso=cm.now(), budget_s=budget)
         say('pushed %s: %d runs (est %.1f h on %d lane(s))' % (slug, len(got), tot / 3600, lanes)); s.log(event='pushed', slot=slot['name'], ids=ent['ids'], gpu=gpu); return ent
 
+    def renew(s, name, ent, cf):
+        """Extend the leases of a session that Kaggle still reports running or queued (to now + lease margin), so the server never takes a run that is still being worked on."""
+        with sc.xlock(os.path.join(s.c.d, 'queue.lock')):
+            for rid in ent['ids']:
+                p = os.path.join(s.c.leases, rid + '.json'); x = cm.rjson(p)
+                if isinstance(x, dict) and x.get('state') == 'held' and x.get('worker') == s.worker(name) and float(x.get('expires', 0)) < time.time() + cf['lease_margin_s'] / 2:
+                    x['expires'] = time.time() + cf['lease_margin_s']; x['renewed'] = cm.now(); cm.wjson(p, x)
+
     def finish(s, name, ent, cf, why):
         od = os.path.join(s.d, 'downloads', '%s_%d' % (name, int(ent['t_push']))); os.makedirs(od, exist_ok=True)
         rc, o = kc.run(['kernels', 'output', '%s/%s' % (s.user, ent['slug']), '-p', od, '-o'], timeout=1800)
-        if rc != 0: say('download failed for', name, o.strip()[-200:]); return False          # try again next poll
+        if rc != 0:
+            say('download failed for', name, o.strip()[-200:])
+            if why != 'too old': return False          # try again next poll; an overdue session is closed without output (its runs go back to the queue; review 2026-11-27)
         man = cm.rjson(os.path.join(od, 'manifest.json'), {}) or {}; runs = man.get('runs') or {}; nd = nf = 0
         for rid in ent['ids']:
             r = runs.get(rid) or {}; src = os.path.join(od, 'out', rid)
@@ -94,7 +104,7 @@ s.worker(slot['name']), len(chosen), budget + cf['lease_margin_s'], 'kaggle %s' 
                 try: res = s.c.import_result(rid, src, s.worker(name), wall_s=r.get('wall_s'), extra=dict(device=r.get('device'), kaggle_slug=ent['slug'])); nd += res == 'done'
                 except ValueError as e:
                     nf += 1; sc.append_line(s.c.index, dict(id=rid, status='failed', t=cm.now(), reason='kaggle import refused: %s' % e, worker=s.worker(name))); say('import refused', rid, e)
-            elif r.get('status') == 'failed':
+            elif r.get('status') == 'failed' and r.get('rc') != 'timeout':          # a timeout on Kaggle (slower hardware than estimated) is not a failure of the run: it goes back to the queue (review 2026-11-27)
                 nf += 1; tail = ''
                 try: tail = open(os.path.join(src, 'shell.log'), errors='replace').read()[-300:]
                 except OSError: pass
@@ -111,7 +121,11 @@ s.worker(slot['name']), len(chosen), budget + cf['lease_margin_s'], 'kaggle %s' 
         for name, slot in slots.items():
             ent = st.get(name) or dict(status='idle')
             if ent.get('status') == 'running':
-                rc, o = kc.run(['kernels', 'status', '%s/%s' % (s.user, ent['slug'])]); low = o.lower(); old = time.time() - ent['t_push'] > ent['budget_s'] + cf['lease_margin_s']
+                rc, o = kc.run(['kernels', 'status', '%s/%s' % (s.user, ent['slug'])]); low = o.lower(); age = time.time() - ent['t_push']
+                alive = rc == 0 and any(w in low for w in ('running', 'queued'))
+                if alive and age < cf.get('hard_limit_s', 13 * 3600):          # still working on Kaggle (it may have waited in Kaggle's queue): keep its leases from expiring (review 2026-11-27)
+                    s.renew(name, ent, cf); continue
+                old = age > (cf.get('hard_limit_s', 13 * 3600) if alive else ent['budget_s'] + cf['lease_margin_s'])
                 if rc != 0 and not old: continue          # network trouble: ask again next time
                 done = any(w in low for w in ('complete', 'error', 'cancel'))
                 if not (done or old) or not s.finish(name, ent, cf, 'complete' if 'complete' in low else ('error/cancel' if done else 'too old')): continue

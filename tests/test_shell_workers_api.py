@@ -18,7 +18,7 @@ def check(name, ok, info=''):
 c = sc.Camp.create('demo'); M = '1 1 2 2/1 1 2 2/2 2 1 1/2 2 1 1'; ids = [c.enqueue(dict(matrix=M, tiles=1, cpi=22, wpi=16, seed=i)) for i in range(4)]
 api._sc = lambda: sc          # the route module must use the same shell_campaign as this test (temporary SHELL_RUNS_DIR)
 w = cl.get('/api/shell/demo/workers').json()
-check('workers: three boxes, Kaggle off, nothing leased', set(w) == {'server', 'kaggle', 'workstation'} and w['kaggle']['enabled'] is False and w['kaggle']['leased'] == 0 and w['workstation']['built'] is False, w)
+check('workers: three boxes, Kaggle off, nothing leased', set(w) == {'server', 'kaggle', 'workstation'} and w['kaggle']['enabled'] is False and w['kaggle']['leased'] == 0 and w['workstation']['built'] is True and w['workstation']['enabled'] is False, w)
 c.claim('kaggle:k1', 2, 3600, 'test'); w = cl.get('/api/shell/demo/workers').json(); check('leased runs counted for Kaggle', w['kaggle']['leased'] == 2, w['kaggle'])
 rows = cl.get('/api/shell/demo').json()['rows']; check('rows carry worker and leased (page colours)', [r['worker'] for r in rows][:2] == ['kaggle:k1'] * 2 and rows[0]['leased'] and not rows[3]['leased'] and rows[3]['worker'] == '', [(r['worker'], r['leased']) for r in rows])
 r = cl.post('/api/shell/demo/kaggle', json={'enabled': False}); cfg = json.load(open(os.path.join(c.d, 'kaggle', 'config.json')))

@@ -405,7 +405,36 @@ def shell_workers(name: str):
     sc, c = _shell(name); st = c.status(); rn = st.get("runner") or {}
     return {"server": {"runner_alive": st["runner_alive"], "state": rn.get("state"), "current": rn.get("current"), "control": st["control"], "done": (st.get("done_by_worker") or {}).get("server", 0)},
             "kaggle": dict(_kaggle_info(sc, c), done=(st.get("done_by_worker") or {}).get("kaggle", 0), leased=(st.get("leased_by_worker") or {}).get("kaggle", 0)),
-            "workstation": {"built": False, "note": "not built yet: comes after the server and Kaggle work (K 2026-11-26)", "done": (st.get("done_by_worker") or {}).get("workstation", 0)}}
+            "workstation": dict(_ws_info(sc, c), done=(st.get("done_by_worker") or {}).get("workstation", 0), leased=(st.get("leased_by_worker") or {}).get("workstation", 0))}
+
+def _ws_info(sc, c):
+    cm = sc.cm; d = Path(c.d) / "workstation"; cf = cm.rjson(str(d / "config.json"), {}) or {}; st = cm.rjson(str(d / "state.json"), {}) or {}; ag = cm.rjson(str(d / "agent.json"), {}) or {}
+    granted = int(st.get("granted") or 0) if st.get("seq") == cf.get("seq") else 0
+    seen = (time.time() - float(ag.get("t_epoch") or 0)) if ag else None
+    return {"built": True, "enabled": bool(cf.get("enabled")), "n": int(cf.get("n") or 0), "ids": cf.get("ids") or [], "then_queue": bool(cf.get("then_queue")), "granted": granted,
+            "allowance_left": max(0, int(cf.get("n") or 0) - granted), "agent_seen_s_ago": None if seen is None else round(seen), "agent_current": ag.get("current"), "agent": ag.get("worker"),
+            "note": "the workstation agent (scripts/workstation/ws_agent.py) polls every minute; a run it holds goes back to the queue 30 min after a power cut"}
+
+class WsSet(BaseModel):
+    enabled: bool
+    n: int = 0
+    ids: list[str] = []
+    then_queue: bool = False
+
+@router.post("/api/shell/{name}/workstation")
+def shell_workstation(name: str, b: WsSet):
+    """K's decision for the workstation: enabled with n runs (and optionally specific run ids first), or enabled false = Cancel (the agent stops its run; the run goes back to the server and Kaggle)."""
+    sc, c = _shell(name); cm = sc.cm; d = Path(c.d) / "workstation"; d.mkdir(exist_ok=True)
+    if not (0 <= b.n <= 2000): raise HTTPException(422, "n must be 0 to 2000")
+    ids = [x.strip() for x in b.ids if x.strip()]
+    if any(not sc.ID_RE.match(x) for x in ids) or len(ids) > 2000: raise HTTPException(422, "ids must be run ids like S000123")
+    cf = cm.rjson(str(d / "config.json"), {}) or {}
+    if b.enabled: cf = dict(enabled=True, n=b.n or len(ids), ids=ids, then_queue=b.then_queue or (b.n or len(ids)) > len(ids),          # more runs allowed than ids given: the rest from the head of the queue
+                                      seq=int(cf.get("seq") or 0) + 1, t_set=cm.now())
+    else: cf.update(enabled=False, t_cancel=cm.now())
+    cm.wjson(str(d / "config.json"), cf)
+    return {"config": cf, "message": ("Workstation allowed: %d run(s)%s." % (cf["n"], (" starting with " + ", ".join(ids[:5]) + ("..." if len(ids) > 5 else "")) if ids else "")) if b.enabled else
+            "Workstation cancelled: its run in progress stops at the next poll (about a minute) and goes back to the server and Kaggle."}
 
 class KaggleSet(BaseModel):
     enabled: bool

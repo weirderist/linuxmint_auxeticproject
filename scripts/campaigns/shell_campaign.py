@@ -292,6 +292,27 @@ class Camp:
                 L = dict(id=it['id'], state='held', worker=worker, batch=batch, t=time.time(), expires=time.time() + float(ttl_s), t_iso=cm.now())
                 cm.wjson(os.path.join(s.leases, it['id'] + '.json'), L); append_line(s.leaselog, dict(L, event='claim')); out.append(dict(it, lease=L))
         return out
+    def claim_ids(s, worker, ids, ttl_s, batch=''):
+        """Lease the given runs (in that order) if they are queued, unfinished and held by no one (the workstation can volunteer for specific runs, 2026-11-27). Returns the queue items given."""
+        if not isinstance(worker, str) or not re.match(r'^[0-9A-Za-z_:.-]{1,64}$', worker): raise ValueError('bad worker name')
+        os.makedirs(s.leases, exist_ok=True); out = []
+        with xlock(os.path.join(s.d, 'queue.lock')):
+            pend = {x['id']: x for x in s.pending()}
+            for rid in ids:
+                it = pend.get(rid)
+                if not it: continue
+                L = dict(id=rid, state='held', worker=worker, batch=batch, t=time.time(), expires=time.time() + float(ttl_s), t_iso=cm.now())
+                cm.wjson(os.path.join(s.leases, rid + '.json'), L); append_line(s.leaselog, dict(L, event='claim')); out.append(dict(it, lease=L))
+        return out
+    def renew(s, ids, worker, ttl_s):
+        """Extend leases held by `worker` to now + ttl_s. Returns the ids renewed (a lease that expired or went to another worker is not taken back)."""
+        out = []
+        with xlock(os.path.join(s.d, 'queue.lock')):
+            for rid in ids:
+                p = os.path.join(s.leases, rid + '.json'); x = cm.rjson(p)
+                if isinstance(x, dict) and x.get('state') == 'held' and x.get('worker') == worker and float(x.get('expires', 0)) > time.time():
+                    x['expires'] = time.time() + float(ttl_s); x['renewed'] = cm.now(); cm.wjson(p, x); out.append(rid)
+        return out
     def release(s, ids, worker, why=''):
         """Give runs back (a lease held by another worker is left alone). Returns the released ids."""
         done = []

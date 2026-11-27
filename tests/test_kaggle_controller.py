@@ -41,6 +41,8 @@ check('enabled: a batch of max_batch runs is claimed and pushed', st['g']['statu
 src = open(os.path.join(F['pushed'], 'worker.py')).read(); check('the pushed worker has the batch filled in', '__BATCH__' not in src and ids[0] in src)
 F['net'] = False; k.tick(); check('Kaggle unreachable: slot still running, leases kept', k.state()['g']['status'] == 'running' and set(c.active_leases()) == set(ids[:3]))
 F['net'] = True
+L = c.lease_of(ids[0]); L['expires'] = __import__('time').time() + 5; cm.wjson(os.path.join(c.leases, ids[0] + '.json'), L); k.tick()
+check('a session Kaggle reports running gets its leases renewed', c.lease_of(ids[0])['expires'] > __import__('time').time() + 300 and k.state()['g']['status'] == 'running')
 
 # run the generated worker here (stub solver) to make the output folder the controller downloads; its code folder is the campaign's frozen copy
 kw = os.path.join(TMP, 'kaggle'); os.makedirs(os.path.join(kw, 'input', 'code')); os.makedirs(os.path.join(kw, 'working'))
@@ -52,15 +54,17 @@ open(os.path.join(kw, 'worker.py'), 'w').write(w); p = subprocess.run([sys.execu
 man = json.load(open(os.path.join(kw, 'working', 'manifest.json')))
 check('worker template runs and writes its manifest', p.returncode == 0 and man.get('finished') and man['runs'][ids[0]]['status'] == 'done' and man['runs'][ids[1]]['status'] == 'failed', p.stderr[-400:])
 # the second run failed on purpose; the worker gave it settings with stub_fail, so make its import use the queued settings for run 0 and 2 only
+mp = os.path.join(kw, 'working', 'manifest.json'); mj = json.load(open(mp)); mj['runs'][ids[2]] = dict(status='failed', rc='timeout', wall_s=99.0); json.dump(mj, open(mp, 'w'))          # a Kaggle-side timeout
 F['outputs']['tester/auxetic-K1-g'] = os.path.join(kw, 'working'); F['status']['tester/auxetic-K1-g'] = 'complete'; k.tick(); last = c.index_last()
-check('on completion: done runs imported with the worker', last[ids[0]]['status'] == 'done' and last[ids[0]].get('worker') == 'kaggle:g' and last[ids[2]]['status'] == 'done', {i: last.get(i, {}).get('status') for i in ids[:3]})
+check('on completion: done runs imported with the worker', last[ids[0]]['status'] == 'done' and last[ids[0]].get('worker') == 'kaggle:g', {i: last.get(i, {}).get('status') for i in ids[:3]})
+check('a Kaggle timeout is not marked failed: the run goes back to the queue', ids[2] not in last, last.get(ids[2]))
 check('a failed Kaggle run is marked failed', last[ids[1]]['status'] == 'failed' and 'kaggle run failed' in last[ids[1]].get('reason', ''))
-check('the slot is idle again, no lease of that batch left', k.state()['g']['status'] in ('idle', 'running') and not (set(ids[:3]) & set(c.active_leases())))
-check('the next tick pushed the next batch', k.state()['g']['status'] == 'running' and k.state()['g']['ids'] == ids[3:6], k.state()['g'].get('ids'))
+check('the slot is idle again, no lease of that batch left', k.state()['g']['status'] in ('idle', 'running') and not (set(ids[:2]) & set(c.active_leases())))
+check('the next tick pushed the next batch (the requeued run first)', k.state()['g']['status'] == 'running' and k.state()['g']['ids'] == [ids[2]] + ids[3:5], k.state()['g'].get('ids'))
 
 # lost session: older than budget + margin, no output: closed and requeued
 st = k.state(); st['g']['t_push'] -= 10 ** 6; k.save(st); F['status']['tester/auxetic-K1-g'] = 'running'; F['outputs'].pop('tester/auxetic-K1-g'); F['push_ok'] = False; k.tick()
-check('a lost session is closed and its runs go back to the queue', k.state()['g']['status'] == 'idle' and not c.active_leases() and {x['id'] for x in c.pending()} == set(ids[3:6]), k.state()['g'])
+check('a session overdue beyond the hard limit is closed and its runs go back to the queue', k.state()['g']['status'] == 'idle' and not c.active_leases() and {x['id'] for x in c.pending()} == {ids[2]} | set(ids[3:6]), k.state()['g'])
 check('a failed push releases its claim', not c.active_leases())
 ev = [json.loads(l)['event'] for l in open(os.path.join(k.d, 'events.jsonl'))]; check('events.jsonl records pushes, finishes and the failed push', 'pushed' in ev and 'finished' in ev and 'push_failed' in ev, ev)
 print('ALL OK' if not bad else 'FAILED: %s' % bad); shutil.rmtree(TMP, ignore_errors=True); sys.exit(1 if bad else 0)

@@ -220,8 +220,16 @@ async function workers() {
   const kg = "<div class=\"wbox kaggle\"><h3>Kaggle</h3><div class=\"small\">" + (k.enabled ? "on" : "off") + ", controller " + (k.controller_alive ? "running" : "not running") + (k.last_tick ? ", last check " + esc(k.last_tick) : "") +
     "<br>" + (sl || "no session yet") + "<br>runs on Kaggle now " + k.leased + ", finished there " + k.done + "</div><div class=\"btnrow\"><button id=\"bKag\">" + (k.enabled ? "Turn Kaggle off" : "Turn Kaggle on") + "</button></div>" +
     "<div class=\"small mut\">Off: no new sessions; sessions already on Kaggle finish and are imported.</div></div>";
-  const wk = "<div class=\"wbox workstation\"><h3>Workstation</h3><div class=\"small mut\">" + esc(ws.note) + "</div></div>";
+  const seen = ws.agent_seen_s_ago == null ? "agent never seen" : ws.agent_seen_s_ago < 180 ? "agent online" : "agent last seen " + dur(ws.agent_seen_s_ago) + " ago";
+  const wk = "<div class=\"wbox workstation\"><h3>Workstation</h3><div class=\"small\">" + (ws.enabled ? "allowed: " + ws.allowance_left + " of " + ws.n + " run(s) left" : "not allowed") + ", " + esc(seen) +
+    (ws.agent_current ? "<br>running " + esc(ws.agent_current) : "") + "<br>runs there now " + ws.leased + ", finished there " + ws.done + "</div>" +
+    "<div class=\"btnrow\"><label>runs <input id=\"wsN\" type=\"number\" min=\"1\" max=\"2000\" value=\"" + (ws.n || 5) + "\" style=\"width:5em\"></label><button id=\"bWsOk\">Allow</button><button id=\"bWsNo\"" + (ws.enabled ? "" : " disabled") + ">Cancel</button></div>" +
+    "<div class=\"btnrow\"><label>specific runs (optional) <input id=\"wsIds\" placeholder=\"S000123 S000124\" value=\"" + esc((ws.ids || []).join(" ")) + "\"></label></div>" +
+    "<div class=\"small mut\">" + esc(ws.note) + ". Cancel stops its run; the run goes back to the server and Kaggle.</div></div>";
   box.innerHTML = sv + kg + wk;
+  const wsPost = async body => { busy = true; msg("Working"); try { const j = await api("/api/shell/" + encodeURIComponent(cur) + "/workstation", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }); msg(j.message, false); } catch (e) { msg(e.message, true); } busy = false; workers(); };
+  $("#bWsOk").onclick = () => { const ids = $("#wsIds").value.split(/[\s,]+/).filter(Boolean), n = parseInt($("#wsN").value, 10) || 0; wsPost({ enabled: true, n: ids.length && !n ? ids.length : n, ids: ids }); };
+  $("#bWsNo").onclick = () => wsPost({ enabled: false });
   $("#bKag").onclick = async () => { busy = true; msg("Working"); try { const j = await api("/api/shell/" + encodeURIComponent(cur) + "/kaggle", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled: !k.enabled }) }); msg(j.message, false); } catch (e) { msg(e.message, true); } busy = false; workers(); };
 }
 async function refresh() { try { await loadList(); if (!cur) return; data = await api("/api/shell/" + encodeURIComponent(cur)); header(); workers(); table(); charts(); rules(); analysis(); if (openRun && !$("#detail").firstChild) showDetail(openRun); } catch (e) { msg(e.message, true); } }
