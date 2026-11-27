@@ -173,7 +173,7 @@ def propose(camp, batch=3, dry=False, seed=None):
     rows = sf.dataset(camp)
     if len(rows) < MIN_RESULTS: return dict(status='waiting', note='%d finished runs, the model starts at %d' % (len(rows), MIN_RESULTS), proposed=[])
     if sum(1 for x in camp.pending() if x.get('tier') == 5) >= 2: return dict(status='enough proposals queued', proposed=[])
-    plan = camp.spec_().get('plan') or {}; base = os.path.dirname(plan['seeds_file']); sj = json.load(open(plan['seeds_file'], encoding='utf8'))
+    sfile = camp.seeds_file() if hasattr(camp, 'seeds_file') else (camp.spec_().get('plan') or {})['seeds_file']; base = os.path.dirname(sfile); sj = json.load(open(sfile, encoding='utf8'))          # portable path (2026-11-27)
     seeds = [dict(id=x['id'], matrix=sc.matrix_from_text(open(os.path.join(base, x['file']), encoding='utf8').read())) for x in sj['seeds']]
     qn = len(camp.queue_items()); bases = []
     rng = random.Random(seed if seed is not None else len(rows) * 100003 + qn); cand = candidates(pol, seeds, rows, rng, n=max(400, 4 * batch), bases=bases)          # the queue length also seeds it: an unchanged run count gave the same candidates again

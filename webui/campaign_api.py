@@ -22,7 +22,7 @@ NAME_RE = re.compile(r"^[0-9A-Za-z_-]{1,64}$")
 RUN_RE = re.compile(r"^[0-9]{1,6}$")
 MIN_DIST_FLAG = 0.97          # "below about 0.97 the yarns pass into each other": campaigns/README.md (results.csv columns)
 TEXT_COLS = {"relax_state", "settled_by", "fold_direction", "reason"}
-PROJECT_PY = Path(os.environ.get("CAMPAIGN_PYTHON") or ROOT / "venv" / "bin" / "python")      # the interpreter of the README commands (venv/bin/python); the web service itself runs in webui/venv
+PROJECT_PY = Path(os.environ.get("CAMPAIGN_PYTHON") or (ROOT / "venv" / "Scripts" / "python.exe" if os.name == "nt" else ROOT / "venv" / "bin" / "python"))      # the interpreter of the README commands (venv/bin/python); the web service itself runs in webui/venv
 START_GUARD_S = 20            # a second Start for the same campaign within this time is refused (the first runner may not have written its lock yet)
 
 router = APIRouter()
@@ -452,7 +452,7 @@ def shell_kaggle(name: str, b: KaggleSet):
         if time.time() - _last_start.get("kaggle:" + name, 0) < START_GUARD_S: raise HTTPException(409, "A start was requested a moment ago. Reload in a few seconds.")
         _last_start["kaggle:" + name] = time.time()
     log = open(str(d / "controller.log"), "a")
-    kw = dict(start_new_session=True) if os.name == "posix" else {}
+    kw = dict(start_new_session=True) if os.name == "posix" else dict(creationflags=0x00000200 | 0x08000000)          # Windows: own process group, no window (2026-11-27)
     subprocess.Popen([py, "-u", str(script), name], stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, cwd=str(SCRIPTS), close_fds=True, **kw)
     return {"enabled": True, "message": "Kaggle on; the controller was started (log: campaigns/shell_runs/%s/kaggle/controller.log)." % name}
 

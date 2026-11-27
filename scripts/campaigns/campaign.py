@@ -53,18 +53,11 @@ def rdir(name, rid): return os.path.join(CAMPAIGNS, name, 'runs', rid)
 def now(): return time.strftime('%Y-%m-%dT%H:%M:%S')
 
 
-# ------------------------------------------------------------------ processes (Linux /proc)
-def boot_id():
-    try: return open('/proc/sys/kernel/random/boot_id').read().strip()
-    except OSError: return ''
-
-def proc_info(pid):
-    """(start_ticks, state) from /proc/<pid>/stat, or None if the process does not exist."""
-    try:
-        d = open('/proc/%d/stat' % pid).read()
-        rest = d[d.rindex(')') + 2:].split()
-        return rest[19], rest[0]
-    except (OSError, ValueError, IndexError): return None
+# ------------------------------------------------------------------ processes (Linux /proc on the server; Windows on the workstation: platform_compat.py, 2026-11-27)
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import platform_compat as pc          # noqa: E402
+boot_id = pc.boot_id
+proc_info = pc.proc_info          # (start_ticks, state) or None if the process does not exist
 
 def alive(att):
     """True if the process recorded in an attempt is the same process, on the same boot, and not a zombie."""
@@ -73,16 +66,7 @@ def alive(att):
     pi = proc_info(att['pid'])
     return bool(pi and pi[0] == att.get('start_ticks') and pi[1] != 'Z')
 
-def cmdlines():
-    out = []
-    for p in glob.glob('/proc/[0-9]*/cmdline'):
-        try:
-            pid = int(p.split('/')[2])
-            args = open(p, 'rb').read().split(b'\0')
-            pi = proc_info(pid)
-            if pi and pi[1] != 'Z': out.append((pid, [a.decode('utf8', 'replace') for a in args if a]))
-        except (OSError, ValueError): continue
-    return out
+cmdlines = pc.cmdlines
 
 def busy_reason():
     """Why a new run must wait: another relax_job.py / tile_sim.py process is alive (web-UI job, or a job of another campaign). Stale job_stage.json files
@@ -96,20 +80,12 @@ def stale_stage_files():
     return sorted(glob.glob(os.path.join(WEB_RESULTS, '*', 'job_stage.json')))
 
 def descendants_rss_kb(root_pid):
-    kids = {root_pid}; total = 0; changed = True; table = {}
-    for pid, _ in cmdlines():
-        try: table[pid] = int(open('/proc/%d/stat' % pid).read().rsplit(')', 1)[1].split()[1])
-        except (OSError, ValueError, IndexError): pass
+    table = pc.proc_table(); kids = {root_pid}; changed = True
     while changed:
         changed = False
-        for pid, ppid in table.items():
+        for pid, (ppid, _) in table.items():
             if ppid in kids and pid not in kids: kids.add(pid); changed = True
-    for pid in kids:
-        try:
-            for l in open('/proc/%d/status' % pid):
-                if l.startswith('VmRSS:'): total += int(l.split()[1])
-        except (OSError, ValueError): pass
-    return total
+    return sum(table[p][1] for p in kids if p in table)
 
 
 # ------------------------------------------------------------------ spec, design, manifest

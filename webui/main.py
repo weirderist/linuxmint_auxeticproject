@@ -306,8 +306,7 @@ def _sim_cmd(d, b, R):
     return cmd, kc
 
 def _boot_id():
-    try: return Path("/proc/sys/kernel/random/boot_id").read_text().strip()
-    except OSError: return ""
+    return campaign_api._cm().boot_id()          # Linux /proc boot id (as before) or the Windows last boot time (platform_compat, 2026-11-27)
 
 _START = threading.Lock()
 def _one_start(fn):
@@ -322,7 +321,7 @@ def _one_start(fn):
 def _launch(rid, d, cmd, resume=False):
     log = open(d / "job.log", "a" if resume else "w")
     t0 = time.time(); (d / "job.json").write_text(json.dumps({"started": t0, "boot_id": _boot_id()}))          # before the job starts, so it can always read it; boot_id as in campaign runner.lock
-    p = JOBS[rid] = subprocess.Popen(cmd + (["--resume"] if resume else []), stdout=log, stderr=subprocess.STDOUT, cwd=str(SCRIPTS), start_new_session=True)
+    p = JOBS[rid] = subprocess.Popen(cmd + (["--resume"] if resume else []), stdout=log, stderr=subprocess.STDOUT, cwd=str(SCRIPTS), **campaign_api._cm().pc.child_group_kwargs())
     try:          # pid and start ticks: a later web service (after a restart) still recognises the job as running (2026-11-26)
         pi = campaign_api._cm().proc_info(p.pid)
         (d / "job.json").write_text(json.dumps({"started": t0, "boot_id": _boot_id(), "pid": p.pid, "start_ticks": pi[0] if pi else ""}))
@@ -462,7 +461,7 @@ def tile_start(rid: str, b: TileBody):
            "--strain", b.strain, "--do", b.do]
     log = open(d / "tile.log", "w")
     (d / "tile_job.json").write_text(json.dumps({"started": time.time()}))
-    JOBS[rid + "#tile"] = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT, cwd=str(SCRIPTS), start_new_session=True)
+    JOBS[rid + "#tile"] = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT, cwd=str(SCRIPTS), **campaign_api._cm().pc.child_group_kwargs())
     return {"started": rid}
 
 @app.get("/api/results/{rid}/tile")
@@ -550,12 +549,22 @@ def mesh(rid: str, v: str = "baseline"):
         _obj_to_bin(objs[0], objs[0].with_suffix(".bin")); cand = [objs[0].with_suffix(".bin")]
     return FileResponse(cand[0], media_type="application/octet-stream", headers={"Content-Encoding": "identity"})   # float data barely compresses: skip gzip
 
+def _kill_group(pid, hard=False, start_ticks=None):
+    """Stop a job's process group. Linux: os.killpg exactly as before. Windows (workstation, 2026-11-27): the process tree (taskkill /T /F), and for a job this service did not start only if
+    the pid still belongs to that job (same creation time), so a reused pid is never hit."""
+    if os.name == "posix": os.killpg(int(pid), signal.SIGKILL if hard else signal.SIGTERM); return
+    pc = campaign_api._cm().pc
+    if start_ticks is not None:
+        pi = pc.proc_info(int(pid))
+        if not pi or str(pi[0]) != str(start_ticks): raise ProcessLookupError("pid %s is no longer the recorded job" % pid)
+    pc.kill_tree(int(pid))
+
 @app.post("/api/results/{rid}/cancel")
 def cancel(rid: str):
     d = _folder(rid)
     p = JOBS.get(rid)
     if (p is None or p.poll() is not None) and _orphan(d):          # a job this service did not start (it was restarted): stop its process group by the recorded pid
-        try: os.killpg(int(_orphan(d)["pid"]), signal.SIGTERM)
+        try: o = _orphan(d); _kill_group(int(o["pid"]), start_ticks=o.get("start_ticks"))
         except Exception as e: raise HTTPException(409, "could not stop the job: %s" % e)
         return {"cancelled": rid}
     if p is None or p.poll() is not None:
@@ -563,16 +572,16 @@ def cancel(rid: str):
         if p is None or p.poll() is not None:
             raise HTTPException(409, "no running simulation for this result")
         try:
-            os.killpg(p.pid, signal.SIGTERM); p.wait(timeout=10)
+            _kill_group(p.pid); p.wait(timeout=10)
         except Exception:
-            try: os.killpg(p.pid, signal.SIGKILL)
+            try: _kill_group(p.pid, hard=True)
             except Exception: pass
         return {"cancelled": rid}
     try:
-        os.killpg(p.pid, signal.SIGTERM)
+        _kill_group(p.pid)
         p.wait(timeout=10)
     except Exception:
-        try: os.killpg(p.pid, signal.SIGKILL)
+        try: _kill_group(p.pid, hard=True)
         except Exception: pass
     mp = d / "meta.json"; m = _read_json(mp) or {}
     if m.get("simulations") and m["simulations"][-1].get("status") not in ("settled", "failed", "cancelled"):

@@ -19,7 +19,7 @@ ROOT = os.path.dirname(os.path.dirname(HERE)) if os.path.basename(os.path.dirnam
 FROZEN = os.path.basename(HERE) == 'code' and os.path.isfile(os.path.join(os.path.dirname(HERE), 'spec.json'))      # this file runs from the FROZEN COPY inside a campaign folder (<root>/<campaign>/code/)
 CAMPAIGNS = os.environ.get('CAMPAIGN_DIR') or os.path.join(ROOT, 'campaigns')
 SHELL_ROOT = os.environ.get('SHELL_RUNS_DIR') or (os.path.dirname(os.path.dirname(HERE)) if FROZEN else os.path.join(CAMPAIGNS, 'shell_runs'))
-FROZEN_FILES = ('campaign.py', 'shell_campaign.py', 'shell_run.py', 'shell_metrics.py', 'shell_sim.py', 'shell_policy.py')            # everything the runner and its worker execute from scripts/
+FROZEN_FILES = ('campaign.py', 'shell_campaign.py', 'shell_run.py', 'shell_metrics.py', 'shell_sim.py', 'shell_policy.py', 'platform_compat.py')          # platform_compat.py added 2026-11-27 (campaign.py imports it); campaigns frozen before keep their own six files            # everything the runner and its worker execute from scripts/
 NAME_RE = re.compile(r'^[0-9A-Za-z_-]{1,64}$'); ID_RE = re.compile(r'^S[0-9]{6}$')
 HEAVY = ('shell.npz', 'shell.bin')
 # Limits. Every number is UNSOURCED (K approved them on 2026-11-21): the reference time is ONE measurement (tiles 3, 11,737 vertices, 285 s); linear scaling with vertices is not verified.
@@ -169,6 +169,13 @@ class Camp:
 
     def exists(s): return os.path.isfile(s.spec)
     def spec_(s): return cm.rjson(s.spec, {}) or {}
+    def seeds_file(s):
+        """The plan's seeds file. spec.json stores the absolute path of the machine that created the campaign (the server, /home/...): if that path does not exist here (the campaign was
+        copied to the workstation, 2026-11-27), the file of the same name in this repository's campaigns/shell_seeds/ is used."""
+        f = (s.spec_().get('plan') or {}).get('seeds_file')
+        if not f or os.path.isfile(f): return f
+        alt = os.path.join(CAMPAIGNS, 'shell_seeds', os.path.basename(f.replace(chr(92), '/')))
+        return alt if os.path.isfile(alt) else f
     def limits(s):
         lim = dict(DEFAULT_LIMITS); lim.update((s.spec_().get('limits') or {}))
         if os.environ.get('SHELL_MIN_FREE_GB'): lim['min_free_gb'] = float(os.environ['SHELL_MIN_FREE_GB'])         # test hooks
@@ -404,7 +411,7 @@ class Camp:
         return rp
     def seed_info(s, source):
         """The seed a run descends from, with the real-fold text of K's report (seeds.json): source 'seed:seed03', 'seed:pattern1:tiles4', 'variant:seed03', 'filler:seed03'."""
-        parts = (source or '').split(':'); kind = parts[0]; sid = parts[1] if len(parts) > 1 else ''; f = (s.spec_().get('plan') or {}).get('seeds_file')
+        parts = (source or '').split(':'); kind = parts[0]; sid = parts[1] if len(parts) > 1 else ''; f = s.seeds_file()
         try: ent = next(x for x in json.load(open(f, encoding='utf8'))['seeds'] if x['id'] == sid)
         except Exception: return {}
         return dict(kind=kind, seed=sid, sample=ent.get('sample'), real_tm_axis=ent.get('real_tm_axis'), real_fold=ent.get('real_fold'), report_sections=[ent.get('report_section_prep'), ent.get('report_section_result')])
@@ -437,7 +444,7 @@ class Camp:
 
 # ------------------------------------------------------------------ the runner
 def kill_group(p, grace=60):
-    if os.name != 'posix': p.terminate(); return
+    if os.name != 'posix': cm.pc.kill_tree(p.pid); return          # Windows: the run and its children (taskkill /T), 2026-11-27
     try: os.killpg(p.pid, signal.SIGTERM)
     except OSError: pass
     for _ in range(int(grace)):
@@ -471,7 +478,7 @@ def reconcile(c):
             try:          # a worker adopted from an earlier runner still gets its time limit (it had none, 2026-11-26)
                 tmo = timeout_for(normalise(cm.rjson(os.path.join(d, 'settings.json'), {}) or {}), c.limits())
                 if time.time() - float(wk.get('t_start') or time.time()) > tmo:
-                    cm.say('adopted worker of %s exceeded %.0f s: terminating its process group' % (rid, tmo)); os.killpg(int(wk['pid']), signal.SIGTERM)
+                    cm.say('adopted worker of %s exceeded %.0f s: terminating its process group' % (rid, tmo)); cm.pc.kill_tree(int(wk['pid']))
             except (ValueError, KeyError, TypeError, OSError, AttributeError): pass
             return 'worker of %s is still running (pid %s)' % (rid, wk.get('pid'))
         if os.path.exists(os.path.join(c.runs, rid)): c.quarantine(d, rid, 'duplicate'); continue
@@ -493,7 +500,7 @@ def run_one(c, item, poll=1.0):
     sp = os.path.join(tmp, 'settings.json'); cm.wjson(sp, dict(s, fold_min_turn_rad=(c.spec_().get('thresholds') or {}).get('fold_min_turn_rad', 0.2)))
     cmd = [sys.executable, '-u', os.path.join(HERE, 'shell_run.py'), '--settings', sp, '--out', tmp]; tmo = timeout_for(s, lim); t0 = time.time(); m0 = time.monotonic()          # elapsed time on the monotonic clock: a clock step after a power cut must not kill or spare a run (2026-11-26)
     log = open(os.path.join(tmp, 'shell.log'), 'a')
-    kw = dict(start_new_session=True, preexec_fn=lambda: signal.signal(signal.SIGHUP, signal.SIG_IGN)) if os.name == 'posix' else {}      # own session and SIGHUP ignored, like the runner
+    kw = cm.pc.detach_kwargs()      # own session and SIGHUP ignored, like the runner (Windows: own process group, no window)
     p = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, cwd=HERE, close_fds=True, env=dict(os.environ, PYTHONDONTWRITEBYTECODE='1'), **kw)      # no .pyc written next to the frozen code
     pi = cm.proc_info(p.pid); cm.wjson(os.path.join(tmp, 'worker.json'), dict(pid=p.pid, boot_id=cm.boot_id(), start_ticks=pi[0] if pi else '', t_start=t0))
     c.set_runner(state='running', current=rid, timeout_s=round(tmo), worker_pid=p.pid); cm.say('run %s started (pid %d, timeout %.0f s)' % (rid, p.pid, tmo)); killed = False
@@ -507,11 +514,9 @@ def run_one(c, item, poll=1.0):
     c.set_runner(state='between', current=None)
 
 def acquire_lock(c):
-    import fcntl
-    lock = open(c.lock, 'a+')
-    try: fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except OSError: sys.exit('another runner already holds %s' % c.lock)
-    pi = cm.proc_info(os.getpid()); lock.seek(0); lock.truncate(); lock.write(json.dumps(dict(pid=os.getpid(), boot_id=cm.boot_id(), start_ticks=pi[0] if pi else '', started=cm.now()))); lock.flush()
+    lock = cm.pc.try_lock(c.lock)          # Linux: flock on runner.lock (as before); Windows: a byte lock on runner.lock.lk (2026-11-27)
+    if lock is None: sys.exit('another runner already holds %s' % c.lock)
+    pi = cm.proc_info(os.getpid()); cm.pc.write_lock_info(lock, c.lock, json.dumps(dict(pid=os.getpid(), boot_id=cm.boot_id(), start_ticks=pi[0] if pi else '', started=cm.now())))
     return lock
 
 def serve(c, poll_s=5.0, stop_when_empty=False, lock=True, run_poll=1.0):
@@ -600,7 +605,7 @@ def launch_detached(name, poll_s=5):
     os.makedirs(cm.LOG_DIR, exist_ok=True); lp = os.path.join(cm.LOG_DIR, 'shell_campaign_%s.log' % name)
     script = os.path.join(Camp(name).code_dir(), 'campaign.py'); script = script if os.path.isfile(script) else os.path.join(HERE, 'campaign.py')
     cmd = [sys.executable, script, 'shell-run', name, '--poll-s', str(poll_s)]
-    kw = dict(start_new_session=True, preexec_fn=lambda: signal.signal(signal.SIGHUP, signal.SIG_IGN)) if os.name == 'posix' else {}
+    kw = cm.pc.detach_kwargs()          # Linux: own session, SIGHUP ignored; Windows: own process group, no window (2026-11-27)
     p = subprocess.Popen(cmd, stdout=open(lp, 'a'), stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, close_fds=True, env=dict(os.environ, SHELL_RUNS_DIR=SHELL_ROOT, CAMPAIGN_LOG_DIR=cm.LOG_DIR, PYTHONDONTWRITEBYTECODE='1'), **kw)
     return p.pid, lp
 

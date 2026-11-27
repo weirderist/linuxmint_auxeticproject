@@ -1,0 +1,13 @@
+# Python packages of the project (2026-11-27). One venv at the repository root (venv/, not in git) runs the solvers, the runners, the web service and the tests,
+# on Linux (the server) and on Windows (the workstation). Install:  python -m venv venv  then  venv/bin/pip install -r requirements.txt  (Windows: venv\Scripts\pip ...)
+# Versions measured on 2026-11-27: server numpy 2.5.2, scipy 1.18.1, Python 3.12.3; workstation jax 0.12.1, numpy 2.5.5, scipy 1.18.1, Python 3.14; Kaggle JAX 0.11.1.
+numpy>=2.0
+scipy>=1.13
+jax>=0.4.30                 # CPU build; Kaggle images bring their own CUDA build
+fastapi>=0.110
+uvicorn>=0.29
+pydantic>=2.6
+httpx>=0.27                 # FastAPI TestClient (tests)
+esprima>=4.0                # tests/test_parse_scripts.py, test_shell_api.py
+kaggle>=1.6                 # Kaggle CLI (scripts/kaggle); 2.x needs the KAGGLE_API_TOKEN form of the token
+six                         # missing dependency of the kaggle package seen on 2026-11-27

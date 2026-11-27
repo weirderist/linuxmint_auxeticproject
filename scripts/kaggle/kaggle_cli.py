@@ -8,7 +8,8 @@ import os, subprocess, sys
 
 ROOT = os.environ.get('AUXETIC_ROOT') or os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 ENV = os.environ.get('AUXETIC_ENV') or os.path.join(ROOT, '.env')
-BIN = os.environ.get('KAGGLE_BIN') or os.path.expanduser('~/kaggle_venv/bin/kaggle')
+BIN = os.environ.get('KAGGLE_BIN') or (os.path.expanduser('~/kaggle_venv/bin/kaggle') if os.name != 'nt' else
+       next((p for p in (os.path.join(ROOT, 'venv', 'Scripts', 'kaggle.exe'), os.path.expanduser(r'~\auxetic_ws_venv\Scripts\kaggle.exe')) if os.path.isfile(p)), 'kaggle'))          # Windows (workstation), 2026-11-27
 
 
 def load_env():

@@ -26,12 +26,12 @@ class Local:
         p = subprocess.run([sys.executable, os.path.join(ROOT, 'scripts', 'workstation', 'ws_remote.py')] + [str(a) for a in args], capture_output=True, text=True)
         try: return json.loads(p.stdout.strip().splitlines()[-1]), ''
         except (ValueError, IndexError): return None, p.stderr[-400:]
-    def sh(s, cmd, timeout=300):
-        if not s.net: return 1, 'network unreachable'
-        q = [x for x in cmd.split("'")[1::2]]
-        if cmd.startswith('test -d'): return 0, 'yes' if os.path.isdir(q[0]) else 'no'
-        if cmd.startswith('mv'): os.rename(q[0], q[1]); return 0, ''
-        return 1, 'unknown'
+    def exists(s, path):
+        if not s.net: return None
+        return os.path.isdir(path)
+    def rename(s, a, b):
+        if not s.net: return False
+        os.rename(a, b); return True
     def get(s, rp, lp, timeout=600):
         if not s.net: return False
         shutil.copy2(rp, lp); return True

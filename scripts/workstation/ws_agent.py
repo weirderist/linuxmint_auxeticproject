@@ -47,9 +47,35 @@ class SSH:
     def get(s, remote_path, local_path, timeout=600):
         try: return subprocess.run(['scp', '-q'] + s.opt + ['%s:%s' % (s.host, remote_path), local_path], capture_output=True, text=True, timeout=timeout).returncode == 0
         except (subprocess.TimeoutExpired, OSError): return False
+    def exists(s, remote_path):
+        rc, o = s.sh("test -d '%s' && echo yes || echo no" % remote_path); return None if rc != 0 and 'yes' not in o and 'no' not in o else ('yes' in o)
+    def rename(s, a, b):
+        rc, o = s.sh("mv '%s' '%s'" % (a, b)); return rc == 0
     def put_dir(s, local_dir, remote_dir, timeout=1800):
         try: return subprocess.run(['scp', '-q', '-r'] + s.opt + [local_dir, '%s:%s' % (s.host, remote_dir)], capture_output=True, text=True, timeout=timeout).returncode == 0
         except (subprocess.TimeoutExpired, OSError): return False
+
+
+class Local:
+    """The hub (queue, leases, results) is THIS machine (2026-11-27: the workstation may replace the server): ws_remote.py runs here, files are copied locally. Selected with --host local."""
+    def __init__(s, root):
+        s.root = os.path.abspath(os.path.expanduser(root)); s.py = os.path.join(s.root, 'venv', 'Scripts', 'python.exe') if os.name == 'nt' else os.path.join(s.root, 'venv', 'bin', 'python')
+        if not os.path.isfile(s.py): s.py = sys.executable
+    def remote(s, args, timeout=300):
+        try: p = subprocess.run([s.py, os.path.join(s.root, 'scripts', 'workstation', 'ws_remote.py')] + [str(a) for a in args], capture_output=True, text=True, timeout=timeout, cwd=s.root)
+        except (subprocess.TimeoutExpired, OSError) as e: return None, str(e)
+        try: return json.loads(p.stdout.strip().splitlines()[-1]), ''
+        except (ValueError, IndexError): return None, (p.stderr or p.stdout)[-300:]
+    def exists(s, path): return os.path.isdir(path)
+    def rename(s, a, b):
+        try: os.rename(a, b); return True
+        except OSError: return False
+    def get(s, rp, lp, timeout=600):
+        try: shutil.copy2(rp, lp); return True
+        except OSError: return False
+    def put_dir(s, ld, rd_, timeout=1800):
+        try: shutil.copytree(ld, rd_); return True
+        except OSError: return False
 
 
 def proc_alive(pid, ctime=None):
@@ -90,7 +116,7 @@ def kill_tree(pid):
 
 class Agent:
     def __init__(s, g, transport=None):
-        s.g = g; s.t = transport or SSH(g.host, g.remote_root); s.w = os.path.abspath(g.work); s.worker = g.worker or 'workstation:' + socket.gethostname().lower()[:40]
+        s.g = g; s.t = transport or (Local(g.remote_root if g.remote_root != '~/auxetic_project' else os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))) if g.host == 'local' else SSH(g.host, g.remote_root)); s.w = os.path.abspath(g.work); s.worker = g.worker or 'workstation:' + socket.gethostname().lower()[:40]
         for d in ('runs', 'quarantine', 'done', 'code'): os.makedirs(os.path.join(s.w, d), exist_ok=True)
         s.sp = os.path.join(s.w, 'state.json')
     def state(s): return rjson(s.sp, {}) or {}
@@ -126,11 +152,11 @@ class Agent:
     def upload(s, st, inbox):
         rid = st['rid']; stamp = os.path.basename(st['out']).split('.', 1)[1]; final = '%s/%s.%s' % (inbox, rid, stamp)
         part = '%s.part%s' % (final, time.strftime('%H%M%S'))          # a new name per attempt: scp -r into an existing folder would nest the copy
-        rc, o = s.t.sh("test -d '%s' && echo yes || echo no" % final)
-        if 'yes' not in o:          # a partial upload is never removed: a retry copies the folder again into the same .part name, and the rename below is the commit
+        ex = s.t.exists(final)
+        if ex is None: say('hub not reachable; retried next poll'); return False
+        if not ex:          # a partial upload is never removed: each attempt copies into a new .part name, and the rename below is the commit
             if not s.t.put_dir(st['out'], part): say('upload failed; retried next poll'); return False
-            rc, o = s.t.sh("mv '%s' '%s'" % (part, final))
-            if rc != 0: say('rename on the server failed; retried next poll', o[-200:]); return False
+            if not s.t.rename(part, final): say('rename on the hub failed; retried next poll'); return False
         r, err = s.call('import', '--id', rid, '--src', final, '--wall', str(st.get('wall_s') or ''))
         if r is None: say('import call failed (network?); retried next poll', err); return False
         if r.get('ok'): say('run', rid, 'imported:', r.get('result')); shutil.move(st['out'], os.path.join(s.w, 'done', os.path.basename(st['out']))); s.save(dict(last=dict(st, ended='imported', t=now()))); return True
@@ -166,7 +192,7 @@ class Agent:
 
 def main(argv=None):
     a = argparse.ArgumentParser(); a.add_argument('--campaign', required=True); a.add_argument('--python', default=sys.executable, help='interpreter with jax, numpy, scipy')
-    a.add_argument('--work', default=os.path.join(os.path.expanduser('~'), 'auxetic_ws')); a.add_argument('--poll-s', type=float, default=60); a.add_argument('--host', default='server')
+    a.add_argument('--work', default=os.path.join(os.path.expanduser('~'), 'auxetic_ws')); a.add_argument('--poll-s', type=float, default=60); a.add_argument('--host', default='server', help="ssh host of the hub, or 'local' when the hub is this machine")
     a.add_argument('--remote-root', default='~/auxetic_project'); a.add_argument('--worker', default=''); a.add_argument('--once', action='store_true'); a.add_argument('--stub', action='store_true', help=argparse.SUPPRESS)
     g = a.parse_args(argv); ag = Agent(g)
     lk = open(os.path.join(ag.w, 'agent.lock'), 'a+')          # one agent per work folder: a second start (logon task while one runs) exits at once; the OS releases the lock when the process dies
