@@ -193,6 +193,7 @@ def main():
     a.add_argument('--mu', type=float, required=True, help='yarn-yarn friction coefficient'); a.add_argument('--k-contact', type=float, required=True)
     a.add_argument('--perturb', type=float, default=0.15, help='out-of-plane symmetry-breaking amplitude, fraction of R (numerical device)')
     a.add_argument('--outer', type=int, default=40); a.add_argument('--maxiter', type=int, default=300); a.add_argument('--seed', type=int, default=0)
+    a.add_argument('--solver', choices=['lbfgs', 'fire'], default='lbfgs', help='yarn minimiser: lbfgs (CPU, default) or fire (FIRE, GPU-friendly, 2026-11-27)')
     a.add_argument('--sides', type=int, default=8)
     a.add_argument('--curl', type=float, default=0.0, help='stored curl, turning angle (rad) per vertex, front loops +, back loops -')
     a.add_argument('--curl-aniso', action='store_true', help='anticlastic curl: course-direction yarn opposite to wale-direction yarn')
@@ -233,6 +234,7 @@ def main():
     a.add_argument('--shell-sub', type=int, default=2, help='shell mesh cells per stitch side'); a.add_argument('--shell-steps', type=int, default=15); a.add_argument('--shell-iter', type=int, default=400)
     a.add_argument('--resume', action='store_true', help='continue from checkpoint.npz in the folder (written after every outer iteration; survives a power cut)')
     g = a.parse_args()
+    sv.SOLVER = g.solver          # yarn minimiser (relax_solver.SOLVER)
     def set_stage(name):
         """job_stage.json tells the UI which part of the job is running (prepare, tile, shell, ramp, fold, relax). Atomic; removed at the end."""
         try:

@@ -145,6 +145,53 @@ def energy_parts(sim, kc, E):
     sh = float(_energy(x, l0, seg, tri, lbar, kb0, pairs, pm, 0.0, 0.0, 0.0, 0.0, *sa))
     return dict(total=tot, stretch=st, bend=bd, shell=sh, contact=tot - st - bd - sh)
 
+# ---------------------------------------------------------------- FIRE (2026-11-27, K approved; Bitzek et al. 2006 PRL 97 170201 with the FIRE 2.0 corrections of Guenole et al. 2020 Comput. Mater. Sci. 175 109584)
+# The same minimiser as shell_sim.make_fire, applied to the yarn energy _energy. The whole loop runs inside JAX (lax.scan, jitted once per array shape), so it runs on a GPU without a host
+# round trip per iteration; SciPy L-BFGS-B runs on the CPU and needs one host call per iteration. Used when SOLVER == 'fire' (relax_job --solver fire); L-BFGS stays the default and is unchanged.
+SOLVER = 'lbfgs'          # 'lbfgs' (default) or 'fire'
+FIRE_CHUNK = 200          # steps per jitted call (UNSOURCED numerical choice)
+FIRE_MAXIT = 20000         # step cap per relaxation round (UNSOURCED)
+FIRE_GTOL_REL = 1e-6      # converged when max |grad| < FIRE_GTOL_REL x EA (dimensionless strain 1e-6; UNSOURCED)
+_FIRE = {}
+
+def _fire_chunk_impl(x, v, dt, a, npos, dtmax, *args):
+    def body(c, _):
+        x, v, dt, a, npos, dtmax = c
+        E, g = _vg(x, *args); F = -g; P = F @ v
+        nv = jnp.sqrt(v @ v); nF = jnp.sqrt(F @ F) + 1e-300
+        up = P > 0
+        v = jnp.where(up, (1 - a)*v + a*nv*F/nF, 0.0); x = jnp.where(up, x, x - 0.5*dt*c[1])          # uphill: half step back and stop (FIRE)
+        npos = jnp.where(up, npos + 1, 0); grow = up & (npos > 5)
+        dt = jnp.where(grow, jnp.minimum(dt*1.1, dtmax), jnp.where(up, dt, dt*0.5)); a = jnp.where(grow, a*0.99, jnp.where(up, a, 0.1))
+        v = v + dt*F; x = x + dt*v
+        return (x, v, dt, a, npos, dtmax), E
+    (x, v, dt, a, npos, dtmax), Es = jax.lax.scan(body, (x, v, dt, a, npos, dtmax), None, length=FIRE_CHUNK)
+    return x, v, dt, a, npos, Es[-1]
+
+def _fire_fns():
+    if 'run' not in _FIRE:
+        _FIRE['run'] = jax.jit(_fire_chunk_impl)
+        _FIRE['gfun'] = jax.jit(lambda x, *a: _vg(x, *a)[1])
+        _FIRE['hvp'] = jax.jit(lambda x, w, *a: jax.jvp(lambda q: _FIRE['gfun'](q, *a), (x,), (w,))[1])
+    return _FIRE
+
+def fire_min(x0, args, maxit=20000, gtol=None, seed=1):
+    """Minimise the yarn energy from x0 with FIRE. Returns (x, E, max|grad|, steps, converged). The time step limit dt_max = 1.5/sqrt(lambda_max), lambda_max of the Hessian by 30 power
+    iterations at x0 (explicit stability needs dt < 2/sqrt(lambda_max); 1.5 is UNSOURCED). Steps are counted in multiples of FIRE_CHUNK."""
+    F = _fire_fns(); args = tuple(jnp.asarray(a) for a in args); x = jnp.asarray(x0, float)
+    w = jnp.asarray(np.random.default_rng(seed).standard_normal(x.shape[0]))
+    for _ in range(30):
+        w = F['hvp'](x, w, *args); lmax = float(jnp.sqrt(w @ w)); w = w/lmax
+    dtmax = 1.5/np.sqrt(max(lmax, 1e-30)); EA = float(np.asarray(args[7])) if len(args) > 7 else 1.0
+    if gtol is None: gtol = FIRE_GTOL_REL*max(EA, 1e-30)
+    v = jnp.zeros_like(x); dt = jnp.asarray(0.1*dtmax); a = jnp.asarray(0.1); npos = jnp.asarray(0); dmax = jnp.asarray(dtmax); steps = 0; conv = False
+    while steps < maxit:
+        x, v, dt, a, npos, E = F['run'](x, v, dt, a, npos, dmax, *args); steps += FIRE_CHUNK
+        g = np.asarray(F['gfun'](x, *args), float)
+        if np.abs(g).max() < gtol: conv = True; break
+    g = np.asarray(F['gfun'](x, *args), float)
+    return np.asarray(x, float), float(_vg(x, *args)[0]), float(np.abs(g).max()), steps, conv
+
 def relax(sim, E, kc, maxiter=300, rounds=4, verbose=False):
     """Minimise positions at fixed rest lengths. Contact pairs are rebuilt between rounds (positions move)."""
     EA, EI = bend_stiffness(sim, E)
@@ -156,11 +203,15 @@ def relax(sim, E, kc, maxiter=300, rounds=4, verbose=False):
             f = lambda v: tuple(np.asarray(t, float) for t in _vgm(v, c, sc, *args)); res = minimize(f, np.r_[np.zeros(3), x0], jac=True, method='L-BFGS-B', options=dict(maxiter=maxiter, maxcor=30, ftol=1e-13, gtol=1e-9))
             k3 = res.x[:3]*sc; X = np.asarray(_warp(k3, res.x[3:].reshape(-1, 3), c), float); sim.macro_k = getattr(sim, 'macro_k', np.zeros(3)) + k3
         else:
-            f = lambda x: tuple(np.asarray(v, float) for v in _vg(x, *args))
-            res = minimize(f, x0, jac=True, method='L-BFGS-B', options=dict(maxiter=maxiter, maxcor=30, ftol=1e-13, gtol=1e-9)); X = res.x.reshape(-1, 3)
+            if SOLVER == 'fire':
+                xf, Ef, gmax, steps, conv = fire_min(x0, args, maxit=FIRE_MAXIT)          # FIRE needs thousands of steps; the L-BFGS maxiter does not apply
+                res = type('R', (), dict(x=xf, fun=Ef, nit=steps, message=('FIRE converged' if conv else 'FIRE step cap'), gmax=gmax))(); X = xf.reshape(-1, 3)
+            else:
+                f = lambda x: tuple(np.asarray(v, float) for v in _vg(x, *args))
+                res = minimize(f, x0, jac=True, method='L-BFGS-B', options=dict(maxiter=maxiter, maxcor=30, ftol=1e-13, gtol=1e-9)); X = res.x.reshape(-1, 3)
         for y, o in zip(sim.yarns, off): y.X = X[o:o+len(y.X)].copy()
         if verbose: print('   relax round %d: %d pairs, E %.6g, %d its, %s' % (r+1, npair, res.fun, res.nit, res.message if isinstance(res.message, str) else res.message.decode()) + ('' if not MACRO else '   macro bend kx %+.4g ky %+.4g twist %+.4g (added this round)' % tuple(k3)), flush=True)
-        if res.nit < maxiter: break
+        if res.nit < maxiter and (SOLVER != 'fire' or getattr(res, 'gmax', 0) < FIRE_GTOL_REL*max(EA, 1e-30)): break
 
 def min_axis_distance(sim, skip=6):
     P = np.vstack([y.X for y in sim.yarns]); yid = np.concatenate([[k]*len(y.X) for k, y in enumerate(sim.yarns)]); ix = np.concatenate([np.arange(len(y.X)) for y in sim.yarns])
