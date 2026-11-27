@@ -194,6 +194,9 @@ def main():
     a.add_argument('--perturb', type=float, default=0.15, help='out-of-plane symmetry-breaking amplitude, fraction of R (numerical device)')
     a.add_argument('--outer', type=int, default=40); a.add_argument('--maxiter', type=int, default=300); a.add_argument('--seed', type=int, default=0)
     a.add_argument('--solver', choices=['lbfgs', 'fire'], default='lbfgs', help='yarn minimiser: lbfgs (CPU, default) or fire (FIRE, GPU-friendly, 2026-11-27)')
+    a.add_argument('--tpi', type=float, default=0.0, help='yarn twist, turns per inch (2026-11-27); acts only with --twist-live > 0 (relax_solver twist drive)')
+    a.add_argument('--twist-dir', choices=['Z', 'S'], default='Z', help='twist direction (sign of the drive; which sign skews which way is not verified against a fabric yet)')
+    a.add_argument('--twist-live', type=float, default=0.0, help='share of the twist that still acts, 0..1: a fold property to be fitted (UNSOURCED); 0 = off')
     a.add_argument('--sides', type=int, default=8)
     a.add_argument('--curl', type=float, default=0.0, help='stored curl, turning angle (rad) per vertex, front loops +, back loops -')
     a.add_argument('--curl-aniso', action='store_true', help='anticlastic curl: course-direction yarn opposite to wale-direction yarn')
@@ -280,7 +283,7 @@ def main():
     set_stage('prepare')
     ten_strain = rs.strain_at(0.01*g.tension/EA)                              # strain under the feeder tension: T/EA for Hooke, from the measured curve with --stretch-law
     ratio = g.length_ratio/(1.0 + ten_strain)                                 # rest length = baseline length / (1 + strain), T in N (cN x 0.01)
-    p = rs.Params(mu=g.mu, EA=EA, EI=EI, GJ=0.0, k_contact=g.k_contact, outer_max=g.outer, rest_length_ratio=ratio, curl=g.curl, curl_aniso=g.curl_aniso, ref_scale=g.ref_scale, creep_tau=g.creep_tau, hours=g.hours, stall_tol=g.stall_tol, stall_rounds=g.stall_rounds, stall_move=g.stall_move)       # GJ unused: twist not in the energy (see relax_solver)
+    p = rs.Params(mu=g.mu, EA=EA, EI=EI, GJ=0.0, k_contact=g.k_contact, outer_max=g.outer, rest_length_ratio=ratio, curl=g.curl, curl_aniso=g.curl_aniso, ref_scale=g.ref_scale, creep_tau=g.creep_tau, hours=g.hours, stall_tol=g.stall_tol, stall_rounds=g.stall_rounds, stall_move=g.stall_move, tpi=g.tpi, twist_dir=g.twist_dir, twist_live=g.twist_live)       # GJ unused (twist is not a variable); the twist drive uses tpi / twist_live (relax_solver.twist_args)
     # creep: each outer round moves every rest length (and reference curvature) a fraction a_creep toward the current state; the total rest length is NOT conserved, so a starting --loop-grade can be partly erased
     a_creep = 1.0 - math.exp(-(g.hours/g.outer)/g.creep_tau) if g.creep_tau else 0.0
     sim = rs.load(g.folder, p)
@@ -354,7 +357,7 @@ def main():
     def meta_update(fn):
         m = json.load(open(mp)); fn(m); json.dump(m, open(mp + '.tmp', 'w'), indent=1); os.replace(mp + '.tmp', mp)
     run_entry = dict(started=time.strftime('%Y-%m-%dT%H:%M:%S'), status='running', finished=None, seconds=None,
-                     params=dict(E=g.E, mu=g.mu, k_contact=g.k_contact, curl=g.curl, curl_aniso=bool(g.curl_aniso), ref_scale=g.ref_scale, shell=bool(g.shell), shell_w=g.shell_w, shell_frame=bool(g.shell and not g.no_shell_frame), shell_kappa=g.shell_kappa, kappa_scale=g.kappa_scale, kappa_xy=kxy, stretch_scale=g.stretch_scale, bend_scale=g.bend_scale, straight=g.straight, length_ratio=g.length_ratio, seed_only=bool(g.seed_only), ramp=g.ramp, ramp_iter=g.ramp_iter, seed_stitch=g.seed_stitch, ea=g.ea, ei=g.ei, stretch_law=g.stretch_law, macro=bool(g.macro), fold_search=g.fold_search, fold_iter=g.fold_iter, fold_delta=g.fold_delta, stall_tol=g.stall_tol, stall_rounds=g.stall_rounds, stall_move=g.stall_move, tension_cN=g.tension, creep_tau_h=g.creep_tau, hours=g.hours, outer=g.outer, maxiter=g.maxiter, perturb=g.perturb, seed=g.seed),
+                     params=dict(E=g.E, mu=g.mu, k_contact=g.k_contact, solver=g.solver, tpi=g.tpi, twist_dir=g.twist_dir, twist_live=g.twist_live, curl=g.curl, curl_aniso=bool(g.curl_aniso), ref_scale=g.ref_scale, shell=bool(g.shell), shell_w=g.shell_w, shell_frame=bool(g.shell and not g.no_shell_frame), shell_kappa=g.shell_kappa, kappa_scale=g.kappa_scale, kappa_xy=kxy, stretch_scale=g.stretch_scale, bend_scale=g.bend_scale, straight=g.straight, length_ratio=g.length_ratio, seed_only=bool(g.seed_only), ramp=g.ramp, ramp_iter=g.ramp_iter, seed_stitch=g.seed_stitch, ea=g.ea, ei=g.ei, stretch_law=g.stretch_law, macro=bool(g.macro), fold_search=g.fold_search, fold_iter=g.fold_iter, fold_delta=g.fold_delta, stall_tol=g.stall_tol, stall_rounds=g.stall_rounds, stall_move=g.stall_move, tension_cN=g.tension, creep_tau_h=g.creep_tau, hours=g.hours, outer=g.outer, maxiter=g.maxiter, perturb=g.perturb, seed=g.seed),
                      start=dict(e0, min_dist_over_2R=d0/(2*sim.R)), rounds=[], resumed_at_outer=(k0 if resuming else None))
     try:
         import loop_grade as _lg; run_entry['tightness'] = _lg.tightness_record(meta, g.folder)          # TF = sqrt(tex) / loop length, recorded only, used nowhere

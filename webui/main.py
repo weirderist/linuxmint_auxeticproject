@@ -217,7 +217,9 @@ class SimBody(BaseModel):
     creep_tau_h: float = Field(0.0, ge=0)
     device: str = Field("cpu", pattern="^(cpu|gpu)$", description="cpu = SciPy L-BFGS (the default, faster on CPU); gpu = FIRE on the JAX device (2026-11-27). This machine has no GPU: gpu is refused here")
     where: str = Field("server", pattern="^(server|workstation|kaggle)$", description="where the run executes; only server is built (workstation and kaggle yarn runs are not built yet)")
-    tpi: float = Field(0.0, ge=0, le=50, description="twists per inch: RECORDED ONLY, no effect on the physics yet (the yarn model has no torque term)")
+    tpi: float = Field(0.0, ge=0, le=50, description="yarn twist, turns per inch (a yarn property). Drives skew only with twist_live > 0 (relax_solver twist drive, 2026-11-27)")
+    twist_dir: str = Field("Z", pattern="^(Z|S)$", description="twist direction; which sign skews which way is not yet verified against a fabric")
+    twist_live: float = Field(0.0, ge=0, le=1, description="share of the twist that still acts (0..1): a FOLD property, to be fitted. UNSOURCED. 0 = off")
     hours: float = Field(0.0, ge=0)
     shell: bool = False
     shell_kappa: str = Field('guess', pattern='^(guess|tile)$', description='shell curvature: fixed guess (Niu et al.) or from the periodic yarn tile')
@@ -299,6 +301,7 @@ def _sim_cmd(d, b, R):
     elif b.slip_drive or b.diagnostics: cmd += ["--loop-grade-target", b.loop_grade_target, "--loop-grade-min-strength", repr(b.loop_grade_min_strength)]          # the drive field and the diagnostics regions use these even without a grade (task 25)
     if b.slip_friction_load: cmd += ["--slip-friction-load", repr(b.slip_friction_load)]          # task 25: each flag only when on, so a run without them gets exactly the command of before
     if b.slip_drive: cmd += ["--slip-drive", repr(b.slip_drive)] + (["--slip-drive-decay", repr(b.slip_drive_decay)] if b.slip_drive_decay else [])
+    if b.tpi and b.twist_live: cmd += ["--tpi", repr(b.tpi), "--twist-dir", b.twist_dir, "--twist-live", repr(b.twist_live)]          # twist drive (only when both are set)
     if b.diagnostics: cmd += ["--diagnostics"]      # only when on: a run without the grade gets exactly the command it got before
     return cmd, kc
 

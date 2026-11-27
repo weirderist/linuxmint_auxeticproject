@@ -47,7 +47,35 @@ def bend_stiffness(sim, E):
     """EA and EI of the yarn. EI is also multiplied by sim.bend_scale (1 unless the straightening factor is on: see relax_job --straight)."""
     EA, EI = section(E, sim.R); return EA, EI*getattr(sim, 'bend_scale', 1.0)
 
-def _energy(x, l0, seg, tri, lbar, kb0, pairs, pmask, EA, EI, kc, R2, cell, tgt, cnt, ks):
+# ---------------------------------------------------------------- twist drive (2026-11-27, K: torque from the yarn twist TPI, for skewing / spirality)
+# Twist itself is not a degree of freedom here (see the module note: a round yarn with free ends sheds its twist). What makes a twisted yarn skew a knit is twist LOCKED in by friction at
+# the interlacings; its torque turns the plane of each loop. Modelled (our choice, UNSOURCED as a model) as a preferred TORSION tau0 of the yarn axis, acting where the axis is curved:
+#   E_tor = 1/2 GJ sum_edges w (tau - tau0)^2 l,   tau = signed turn of the curvature binormal across the edge / edge length,   w = |kb_a|^2 |kb_b|^2 / (|kb_a|^2 |kb_b|^2 + TOR_EPS^4)
+#   tau0 = live x 2 pi TPI / 25.4 (rad/mm) x (+1 Z twist, -1 S twist; WHICH sign gives which skew direction is NOT verified against a fabric yet)
+#   GJ = TORSION_SCALE x G pi R^4 / 2 with G = E / 3 (incompressible isotropic solid; UNSOURCED for a spun yarn)
+# live (0..1) is the share of the twist that still acts (steaming and relaxation history): a FOLD property, fitted, not measured. TPI = 0 or live = 0: the term is absent (results unchanged).
+TORSION_SCALE = 1.0       # multiplies GJ only (as BEND_SCALE does for EI). UNSOURCED
+TOR_EPS = 0.02            # curvature gate (turning angle per vertex, rad): below it the binormal, hence the torsion, is undefined and the term fades out. UNSOURCED numerical choice
+
+def twist_args(sim, tri, E):
+    """() when the twist drive is off, else (tq, GJ, tau0) for _energy: tq = pairs of consecutive bending triplets on the same yarn (one per interior edge)."""
+    p = sim.params; tpi = float(getattr(p, 'tpi', 0.0) or 0.0); live = float(getattr(p, 'twist_live', 0.0) or 0.0)
+    if tpi == 0.0 or live == 0.0: return ()
+    tq = np.array([(j, j + 1) for j in range(len(tri) - 1) if tri[j + 1][1] == tri[j][1] + 1 and tri[j + 1][0] == tri[j][1]], int)
+    if len(tq) == 0: return ()
+    sign = -1.0 if str(getattr(p, 'twist_dir', 'Z')).upper() == 'S' else 1.0
+    GJ = TORSION_SCALE*(E/3.0)*np.pi*sim.R**4/2.0
+    return tq, GJ, sign*live*2.0*np.pi*tpi/25.4
+
+def _torsion(X, tri, kb, tq, tau0):
+    """(sum of w (tau - tau0)^2 l, per-edge tau, w): discrete torsion between consecutive curvature binormals (see the twist-drive note)."""
+    ka = kb[tq[:, 0]]; kz = kb[tq[:, 1]]; t = X[tri[tq[:, 1], 1]] - X[tri[tq[:, 0], 1]]; lt = jnp.sqrt(jnp.sum(t*t, 1) + 1e-30); th = t/lt[:, None]
+    na2 = jnp.sum(ka*ka, 1); nz2 = jnp.sum(kz*kz, 1); ok = na2*nz2 > 1e-24
+    s = jnp.where(ok, jnp.sum(jnp.cross(ka, kz)*th, 1), 0.0); c = jnp.where(ok, jnp.sum(ka*kz, 1), 1.0)          # safe inputs: no NaN gradient where the binormal vanishes
+    tau = jnp.arctan2(s, c)/lt; w = na2*nz2/(na2*nz2 + TOR_EPS**4)
+    return jnp.sum(w*(tau - tau0)**2*lt), tau, w
+
+def _energy(x, l0, seg, tri, lbar, kb0, pairs, pmask, EA, EI, kc, R2, cell, tgt, cnt, ks, tq=None, GJ=0.0, tau0=0.0):
     X = x.reshape(-1, 3)
     e = X[seg[:, 1]] - X[seg[:, 0]]; l = jnp.sqrt(jnp.sum(e*e, 1) + 1e-30)
     if LAW is None: Es = 0.5*EA*jnp.sum((l - l0)**2/l0)
@@ -63,7 +91,8 @@ def _energy(x, l0, seg, tri, lbar, kb0, pairs, pmask, EA, EI, kc, R2, cell, tgt,
     Ec = 0.5*kc*jnp.sum(pmask*jnp.maximum(0.0, R2 - d)**2)
     mean = jax.ops.segment_sum(X, cell, num_segments=tgt.shape[0])/cnt[:, None]          # mean position of the vertices in each stitch cell
     Esh = 0.5*ks*jnp.sum(cnt*jnp.sum((mean - tgt)**2, 1))                                  # hold on the shell fold (ks = 0 when no shell)
-    return Es + Eb + Ec + Esh
+    if tq is None: return Es + Eb + Ec + Esh          # twist drive off: exactly the energy used before 2026-11-27
+    return Es + Eb + Ec + Esh + 0.5*GJ*_torsion(X, tri, kb, tq, tau0)[0]
 _vg = jax.jit(jax.value_and_grad(_energy))
 MACRO = False   # relax_job --macro: give the optimiser the three soft large-scale bending modes as variables of their own (see _warp and relax)
 def _warp(k3, X, c):
@@ -141,10 +170,11 @@ def shell_deviation(sim):
 def energy_parts(sim, kc, E):
     EA, EI = bend_stiffness(sim, E); off, seg, tri, l0, lbar = pack(sim); pairs, pm, _ = near_pairs(sim, off)
     x = np.vstack([y.X for y in sim.yarns]).ravel(); kb0 = baseline_curvature(sim, tri); sa, s0 = shell_args(sim), shell_args(sim, False)
-    tot = float(_energy(x, l0, seg, tri, lbar, kb0, pairs, pm, EA, EI, kc, 2*sim.R, *sa))
+    ta = twist_args(sim, tri, E); tot = float(_energy(x, l0, seg, tri, lbar, kb0, pairs, pm, EA, EI, kc, 2*sim.R, *sa, *ta))
     st = float(_energy(x, l0, seg, tri, lbar, kb0, pairs, pm, EA, 0.0, 0.0, 0.0, *s0)); bd = float(_energy(x, l0, seg, tri, lbar, kb0, pairs, pm, 0.0, EI, 0.0, 0.0, *s0))
     sh = float(_energy(x, l0, seg, tri, lbar, kb0, pairs, pm, 0.0, 0.0, 0.0, 0.0, *sa))
-    return dict(total=tot, stretch=st, bend=bd, shell=sh, contact=tot - st - bd - sh)
+    tw = float(0.5*ta[1]*_torsion(jnp.asarray(x).reshape(-1, 3), tri, _kb_np(sim, tri)[0], ta[0], ta[2])[0]) if ta else 0.0
+    return dict(total=tot, stretch=st, bend=bd, shell=sh, torsion=tw, contact=tot - st - bd - sh - tw)
 
 # ---------------------------------------------------------------- FIRE (2026-11-27, K approved; Bitzek et al. 2006 PRL 97 170201 with the FIRE 2.0 corrections of Guenole et al. 2020 Comput. Mater. Sci. 175 109584)
 # The same minimiser as shell_sim.make_fire, applied to the yarn energy _energy. The whole loop runs inside JAX (lax.scan, jitted once per array shape), so it runs on a GPU without a host
@@ -199,7 +229,7 @@ def relax(sim, E, kc, maxiter=300, rounds=4, verbose=False):
     EA, EI = bend_stiffness(sim, E)
     for r in range(rounds):
         off, seg, tri, l0, lbar = pack(sim); pairs, pm, npair = near_pairs(sim, off); kb0 = baseline_curvature(sim, tri); sa = shell_args(sim)
-        x0 = np.vstack([y.X for y in sim.yarns]).ravel(); args = (l0, seg, tri, lbar, kb0, pairs, pm, EA, EI, kc, 2*sim.R, *sa)
+        ta = twist_args(sim, tri, E); x0 = np.vstack([y.X for y in sim.yarns]).ravel(); args = (l0, seg, tri, lbar, kb0, pairs, pm, EA, EI, kc, 2*sim.R, *sa, *ta)
         if MACRO:       # variables: three scaled bending modes (unit = the edge of the sheet moves by about one yarn radius) + the positions, re-referenced to the current shape every round
             P = x0.reshape(-1, 3); c = 0.5*(P.max(0) + P.min(0)); L = np.maximum(P.max(0) - P.min(0), 10*sim.R); sc = np.array([8*sim.R/L[0]**2, 8*sim.R/L[1]**2, 4*sim.R/(L[0]*L[1])])
             f = lambda v: tuple(np.asarray(t, float) for t in _vgm(v, c, sc, *args)); res = minimize(f, np.r_[np.zeros(3), x0], jac=True, method='L-BFGS-B', options=dict(maxiter=maxiter, maxcor=30, ftol=1e-13, gtol=1e-9))
@@ -210,7 +240,7 @@ def relax(sim, E, kc, maxiter=300, rounds=4, verbose=False):
                 while done < FIRE_MAXIT:
                     xf, Ef, gmax, steps, conv = fire_min(xf, args, maxit=min(FIRE_REBUILD, FIRE_MAXIT - done), gtol=gtol); done += steps
                     for y, o in zip(sim.yarns, off): y.X = xf.reshape(-1, 3)[o:o+len(y.X)].copy()
-                    pairs, pm, npair = near_pairs(sim, off); args = (l0, seg, tri, lbar, kb0, pairs, pm, EA, EI, kc, 2*sim.R, *sa)
+                    pairs, pm, npair = near_pairs(sim, off); args = (l0, seg, tri, lbar, kb0, pairs, pm, EA, EI, kc, 2*sim.R, *sa, *ta)
                     gmax = float(np.abs(np.asarray(_fire_fns()['gfun'](jnp.asarray(xf), *(jnp.asarray(a) for a in args)))).max()); Ef = float(_vg(xf, *args)[0])
                     if gmax < gtol: conv = True; break          # converged WITH the rebuilt contact list
                     conv = False

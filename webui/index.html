@@ -97,7 +97,9 @@ dialog#newDlg::backdrop{background:#0006}
   <label class="row"><input id="fDiag" type="checkbox"><span>Per-round diagnostics (diagnostics.csv; no effect on the result)</span></label>
   <label><span>Device</span><select id="fDevice"><option value="cpu">CPU (L-BFGS, default)</option><option value="gpu">GPU (FIRE; this machine has no GPU)</option></select></label>
   <label><span>Run on</span><select id="fWhere"><option value="server">Server</option><option value="workstation" disabled>Workstation (not built yet)</option><option value="kaggle" disabled>Kaggle (not built yet)</option></select></label>
-  <label><span>Twists per inch (TPI) &mdash; recorded only, no effect on the physics yet</span><input id="fTpi" type="number" step="any" min="0" max="50"></label>
+  <label><span>Yarn twist TPI (turns per inch) &mdash; yarn property</span><input id="fTpi" type="number" step="any" min="0" max="50"></label>
+  <label><span>Twist direction</span><select id="fTwDir"><option value="Z">Z</option><option value="S">S</option></select></label>
+  <label><span>Twist liveliness (0&ndash;1, share of the twist that still acts; 0 = off) &mdash; fold property, to be fitted, UNSOURCED</span><input id="fTwLive" type="number" step="any" min="0" max="1"></label>
   <div class="note" style="grid-column:1/-1">Slip extensions (tests/NOTES_slip_model.md): &mu;<sub>n</sub> raises the slip limit by &mu;<sub>n</sub> times the contact force, so a tight fabric slips less; the drive e keeps rest length flowing toward the section boundaries / TM axes, using the Grade target and minimum-strength fields above (no grade needed); the decay N fades it as exp(-round/N). All three constants are UNSOURCED.</div>
   <label><span>Fold search steps (0 = off)</span><input id="fFold" type="number" step="1" min="0" max="200"></label>
   <label><span>Fold search: iterations per trial</span><input id="fFoldIt" type="number" step="1" min="10" max="5000"></label>
@@ -491,7 +493,7 @@ function setupSim() {
     $('#fCurl').value = 0; $('#fAniso').checked = false; $('#fRef').value = 1; $('#fTen').value = mm ? CFG.tension_cN : 0; $('#fTau').value = 0; $('#fHours').value = 0; $('#fTen').disabled = !mm;
     $('#fShell').checked = true; $('#fShellW').value = CFG.shell_w; $('#fShellTile').checked = false; $('#fTileRef').value = 0.5; $('#fKScale').value = 1; $('#fStretch').value = 1; $('#fSeedOnly').checked = false; $('#fStr').value = CFG.straight; $('#fShellF').checked = true; $('#fBend').value = 0.003; $('#fLenRatio').value = 1; $('#fRamp').value = CFG.ramp || 0; $('#fRampIt').value = CFG.ramp_iter || 200; $('#fSeedSt').value = CFG.seed_stitch || 0; $('#fStall').value = CFG.stall_tol || 0; $('#fFold').value = 0; $('#fFoldIt').value = 200; $('#fFoldD').value = 0; $('#fMacro').checked = false; $('#fWarpX').value = 0; $('#fWarpY').value = 0; $('#fEA').value = 0; $('#fEI').value = 0; $('#fLaw').value = '';
     $('#fGrade').value = 0; $('#fGradeT').value = 'both'; $('#fGradeS').value = 0.2;
-    $('#fSlipFL').value = 0; $('#fSlipD').value = 0; $('#fSlipDec').value = 0; $('#fDiag').checked = false;
+    $('#fSlipFL').value = 0; $('#fSlipD').value = 0; $('#fTpi').value = 0; $('#fTwDir').value = 'Z'; $('#fTwLive').value = 0; $('#fDevice').value = 'cpu'; $('#fWhere').value = 'server'; $('#fSlipDec').value = 0; $('#fDiag').checked = false;
     $('#fKc').value = CFG.kc_ratio; $('#fPert').value = CFG.perturb; $('#fOuter').value = CFG.outer; $('#fMax').value = CFG.maxiter;
     DEF_BODY = getBody();          // the form defaults: a preset without a key resets that field to them, not to the previous preset's value (2026-11-26)
     applyBody(PRES._last, mm);
@@ -514,7 +516,7 @@ const FLD = { E: ['#fE', 'n'], mu: ['#fMu', 'n'], kc_ratio: ['#fKc', 'n'], pertu
   tension_cN: ['#fTen', 'n'], creep_tau_h: ['#fTau', 'n'], hours: ['#fHours', 'n'], shell: ['#fShell', 'b'], shell_w: ['#fShellW', 'n'], shell_kappa: ['#fShellTile', 'k'], tile_ref: ['#fTileRef', 'n'],
   kappa_scale: ['#fKScale', 'n'], stretch_scale: ['#fStretch', 'n'], bend_scale: ['#fBend', 'n'], straight: ['#fStr', 'n'], shell_frame: ['#fShellF', 'b'], length_ratio: ['#fLenRatio', 'n'], seed_only: ['#fSeedOnly', 'b'],
   loop_grade: ['#fGrade', 'n'], loop_grade_target: ['#fGradeT', 's'], loop_grade_min_strength: ['#fGradeS', 'n'],
-  slip_friction_load: ['#fSlipFL', 'n'], slip_drive: ['#fSlipD', 'n'], slip_drive_decay: ['#fSlipDec', 'n'], diagnostics: ['#fDiag', 'b'], device: ['#fDevice', 's'], where: ['#fWhere', 's'], tpi: ['#fTpi', 'n'],
+  slip_friction_load: ['#fSlipFL', 'n'], slip_drive: ['#fSlipD', 'n'], slip_drive_decay: ['#fSlipDec', 'n'], diagnostics: ['#fDiag', 'b'], device: ['#fDevice', 's'], where: ['#fWhere', 's'], tpi: ['#fTpi', 'n'], twist_dir: ['#fTwDir', 's'], twist_live: ['#fTwLive', 'n'],
   ramp: ['#fRamp', 'n'], ramp_iter: ['#fRampIt', 'n'], seed_stitch: ['#fSeedSt', 'n'], stall_tol: ['#fStall', 'n'], fold_search: ['#fFold', 'n'], fold_iter: ['#fFoldIt', 'n'], fold_delta: ['#fFoldD', 'n'], macro: ['#fMacro', 'b'], warp_kx: ['#fWarpX', 'n'], warp_ky: ['#fWarpY', 'n'], ea: ['#fEA', 'n'], ei: ['#fEI', 'n'], stretch_law: ['#fLaw', 's'] };
 function getBody() { const o = {}; for (const [k, [id, t]] of Object.entries(FLD)) o[k] = t === 'n' ? +$(id).value : t === 'b' ? $(id).checked : t === 's' ? $(id).value.trim() : ($(id).checked ? 'tile' : 'guess'); return o; }
 let DEF_BODY = null;

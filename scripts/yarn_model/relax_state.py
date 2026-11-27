@@ -41,6 +41,9 @@ class Params:
     ref_scale: float = 0.0             # stress-free curvature = ref_scale * baseline loop curvature (+ curl bias). 0 = straight yarn (latent-energy model), 1 = knitted shape
     creep_tau: float = 0.0             # creep relaxation time (hours); 0 = no creep. NOT sourced: no single certified value exists for cotton yarn.
     hours: float = 0.0                 # simulated duration (hours); only used with creep
+    tpi: float = 0.0                   # yarn twist, turns per inch (2026-11-27): a measurable yarn property; drives skew only together with twist_live (relax_solver twist drive)
+    twist_dir: str = 'Z'               # Z or S twist (sign of the drive; which sign skews which way is NOT verified against a fabric yet)
+    twist_live: float = 0.0            # share of the twist that still acts (0..1): a FOLD property, fitted; 0 = off. UNSOURCED
     slip_step_max: float = 0.2         # max fraction of a segment's rest length moved per outer iteration (numerical control)
     outer_max: int = 200; tol_len: float = 1e-6; tol_energy: float = 1e-8
     stall_tol: float = 0.0; stall_rounds: int = 3; stall_move: float = 0.01   # early stop, 0 = off: relative energy change < stall_tol, rest-length change < tol_len and largest vertex move < stall_move x R, for stall_rounds rounds in a row. Numerical choice, not sourced.
