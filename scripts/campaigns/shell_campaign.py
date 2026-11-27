@@ -165,7 +165,7 @@ class Camp:
         if not isinstance(name, str) or not NAME_RE.match(name): raise ValueError('bad campaign name')
         s.name = name; s.d = os.path.join(SHELL_ROOT, name)
         for k, f in dict(spec='spec.json', queue='queue.jsonl', index='index.jsonl', control='control.json', runner='runner.json', lock='runner.lock', delog='deletions.log', nextid='next_id', results='results.csv').items(): setattr(s, k, os.path.join(s.d, f))
-        s.runs = os.path.join(s.d, 'runs'); s.tmp = os.path.join(s.d, '.tmp'); s.quar = os.path.join(s.d, 'quarantine')
+        s.runs = os.path.join(s.d, 'runs'); s.tmp = os.path.join(s.d, '.tmp'); s.quar = os.path.join(s.d, 'quarantine'); s.leases = os.path.join(s.d, 'leases'); s.leaselog = os.path.join(s.d, 'leases.log')
 
     def exists(s): return os.path.isfile(s.spec)
     def spec_(s): return cm.rjson(s.spec, {}) or {}
@@ -265,15 +265,73 @@ class Camp:
     def finished_ids(s):
         ids = {x for x in (os.listdir(s.runs) if os.path.isdir(s.runs) else []) if ID_RE.match(x)}
         return ids | {i for i, x in s.index_last().items() if x.get('status') in TERMINAL}
-    def pending(s):
-        fin = s.finished_ids(); return sorted([x for x in s.queue_items() if x['id'] not in fin], key=lambda x: (x.get('tier', 5), x['id']))
+    def pending(s, include_leased=False):
+        fin = s.finished_ids(); held = set() if include_leased else set(s.active_leases())
+        return sorted([x for x in s.queue_items() if x['id'] not in fin and x['id'] not in held], key=lambda x: (x.get('tier', 5), x['id']))
+
+    # -- leases (2026-11-27): one shared queue for several workers (server runner, Kaggle sessions, the workstation). A worker CLAIMS runs under the queue lock; a claimed run is skipped by every
+    # other worker until its lease expires (then it is queued again) or is released. Lease files leases/<id>.json are overwritten, never deleted; leases.log keeps every claim and release.
+    # Times are wall-clock epoch seconds, because remote workers do not share this machine's monotonic clock.
+    def lease_of(s, rid):
+        x = cm.rjson(os.path.join(s.leases, rid + '.json'))
+        return x if isinstance(x, dict) and x.get('state') == 'held' and float(x.get('expires', 0)) > time.time() else None
+    def active_leases(s):
+        out = {}
+        if os.path.isdir(s.leases):
+            for f in os.listdir(s.leases):
+                if f.endswith('.json') and ID_RE.match(f[:-5]):
+                    x = s.lease_of(f[:-5])
+                    if x: out[f[:-5]] = x
+        return out
+    def claim(s, worker, n, ttl_s, batch=''):
+        """Lease the first n queued runs that no one holds to `worker` for ttl_s seconds. Returns the queue items (with 'lease'). Only runs with no lease and no result are given."""
+        if not isinstance(worker, str) or not re.match(r'^[0-9A-Za-z_:.-]{1,64}$', worker): raise ValueError('bad worker name')
+        os.makedirs(s.leases, exist_ok=True); out = []
+        with xlock(os.path.join(s.d, 'queue.lock')):
+            for it in s.pending()[:max(0, int(n))]:
+                L = dict(id=it['id'], state='held', worker=worker, batch=batch, t=time.time(), expires=time.time() + float(ttl_s), t_iso=cm.now())
+                cm.wjson(os.path.join(s.leases, it['id'] + '.json'), L); append_line(s.leaselog, dict(L, event='claim')); out.append(dict(it, lease=L))
+        return out
+    def release(s, ids, worker, why=''):
+        """Give runs back (a lease held by another worker is left alone). Returns the released ids."""
+        done = []
+        with xlock(os.path.join(s.d, 'queue.lock')):
+            for rid in ids:
+                x = cm.rjson(os.path.join(s.leases, rid + '.json'))
+                if isinstance(x, dict) and x.get('worker') == worker and x.get('state') == 'held':
+                    x.update(state='released', t_release=time.time(), why=why); cm.wjson(os.path.join(s.leases, rid + '.json'), x); append_line(s.leaselog, dict(x, event='release')); done.append(rid)
+        return done
+    def release_worker(s, worker, why=''):
+        return s.release([rid for rid, x in s.active_leases().items() if x.get('worker') == worker], worker, why)
+    def import_result(s, rid, src, worker, wall_s=None, extra=None):
+        """Accept the finished run folder `src` of a remote worker as run <id>. Checks: the run is in the queue and not finished, metrics.json / shell.npz / settings.json present, the settings equal the
+        queued ones, the provenance says the frozen code matched its manifest and shell_sim.py has this campaign's sha256. Then copy into .tmp and publish (atomic, as a local run), with the worker recorded.
+        Returns 'done', 'exists' (already imported: idempotent) or raises ValueError (the run is NOT published; the caller marks it failed or retries)."""
+        if not ID_RE.match(str(rid)): raise ValueError('bad run id')
+        if os.path.exists(os.path.join(s.runs, rid)): return 'exists'
+        q = next((x for x in s.queue_items() if x['id'] == rid), None)
+        if q is None: raise ValueError('run %s is not in the queue' % rid)
+        for f in ('metrics.json', 'shell.npz', 'settings.json', 'provenance.json'):
+            if not os.path.isfile(os.path.join(src, f)): raise ValueError('run %s: %s missing' % (rid, f))
+        st = cm.rjson(os.path.join(src, 'settings.json'), {}) or {}; st = {k: v for k, v in st.items() if k != 'fold_min_turn_rad'}
+        if sha(normalise(st, 10 ** 9)) != q['sha1']: raise ValueError('run %s: the settings differ from the queued ones' % rid)
+        pv = cm.rjson(os.path.join(src, 'provenance.json'), {}) or {}; man = s.manifest() or {}
+        if man and (pv.get('matches_manifest') is not True or pv.get('shell_sim_sha256') != man.get('shell_sim_sha256')): raise ValueError('run %s: code provenance does not match this campaign (matches_manifest %s)' % (rid, pv.get('matches_manifest')))
+        tmp = os.path.join(s.tmp, '%s.import.%s' % (rid, time.strftime('%Y%m%d-%H%M%S'))); shutil.copytree(src, tmp)
+        for root_, _, fs in os.walk(tmp):
+            for f in fs:
+                try:
+                    with open(os.path.join(root_, f), 'rb') as fh: os.fsync(fh.fileno())          # works on Linux (the server); Windows refuses fsync on a read-only handle
+                except OSError: pass
+        fsync_dir(tmp); s.publish(tmp, rid, dict(wall_s=wall_s, worker=worker, **(extra or {}))); s.release([rid], worker, 'result imported'); return 'done'
 
     # -- results
     def rows(s):
         last = s.index_last(); out = []
         for q in s.queue_items():
             x = last.get(q['id'], {}); st = q['settings']; m = x.get('metrics') or {}
-            r = dict(run=q['id'], status=x.get('status', 'queued'), source=q.get('source', ''), tier=q.get('tier', 5), control=bool(q.get('control')), label=q.get('label', ''), heavy_deleted=bool(x.get('heavy_deleted')), wall_s=x.get('wall_s'), reason=x.get('reason', ''),
+            L = s.lease_of(q['id']) if x.get('status') not in TERMINAL else None
+            r = dict(run=q['id'], status=x.get('status', 'queued'), worker=(x.get('worker') or ('server' if x.get('status') == 'done' else '')) if not L else L.get('worker'), leased=bool(L), source=q.get('source', ''), tier=q.get('tier', 5), control=bool(q.get('control')), label=q.get('label', ''), heavy_deleted=bool(x.get('heavy_deleted')), wall_s=x.get('wall_s'), reason=x.get('reason', ''),
                      matrix='%dx%d' % (len(st['matrix']), len(st['matrix'][0])), knit_fraction=round(sum(v == 1 for r_ in st['matrix'] for v in r_) / (len(st['matrix']) * len(st['matrix'][0])), 4))
             r.update({k: st.get(k) for k in SETTING_COLS}); r.update({k: m.get(k) for k in METRIC_COLS}); cd = x.get('code') or {}
             r.update(git_commit=(cd.get('git_commit') or '')[:10], git_dirty=cd.get('git_dirty'), shell_sim_sha256=(cd.get('shell_sim_sha256') or '')[:12], frozen=cd.get('frozen')); out.append(r)
@@ -301,10 +359,17 @@ class Camp:
             if st == 'approved': st = 'queued'          # shell-approve put it back in the queue
             if st == 'queued' and rn.get('current') == q['id'] and s.runner_alive(): st = 'running'
             counts[st] = counts.get(st, 0) + 1
+        lz = s.active_leases(); by = {}
+        for rid, L in lz.items():
+            if rid in fin: continue
+            k = (L.get('worker') or '').split(':')[0]; by[k] = by.get(k, 0) + 1
         walls = [x.get('wall_s') for x in last.values() if x.get('status') == 'done' and isinstance(x.get('wall_s'), (int, float))]
         mean = sum(walls) / len(walls) if walls else None
         man = s.manifest() or {}; du = shutil.disk_usage(s.d if os.path.isdir(s.d) else SHELL_ROOT)
-        return dict(name=s.name, control=s.get_control(), runner_alive=s.runner_alive(), runner=rn, counts=counts, mean_wall_s=mean, eta_s=(mean * counts['queued'] if mean else None),
+        done_by = {}
+        for x in last.values():
+            if x.get('status') == 'done': k = (x.get('worker') or 'server').split(':')[0]; done_by[k] = done_by.get(k, 0) + 1
+        return dict(name=s.name, control=s.get_control(), runner_alive=s.runner_alive(), runner=rn, counts=counts, leased_by_worker=by, done_by_worker=done_by, mean_wall_s=mean, eta_s=(mean * counts['queued'] if mean else None),
                     progress=(s.progress(rn['current']) if rn.get('current') and s.runner_alive() else {}), code=dict(git_commit=man.get('git_commit'), git_dirty=man.get('git_dirty'), shell_sim_sha256=man.get('shell_sim_sha256'), frozen=man.get('frozen')), free_gb=round(du.free / 1e9, 2), total_gb=round(dir_size(s.d) / 1e9, 4), limits=lim)
 
     # -- one run (read only; used by the page)
@@ -416,7 +481,7 @@ def run_one(c, item, poll=1.0):
         time.sleep(poll)
     log.close(); wall = round(time.monotonic() - m0, 1)
     if killed: c.fail(tmp, rid, 'timeout', 'timeout after %.0f s (limit %.0f s, UNSOURCED rule)' % (wall, tmo), wall)
-    elif p.returncode == 0 and os.path.exists(os.path.join(tmp, 'metrics.json')): c.publish(tmp, rid, dict(wall_s=wall, attempt=att)); cm.say('run %s done in %.0f s' % (rid, wall))
+    elif p.returncode == 0 and os.path.exists(os.path.join(tmp, 'metrics.json')): c.publish(tmp, rid, dict(wall_s=wall, attempt=att, worker='server')); cm.say('run %s done in %.0f s' % (rid, wall))
     else: c.fail(tmp, rid, 'failed', 'exit %s: %s' % (p.returncode, last_line(os.path.join(tmp, 'shell.log')) or 'no output'), wall); cm.say('run %s failed (exit %s)' % (rid, p.returncode))
     c.set_runner(state='between', current=None)
 
@@ -434,6 +499,8 @@ def serve(c, poll_s=5.0, stop_when_empty=False, lock=True, run_poll=1.0):
     if not c.exists(): sys.exit('no such shell campaign: %s' % c.name)
     lk = acquire_lock(c) if lock else None
     cm.say('shell runner started for %s (pid %d)' % (c.name, os.getpid())); c.set_runner(state='starting', current=None)
+    old = c.release_worker('server', 'runner restart')          # this runner holds the lock, so a server lease left by an earlier runner (power cut) is stale; reconcile handles its folder
+    if old: cm.say('released %d stale server lease(s): %s' % (len(old), old))
     while True:
         ctl = c.get_control()
         if ctl == 'stop': break
@@ -452,7 +519,11 @@ def serve(c, poll_s=5.0, stop_when_empty=False, lock=True, run_poll=1.0):
         if bad: c.set_runner(state='guard_stopped', current=None, reason='frozen code: ' + bad); c.set_control('stop', why='frozen code check: ' + bad); cm.say('guard: frozen code: ' + bad); break
         why = cm.busy_reason()
         if why: c.set_runner(state='waiting', current=None, reason='another job is running: ' + why); time.sleep(poll_s); continue
-        run_one(c, pend[0], run_poll)
+        got = c.claim('server', 1, timeout_for(item['settings'], c.limits()) + 3600, 'server runner')          # leased under the queue lock just before the start, so no other worker takes it (2026-11-27)
+        if not got: continue
+        if got[0]['id'] != item['id']: c.release([got[0]['id']], 'server', 'queue changed'); continue
+        try: run_one(c, item, run_poll)
+        finally: c.release([item['id']], 'server', 'run finished')
     if c.get_runner_state() != 'guard_stopped': c.set_runner(state='stopped', current=None)
     cm.say('shell runner finished'); return lk
 
