@@ -94,7 +94,8 @@ s.worker(slot['name']), len(chosen), budget + cf['lease_margin_s'], 'kaggle %s' 
 
     def finish(s, name, ent, cf, why):
         od = os.path.join(s.d, 'downloads', '%s_%d' % (name, int(ent['t_push']))); os.makedirs(od, exist_ok=True)
-        rc, o = kc.run(['kernels', 'output', '%s/%s' % (s.user, ent['slug']), '-p', od], timeout=3600)          # no -o: files already here are skipped, so a retry resumes (one file at a time is slow: 31 runs in 20 min, 2026-11-27)
+        if os.path.isfile(os.path.join(od, 'COMPLETE')): rc, o = 0, 'downloaded on the workstation (fetch_on_workstation.py)'          # the server's own internet is slow / often down (2026-11-27)
+        else: rc, o = kc.run(['kernels', 'output', '%s/%s' % (s.user, ent['slug']), '-p', od], timeout=3600)          # no -o: files already here are skipped, so a retry resumes (one file at a time is slow: 31 runs in 20 min, 2026-11-27)
         tarp = os.path.join(od, 'out.tar')
         if rc == 0 and os.path.isfile(tarp) and not os.path.isdir(os.path.join(od, 'out')):          # workers since 2026-11-27 pack the run folders into one file
             import tarfile
