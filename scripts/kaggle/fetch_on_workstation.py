@@ -10,7 +10,6 @@ Nothing on the server is overwritten: the copy goes to <folder>.ws<time> and is 
 import json, os, subprocess, sys, tarfile, time
 HERE = os.path.dirname(os.path.abspath(__file__)); sys.path.insert(0, HERE)
 os.environ.setdefault('AUXETIC_ENV', os.path.join(os.path.expanduser('~'), '.auxetic_kaggle.env'))
-if os.name == 'nt': os.environ.setdefault('KAGGLE_BIN', os.path.join(os.path.expanduser('~'), 'auxetic_ws_venv', 'Scripts', 'kaggle.exe'))
 import kaggle_cli as kc          # noqa: E402
 sys.path.insert(0, os.path.join(os.path.dirname(HERE), 'campaigns')); import platform_compat as pc          # noqa: E402  ws_home (2026-11-28)
 
