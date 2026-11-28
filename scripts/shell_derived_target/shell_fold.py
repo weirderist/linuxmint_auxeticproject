@@ -41,8 +41,8 @@ Required physical behaviour, and what this driver can and cannot show (K, 24 Nov
 UNSOURCED (every value below is a guess or a numerical choice, not from the literature; also recorded in fold_summary.json)
   stages N = 10; stage shell hold 0.5 x EA/R (strong); final shell hold 0.05 x EA/R (the 13 Nov 2026 success setting recorded in CLAUDE.md); stage relaxation 100 iterations x 1 round;
   blocked_frac = 0.8 of the yarn diameter (axis distance, cells of one stitch); fold path = the shell's own growth equilibria, linear interpolation between two of them; smaller fraction at shared shell vertices; normals of the interpolated sheet;
-  segment-to-cell assignment by the flat midpoint; spacing from cell means; sign agreement thresholds 1e-3; gain and sign of the strain rule (as in shell_target); ref-scale 0 (shell_target's default;
-  relax_job advises 1 with a shell: open parameter); kb0 rotated into the frame of the sheet at every stage (an adaptation of Sperl, Narain, Wojtan 2021, as in relax_job); no revert on freezing.
+  segment-to-cell assignment by the flat midpoint; spacing from cell means; sign agreement thresholds 1e-3; gain and sign of the strain rule (as in shell_target); ref-scale 1 (the standard, yarn_defaults.py, since 2026-11-28;
+  0 = straight yarn unravels the loops); kb0 rotated into the frame of the sheet at every stage (an adaptation of Sperl, Narain, Wojtan 2021, as in relax_job); no revert on freezing.
 
 Usage
   python3 shell_fold.py --run campaigns/shell_runs/shell1/runs/S000001 --out folds/S000001 [--stages 10] [--blocked-frac 0.8] [--sign -1] [--gain 1] [--ref-scale 0] [--stages-only]
@@ -60,7 +60,11 @@ import shell_target as st
 SCHEMA = 'shell_fold_summary_v1'
 EPS = 1e-3                                        # UNSOURCED: a change or strain below this is not counted in a sign-agreement share
 DEFAULT_STAGES, STAGE_SHELL_W, FINAL_SHELL_W, STAGE_ITER, STAGE_ROUNDS, BLOCKED_FRAC = 10, 0.5, 0.05, 100, 1, 0.8
-RELAX_DEFAULTS = dict(E=500.0, mu=0.49, k_contact=40.0, perturb=0.20, curl=0.5, tension=17.0, outer=40, maxiter=200)       # as shell_target.DEFAULTS, no creep
+import yarn_defaults as YD          # 2026-11-28: the standard settings (was k_contact 40 ABSOLUTE = 0.19 EA/R, ref-scale 0, curl 0.5, tension 17, perturb 0.2: the yarns passed through each other)
+RELAX_DEFAULTS = dict(E=YD.STANDARD['E'], mu=YD.STANDARD['mu'], kc_ratio=YD.STANDARD['kc_ratio'], perturb=YD.STANDARD['perturb'], curl=YD.STANDARD['curl'], tension=YD.STANDARD['tension_cN'],
+                      outer=YD.STANDARD['outer'], maxiter=YD.STANDARD['maxiter'], stall_tol=YD.STANDARD['stall_tol'])       # no creep; contact = kc_ratio x EA/R of the build
+PRECLEAR_ROUNDS = 20          # task 52 option (b): at most this many contact-only flat relaxation rounds before stage 1 (UNSOURCED)
+PRECLEAR_TARGET = 0.99        # ... until the closest axes are at least this x 2R (UNSOURCED)
 UNSOURCED = ['stages N = 10', 'stage shell hold 0.5 x EA/R', 'final shell hold 0.05 x EA/R (13 Nov 2026 success setting)', 'stage relaxation 100 iterations x 1 round', 'blocked fraction 0.8 of 2R (axis distance)',
              'fold path = shell growth equilibria (curvature fraction = fold fraction), interpolated linearly between neighbouring growth steps', 'smaller fraction at a shell vertex shared with a frozen cell', 'normals of the interpolated sheet', 'segment-to-cell by flat midpoint',
              'spacings from cell means', 'sign-agreement threshold 1e-3', 'gain and sign of the strain rule (shell_target)', 'ref-scale 0 (open)', 'kb0 rotated into the sheet frame at every stage',
@@ -321,13 +325,14 @@ def parse(argv):
     A('--run'); A('--out'); A('--ne', type=float, default=12.0); A('--sign', type=float, choices=(-1.0, 1.0), default=-1.0); A('--gain', type=float, default=1.0, help='UNSOURCED')
     A('--stages', type=int, default=DEFAULT_STAGES, help='UNSOURCED'); A('--blocked-frac', type=float, default=BLOCKED_FRAC, help='blocked when the closest axis distance in a cell < this x 2R (UNSOURCED)')
     A('--stage-iter', type=int, default=STAGE_ITER, help='UNSOURCED'); A('--stage-rounds', type=int, default=STAGE_ROUNDS); A('--stage-shell-w', type=float, default=STAGE_SHELL_W, help='hold during the stages, x EA/R (UNSOURCED)')
-    A('--shell-w', type=float, default=FINAL_SHELL_W, help='hold in the final relaxation, x EA/R'); A('--ref-scale', type=float, default=0.0); A('--no-shell-frame', action='store_true')
+    A('--shell-w', type=float, default=FINAL_SHELL_W, help='hold in the final relaxation, x EA/R'); A('--ref-scale', type=float, default=YD.STANDARD['ref_scale']); A('--no-shell-frame', action='store_true')
     for k, v in RELAX_DEFAULTS.items(): A('--' + k.replace('_', '-'), type=type(v), default=v)
     A('--seed', type=int, default=0); A('--sides', type=int, default=8); A('--length-ratio', type=float, default=1.0); A('--stretch-scale', type=float, default=1.0)
     A('--bend-scale', type=float, default=1.0); A('--ea', type=float, default=0.0); A('--ei', type=float, default=0.0); A('--stretch-law', default='')
     A('--loop-grade', type=float, default=0.0); A('--loop-grade-target', choices=['boundary', 'tm', 'both'], default='both'); A('--loop-grade-min-strength', type=float, default=0.2)
     A('--stages-only', action='store_true', help='stop after the stages (no final 40 x 200 relaxation)'); A('--build-only', action='store_true'); A('--resume', action='store_true')
     A('--linear-path', action='store_true', help='use the old straight-line fold path flat -> shell (before 2026-11-26) instead of the shell growth equilibria (task 52); only for comparison')
+    A('--no-preclear', action='store_true', help='skip the contact-only flat relaxation before stage 1 (task 52 option b)')
     A('--aggregate', nargs='+', metavar='DIR'); return a.parse_args(argv)
 
 def save_checkpoint(path, sim, ctx, state, phase, k):
@@ -342,15 +347,23 @@ def run_fold(g, out, sh, meta):
     ns = ap.Namespace(E=g.E, stretch_scale=g.stretch_scale, bend_scale=g.bend_scale, ea=g.ea, ei=g.ei, stretch_law=g.stretch_law)          # E: relax_job.yarn_inputs needs it since 2026-11-27 (crash found 2026-11-28 on the first real run)
     try: EA, EI = rj.yarn_inputs(ns, meta['R'])
     except ValueError as err: sys.exit(str(err))
-    if g.ref_scale == 0: print('note: --ref-scale 0 (straight-yarn reference), as shell_target.py; relax_job advises --ref-scale 1 with a shell (open parameter, task 47)', flush=True)
+    g.k_contact = YD.k_contact(g.E, meta['R'], g.kc_ratio, EA if (g.ea or g.stretch_law) else None)          # kc_ratio x EA/R (2026-11-28; never an absolute number)
+    if g.ref_scale == 0: print('note: --ref-scale 0 (straight-yarn reference): the loops tend to unravel (measured 2026-11-27/28); the standard is 1', flush=True)
     ten_strain = rs.strain_at(0.01*g.tension/EA); ratio = g.length_ratio/(1.0 + ten_strain)
-    p = rs.Params(mu=g.mu, EA=EA, EI=EI, GJ=0.0, k_contact=g.k_contact, outer_max=g.outer, rest_length_ratio=ratio, curl=g.curl, ref_scale=g.ref_scale)
+    p = rs.Params(mu=g.mu, EA=EA, EI=EI, GJ=0.0, k_contact=g.k_contact, outer_max=g.outer, rest_length_ratio=ratio, curl=g.curl, ref_scale=g.ref_scale, stall_tol=g.stall_tol)
     sim = rs.load(folder, p)
     if g.loop_grade:
         import loop_grade as lg
         try: lg.apply_start_grade(sim, folder, meta, g.loop_grade, g.loop_grade_target, g.loop_grade_min_strength, with_shell=True)
         except ValueError as e: sys.exit('--loop-grade: %s' % e)
     rs.release(sim); e0 = sv.energy_parts(sim, g.k_contact, g.E)                                   # also fixes kb0 of the flat state (relax_solver.baseline_curvature)
+    preclear = None
+    if not g.resume and not g.no_preclear:          # task 52 option (b), K 2026-11-28: clear the build's own overlaps flat, with contact only, before any fold stage
+        dmin = sv.min_axis_distance(sim)/(2*sim.R); preclear = dict(start=dmin, rounds=0)
+        while dmin < PRECLEAR_TARGET and preclear['rounds'] < PRECLEAR_ROUNDS:
+            sv.relax(sim, g.E, g.k_contact, maxiter=g.maxiter, rounds=1, verbose=False); sim.contacts = rs.build_contacts(sim); dmin = sv.min_axis_distance(sim)/(2*sim.R); preclear['rounds'] += 1
+        preclear.update(end=dmin, reached=bool(dmin >= PRECLEAR_TARGET)); print('pre-clear (flat, contact only): closest axes %.3f -> %.3f x 2R in %d rounds' % (preclear['start'], dmin, preclear['rounds']), flush=True)
+        e0 = sv.energy_parts(sim, g.k_contact, g.E)
     ctx = Ctx(sim, sh, g.sign, g.gain, not g.no_shell_frame, kb0_flat=sim.kb0); R = sim.R; thresh = g.blocked_frac*2*R; ks_stage = g.stage_shell_w*(EA/g.stretch_scale)/R; ks_final = g.shell_w*(EA/g.stretch_scale)/R
     d0 = ctx.min_distance()
     if np.isfinite(d0).any() and float(d0[np.isfinite(d0)].min()) < thresh: sys.exit('the flat start already has axes closer than the blocked threshold (%.3f x 2R < %.3f x 2R): lower --blocked-frac' % (d0[np.isfinite(d0)].min()/(2*R), g.blocked_frac))
@@ -393,7 +406,7 @@ def run_fold(g, out, sh, meta):
     chk, cells = direction_check(before, after, dict(course=ts, wale=tw), ec, ew, g.sign)
     write_cells_csv(os.path.join(out, 'fold_cell_metrics.csv'), cells, nx, ny); json.dump(dict(schema=SCHEMA, sign=g.sign, gain=g.gain, eps=EPS, relations=chk, state=status), open(os.path.join(out, 'fold_check.json'), 'w'), indent=1, default=_jd)
     write_fraction_csv(os.path.join(out, 'fold_fraction.csv'), state, ctx.uniq, nx, dmin_f/(2*R), g.blocked_frac)
-    extra = dict(state=status, settings=dict(stages=g.stages, blocked_frac=g.blocked_frac, stage_iter=g.stage_iter, stage_rounds=g.stage_rounds, stage_shell_w=g.stage_shell_w, shell_w=g.shell_w, sign=g.sign, gain=g.gain, ref_scale=g.ref_scale,
+    extra = dict(state=status, preclear=preclear, settings=dict(stages=g.stages, blocked_frac=g.blocked_frac, stage_iter=g.stage_iter, stage_rounds=g.stage_rounds, stage_shell_w=g.stage_shell_w, shell_w=g.shell_w, sign=g.sign, gain=g.gain, ref_scale=g.ref_scale,
                  shell_frame=not g.no_shell_frame, E=g.E, mu=g.mu, k_contact=g.k_contact, outer=g.outer, maxiter=g.maxiter, perturb=g.perturb, curl=g.curl, tension_cN=g.tension, loop_grade=g.loop_grade),
                  end=dict(e1, min_dist_over_2R=float(sv.min_axis_distance(sim)/(2*R))), shell_rms_over_R=(dv['rms']/R if dv else None), seconds=round(time.time() - t_all, 1), start=dict(e0))
     s = summary_dict(state, dmin_f/(2*R), g.blocked_frac, stages, R, extra); json.dump(s, open(os.path.join(out, 'fold_summary.json'), 'w'), indent=1, default=_jd)

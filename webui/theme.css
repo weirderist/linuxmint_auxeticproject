@@ -274,3 +274,10 @@ dialog#newDlg::backdrop { background: color-mix(in srgb, var(--bg) 60%, transpar
 .legend.lg-static { position: static; display: inline-block; margin-top: 6px; }
 .item.head { cursor: default; color: var(--mut); font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: .04em; background: var(--bg); } .item.head:hover { background: var(--bg); }
 #nKind { margin: 0 12px; }
+
+/* shell viewer: one card per selected run with its stitch matrix (2026-11-28) */
+.mats { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 12px; }
+.mat { border: 1px solid var(--line); border-radius: var(--radius-s); padding: 8px 10px; display: flex; flex-direction: column; gap: 6px; }
+.mat.on-a { border-color: var(--chart-1); } .mat.on-b { border-color: var(--chart-2); } .mat.on-a.on-b { border-color: var(--fg); }
+.mat canvas { display: block; image-rendering: pixelated; }
+.mat-h { font-size: var(--fs-sm); }

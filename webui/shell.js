@@ -62,7 +62,7 @@ function table() {
   $("#tbl").querySelectorAll("input[data-c]").forEach(i => i.onchange = () => { i.checked ? sel.add(i.dataset.c) : sel.delete(i.dataset.c); buttons(); });
   buttons(); tnote();
 }
-function buttons() { const n = sel.size; $("#bDel").disabled = n === 0; $("#bDel").textContent = "Delete heavy files of the selected runs (" + n + ")"; $("#bCompare").disabled = n < 2; $("#bView").disabled = n < 1 || n > 2; }
+function buttons() { const n = sel.size; $("#bDel").disabled = n === 0; $("#bCompare").disabled = n < 2; $("#bView").disabled = n < 1 || n > 40; $("#bDel").textContent = "Delete 3D data (" + n + ")"; }
 async function showDetail(rid) {
   const box = $("#detail"); box.innerHTML = '<div class="card note">loading</div>';
   try {
@@ -196,7 +196,7 @@ $("#bStart").onclick = () => { if (confirm("Start shell campaign '" + cur + "'? 
 $("#bPause").onclick = () => act("pause"); $("#bCont").onclick = () => act("continue");
 $("#bStop").onclick = () => { if (confirm("Stop the runner after the run in progress?")) act("stop"); };
 $("#bCompare").onclick = compare;
-$("#bView").onclick = () => { const ids = Array.from(sel); location.href = "/shellview?c=" + encodeURIComponent(cur) + "&run=" + encodeURIComponent(ids[0]) + (ids[1] ? "&b=" + encodeURIComponent(ids[1]) : ""); };
+$("#bView").onclick = () => { const ids = Array.from(sel).sort(); location.href = "/shellview?c=" + encodeURIComponent(cur) + "&run=" + encodeURIComponent(ids[0]) + (ids[1] ? "&b=" + encodeURIComponent(ids[1]) : "") + "&sel=" + ids.map(encodeURIComponent).join(","); };          // every selected run (up to 40): the viewer shows all their matrices
 $("#fStatus").onchange = $("#fSource").onchange = () => { if (data) table(); };
 $("#bDel").onclick = async () => {
   const ids = Array.from(sel); if (!ids.length) return;

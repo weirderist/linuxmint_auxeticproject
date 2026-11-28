@@ -138,6 +138,16 @@ def shellsim_colors(rid: str, field: str = "area_strain", clip: float = 98.0):
     return Response(rgb.tobytes(), media_type="application/octet-stream", headers={"X-Count": str(len(rgb)), "X-Legend": json.dumps(legend)})
 
 
+@router.delete("/api/shellsim/{rid}")
+def shellsim_delete(rid: str):
+    """Remove one simulator shell run (K 2026-11-28: the trash can in the Simulator list, as for yarn results). Refused while it runs. Only a folder directly inside DIR."""
+    d = _run_dir(rid)
+    if _state(d) == "running": raise HTTPException(409, "this shell run is still running: cancel it first")
+    if d.resolve().parent != DIR.resolve(): raise HTTPException(404, "unknown shell run")
+    import shutil; shutil.rmtree(d)
+    return {"deleted": rid}
+
+
 @router.post("/api/shellsim/{rid}/cancel")
 def shellsim_cancel(rid: str):
     d = _run_dir(rid); job = _rj(d / "job.json")

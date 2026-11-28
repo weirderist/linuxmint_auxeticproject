@@ -31,7 +31,8 @@ function card(c, w) {
 async function load() {
   try {
     const j = await get("/api/shell"), ws = await Promise.all(j.campaigns.map(c => get("/api/shell/" + encodeURIComponent(c.name) + "/workers").catch(() => null)));
-    $("#camps").innerHTML = j.campaigns.map((c, i) => card(c, ws[i])).join(""); $("#msg").textContent = "";          // no clock (K 2026-11-28); errors only  } catch (e) { $("#msg").textContent = e.message; }
+    $("#camps").innerHTML = j.campaigns.map((c, i) => card(c, ws[i])).join(""); $("#msg").textContent = "";          // no clock (K 2026-11-28); errors only
+  } catch (e) { $("#msg").textContent = e.message; }
 }
 load(); setInterval(load, 30000);
 </script>

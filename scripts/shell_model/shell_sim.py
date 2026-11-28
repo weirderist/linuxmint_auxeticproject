@@ -238,11 +238,18 @@ def make_fire(vg, n, chunk=200):
         return jax.lax.scan(body, (x, v, dt, a, npos, th0, dtmax), None, length=chunk)[0]
     return run
 
+_FIRE_DT_SCALE = [1.0]          # 2026-11-28: a dt_max halving after a blow-up also holds for the later growth steps of the same fold() (ECC review: it was a local)
 def fire_min(x, th0, vg, run, dtmax, maxit, gtol=1e-9, chunk=200):
     """One growth step by FIRE (make_fire), at most maxit steps, stopped early when max |grad| < gtol (checked every chunk). Returns (x, U, g, steps)."""
-    xj = jnp.asarray(x); v = jnp.zeros_like(xj); dt = jnp.asarray(0.1*dtmax); a = jnp.asarray(0.1); npos = jnp.asarray(0); th = jnp.asarray(th0); it = 0
+    dtmax = dtmax*_FIRE_DT_SCALE[0]
+    xj = jnp.asarray(x); v = jnp.zeros_like(xj); dt = jnp.asarray(0.1*dtmax); a = jnp.asarray(0.1); npos = jnp.asarray(0); th = jnp.asarray(th0); it = 0; backs = 0
     while it < maxit:
+        good = (xj, v, dt, a, npos)
         xj, v, dt, a, npos, _, _ = run(xj, v, dt, a, npos, th, jnp.asarray(dtmax)); it += chunk
+        if not bool(jnp.isfinite(xj).all()):          # 2026-11-28 (ECC review): dt_max comes from the flat start and can be too large on the folded sheet: roll back the chunk,
+            if backs >= 6: xj = good[0]; print('  FIRE: still non-finite after 6 halvings of dt_max: step ended at the last finite state', flush=True); break          # halve dt_max, carry on
+            xj, v, dt, a, npos = good[0], jnp.zeros_like(good[0]), good[2]*0.5, jnp.asarray(0.1), jnp.asarray(0); dtmax *= 0.5; backs += 1; _FIRE_DT_SCALE[0] *= 0.5
+            print('  FIRE: non-finite state, chunk rolled back, dt_max halved to %.3g' % dtmax, flush=True); continue          # (a run that never blows up is bit-identical to before)
         if float(jnp.abs(vg(xj, th)[1]).max()) < gtol: break
     f, g = (np.asarray(q, float) for q in vg(xj, th)); return np.asarray(xj, float), float(f), g, it
 
@@ -278,7 +285,7 @@ def fold(M, W, C, kappa=1.0, h=0.5, nu=0.4, Y=1.0, sub=1, ntile=(1, 1), steps=20
     hess = make_hessian(X0, tri, hin, A0, a0, ell, h, Y, nu, springs, bnd, bending) if (solver in ('newton', 'fire+newton') or check_stability) else None; lam = 1e-3
     x = X0.copy(); x[:, 2] += 1e-3*np.random.default_rng(seed).standard_normal(len(x)); x = x.ravel(); log = []
     if solver.startswith('fire'):
-        frun = make_fire(vg, len(x)); th1 = rest_angles(X0, hin, sg, kx0, ky0, 1.0) if bending == 'hinge' else rest_tensor(tri, sg, kx0, ky0, 1.0)
+        _FIRE_DT_SCALE[0] = 1.0; frun = make_fire(vg, len(x)); th1 = rest_angles(X0, hin, sg, kx0, ky0, 1.0) if bending == 'hinge' else rest_tensor(tri, sg, kx0, ky0, 1.0)
         gfun = jax.jit(lambda z, t: vg(z, t)[1]); hvp = jax.jit(lambda z, t, w: jax.jvp(lambda q: gfun(q, t), (z,), (w,))[1])
         w = jnp.asarray(np.random.default_rng(1).standard_normal(len(x))); xj = jnp.asarray(x)
         for _ in range(30): w = hvp(xj, th1, w); lmax = float(jnp.sqrt(w @ w)); w = w/lmax

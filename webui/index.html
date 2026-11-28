@@ -320,7 +320,11 @@ function renderShells(el) {
   const h = document.createElement('div'); h.className = 'item head'; h.textContent = 'Shell runs'; el.append(h);
   for (const r of shells) {
     const d = document.createElement('div'); d.className = 'item'; d.title = r.id;
-    const a = document.createElement('div'); a.append(r.name); const b = document.createElement('span'); b.className = 'badge'; b.textContent = r.state === 'done' ? 'shell' : r.state; a.append(b);
+    const x = document.createElement('span'); x.className = 'del'; x.textContent = '\u{1F5D1}'; x.title = 'Delete this shell run';          // trash can as for yarn results (2026-11-28)
+    x.onclick = async ev => { ev.stopPropagation(); if (!confirm('Delete shell run "' + r.name + '" (' + r.id + ') permanently? This removes its folder and cannot be undone.')) return;
+      const res = await fetch('/api/shellsim/' + encodeURIComponent(r.id), { method: 'DELETE' }); if (!res.ok) { const e = await res.json().catch(() => ({})); return toast('Not deleted: ' + (e.detail || res.status)); }
+      shells = shells.filter(s => s.id !== r.id); renderList(); };
+    const a = document.createElement('div'); a.append(x, r.name); const b = document.createElement('span'); b.className = 'badge'; b.textContent = r.state === 'done' ? 'shell' : r.state; a.append(b);
     const sm = document.createElement('small'); sm.textContent = r.id + ' | ' + r.matrix + ' x' + r.tiles + ' | CPI ' + r.cpi + ' WPI ' + r.wpi + (r.fold_direction ? ' | fold ' + r.fold_direction : '');
     d.append(a, sm); d.onclick = () => { location.href = '/shellview?sim=' + encodeURIComponent(r.id); }; el.append(d);
   }

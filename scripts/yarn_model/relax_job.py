@@ -19,6 +19,7 @@ HERE = os.path.dirname(os.path.abspath(__file__)); sys.path.insert(0, HERE)
 _S = os.path.dirname(HERE)
 if os.path.basename(_S) == 'scripts': sys.path.extend(os.path.join(_S, _d) for _d in sorted(os.listdir(_S)) if _d not in ('legacy', '__pycache__') and os.path.isdir(os.path.join(_S, _d)))          # the other folders of scripts/ (not in a flat frozen copy)
 import relax_state as rs, relax_solver as sv
+import yarn_defaults as YD          # the one set of standard settings (2026-11-28)
 from build_knit import write_obj
 
 SHELL_KAPPA_C, SHELL_H_C = 1.2, 0.5/1.2     # Niu et al.: kappa = 1 and h = 0.5 for a stitch 1.4 x 1.2. Written per course spacing C so they scale with the fabric.
@@ -191,8 +192,8 @@ def main():
     a = argparse.ArgumentParser()
     a.add_argument('--folder', required=True); a.add_argument('--E', type=float, required=True, help='effective yarn modulus')
     a.add_argument('--mu', type=float, required=True, help='yarn-yarn friction coefficient'); a.add_argument('--k-contact', type=float, required=True)
-    a.add_argument('--perturb', type=float, default=0.15, help='out-of-plane symmetry-breaking amplitude, fraction of R (numerical device)')
-    a.add_argument('--outer', type=int, default=40); a.add_argument('--maxiter', type=int, default=300); a.add_argument('--seed', type=int, default=0)
+    a.add_argument('--perturb', type=float, default=YD.STANDARD['perturb'], help='out-of-plane symmetry-breaking amplitude, fraction of R (numerical device; standard in yarn_defaults.py)')
+    a.add_argument('--outer', type=int, default=YD.STANDARD['outer']); a.add_argument('--maxiter', type=int, default=YD.STANDARD['maxiter']); a.add_argument('--seed', type=int, default=0)
     a.add_argument('--solver', choices=['lbfgs', 'fire'], default='lbfgs', help='yarn minimiser: lbfgs (CPU, default) or fire (FIRE, GPU-friendly, 2026-11-27)')
     a.add_argument('--tpi', type=float, default=0.0, help='yarn twist, turns per inch (2026-11-27); acts only with --twist-live > 0 (relax_solver twist drive)')
     a.add_argument('--twist-dir', choices=['Z', 'S'], default='Z', help='twist direction (sign of the drive; which sign skews which way is not verified against a fabric yet)')
@@ -200,7 +201,7 @@ def main():
     a.add_argument('--sides', type=int, default=8)
     a.add_argument('--curl', type=float, default=0.0, help='stored curl, turning angle (rad) per vertex, front loops +, back loops -')
     a.add_argument('--curl-aniso', action='store_true', help='anticlastic curl: course-direction yarn opposite to wale-direction yarn')
-    a.add_argument('--ref-scale', type=float, default=0.0, help='stress-free curvature = ref_scale x baseline loop curvature: 0 straight yarn (default), 1 knitted loop shape')
+    a.add_argument('--ref-scale', type=float, default=YD.STANDARD['ref_scale'], help='stress-free curvature = ref_scale x baseline loop curvature: 1 knitted loop shape (default since 2026-11-28), 0 straight yarn (the loops unravel)')
     a.add_argument('--tension', type=float, default=0.0, help='feeder tension in cN (mm results only); the yarn is knitted stretched by this force')
     a.add_argument('--creep-tau', type=float, default=0.0, help='creep relaxation time in hours (0 = no creep). NOTE: creep moves every rest length toward its current length each round and does NOT conserve the total, so it can partly erase a starting --loop-grade'); a.add_argument('--hours', type=float, default=0.0, help='simulated duration in hours (with creep)')
     a.add_argument('--shell', action='store_true', help='run the shell model first and relax the loops toward its folded shape')
@@ -232,8 +233,8 @@ def main():
     a.add_argument('--fold-delta', type=float, default=0.0, help='first bend step in 1/mm (0 = 0.25 / sheet size)')
     a.add_argument('--warp-kx', type=float, default=0.0, help='no shell: start from the sheet bent into a cylinder, curvature along the courses (1/mm, + toward +z); a start, not held')
     a.add_argument('--warp-ky', type=float, default=0.0, help='no shell: same along the wales')
-    a.add_argument('--stall-tol', type=float, default=0.0, help='early stop: relative energy change per outer round below this (with no rest-length change and little movement) for --stall-rounds rounds ends the run as settled (0 = off)')
-    a.add_argument('--stall-rounds', type=int, default=3); a.add_argument('--stall-move', type=float, default=0.01, help='largest vertex move per outer round allowed for the early stop, x R')
+    a.add_argument('--stall-tol', type=float, default=YD.STANDARD['stall_tol'], help='stop: relative energy change per outer round below this (with no rest-length change and little movement) for --stall-rounds rounds ends the run as settled (0 = off; on by default since 2026-11-28)')
+    a.add_argument('--stall-rounds', type=int, default=YD.STANDARD['stall_rounds']); a.add_argument('--stall-move', type=float, default=YD.STANDARD['stall_move'], help='largest vertex move per outer round allowed for the early stop, x R')
     a.add_argument('--shell-sub', type=int, default=2, help='shell mesh cells per stitch side'); a.add_argument('--shell-steps', type=int, default=15); a.add_argument('--shell-iter', type=int, default=400)
     a.add_argument('--resume', action='store_true', help='continue from checkpoint.npz in the folder (written after every outer iteration; survives a power cut)')
     g = a.parse_args()
@@ -381,7 +382,8 @@ def main():
         json.dump(dict(next_outer_iteration=knext, outer=g.outer, saved=time.strftime('%Y-%m-%dT%H:%M:%S')), open(os.path.join(g.folder, 'checkpoint.json.tmp'), 'w')); os.replace(os.path.join(g.folder, 'checkpoint.json.tmp'), os.path.join(g.folder, 'checkpoint.json'))
     def on_round(k, E, dmax):
         pr = sv.energy_parts(sim, g.k_contact, g.E)
-        rec = dict(round=k+1, t=round(time.time()-t_start, 2), E=pr['total'], stretch=pr['stretch'], bend=pr['bend'], contact=pr['contact'], shell=pr['shell'], max_dl0=dmax, min_dist_over_2R=sv.min_axis_distance(sim)/(2*sim.R))
+        rec = dict(round=k+1, t=round(time.time()-t_start, 2), E=pr['total'], stretch=pr['stretch'], bend=pr['bend'], contact=pr['contact'], shell=pr['shell'], max_dl0=dmax, min_dist_over_2R=sv.min_axis_distance(sim)/(2*sim.R),
+                   max_strain=YD.max_strain(sim.yarns)[0])          # largest |l/l0 - 1| of any segment (K 2026-11-28: stretch must stay invisible)
         meta_update(lambda m: m['simulations'][-1]['rounds'].append(rec))
         if diag: rd.RoundDiag.append(os.path.join(g.folder, 'diagnostics.csv'), diag.row(sim, k, E, dmax, getattr(sim, 'slip_stats', None), sim.slip_ext.strength(k) if getattr(sim, 'slip_ext', None) else 0.0))
         if not g.seed_only: save_checkpoint(k + 1)
@@ -407,6 +409,8 @@ def main():
     e1 = sv.energy_parts(sim, g.k_contact, g.E); d1 = sv.min_axis_distance(sim)
     tot_l0 = sum(float(y.l0.sum()) for y in sim.yarns)
     print('end (%s, %.0f s): E %.6g (stretch %.4g bend %.4g contact %.4g), min axis distance %.4f = %.1f%% of 2R, total rest length %.6g' % (sim.state.value, time.time()-t0, e1['total'], e1['stretch'], e1['bend'], e1['contact'], d1, 100*d1/(2*sim.R), tot_l0))
+    st_max, st_hi, st_lo = YD.max_strain(sim.yarns); strain_ok = st_max <= YD.STRAIN_FLAG
+    print('yarn strain: largest %.3f%% (stretch %+.3f%%, compression %+.3f%%) -> %s (flag above %.1f%%, UNSOURCED limit)' % (100*st_max, 100*st_hi, 100*st_lo, 'ok, invisible' if strain_ok else 'VISIBLE STRETCH: check the settings', 100*YD.STRAIN_FLAG), flush=True)
     ext1 = extent(sim); nst = len(meta['matrix'])*len(meta['matrix'][0])*meta['tiles']**2 if meta.get('matrix') and meta.get('tiles') else None
     dims = dict(shrink_x=float(ext1[0]/ext0[0] - 1), shrink_y=float(ext1[1]/ext0[1] - 1), z_range_over_R_start=float(ext0[2]/sim.R), z_range_over_R_end=float(ext1[2]/sim.R), rest_length_per_stitch=(tot_l0/nst if nst else None))
     print('relaxed size against the built size: x %+.1f%%, y %+.1f%% (folding also shrinks these); thickness (z range) %.2f R -> %.2f R; rest length per stitch %s' % (100*dims['shrink_x'], 100*dims['shrink_y'], dims['z_range_over_R_start'], dims['z_range_over_R_end'], '%.5g' % dims['rest_length_per_stitch'] if nst else 'n/a'), flush=True)
@@ -425,6 +429,7 @@ def main():
     d = json.load(open(os.path.join(g.folder, 'state.json'))); d['summary'] = dict(start=e0, end=e1, min_dist_over_2R_start=d0/(2*sim.R), min_dist_over_2R_end=d1/(2*sim.R), wale_length_change=wale)
     if dv: d['summary']['shell'] = dict(w=g.shell_w, rms_dev_over_R=dv['rms']/sim.R, max_dev_over_R=dv['max']/sim.R)
     d['summary']['dims'] = dims; d['summary']['settled_by'] = (sim.history[-1].get('note', '') if sim.state == rs.S.SETTLED else '')
+    d['summary']['yarn_strain'] = dict(max_abs=st_max, max_stretch=st_hi, max_compression=st_lo, flag_above=YD.STRAIN_FLAG, ok=bool(strain_ok))
     if ramp_rec: d['summary']['ramp'] = ramp_rec
     if fold_rec: d['summary']['fold_search'] = fold_rec
     json.dump(d, open(os.path.join(g.folder, 'state.json.tmp'), 'w'), indent=1); os.replace(os.path.join(g.folder, 'state.json.tmp'), os.path.join(g.folder, 'state.json'))

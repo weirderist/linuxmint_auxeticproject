@@ -38,7 +38,10 @@ _S = os.path.dirname(HERE)
 if os.path.basename(_S) == 'scripts': sys.path.extend(os.path.join(_S, _d) for _d in sorted(os.listdir(_S)) if _d not in ('legacy', '__pycache__') and os.path.isdir(os.path.join(_S, _d)))          # the other folders of scripts/ (not in a flat frozen copy)
 
 FACTOR_FLOOR = 0.2          # numerical guard, as loop_grade.FACTOR_FLOOR
-DEFAULTS = ['--E', '500', '--mu', '0.49', '--k-contact', '40', '--perturb', '0.20', '--curl', '0.5', '--tension', '17', '--shell-w', '0.05', '--outer', '40', '--maxiter', '200']
+import yarn_defaults as YD          # 2026-11-28: the standard settings (was: --k-contact 40 ABSOLUTE = 0.19 EA/R, --ref-scale 0, curl 0.5, tension 17, perturb 0.2: the yarns passed through each other)
+_S = YD.STANDARD
+DEFAULTS = ['--E', repr(_S['E']), '--mu', repr(_S['mu']), '--perturb', repr(_S['perturb']), '--curl', repr(_S['curl']), '--tension', repr(_S['tension_cN']), '--ref-scale', repr(_S['ref_scale']),
+            '--shell-w', '0.05', '--outer', str(_S['outer']), '--maxiter', str(_S['maxiter']), '--stall-tol', repr(_S['stall_tol'])]          # --k-contact is added from R at run time (kc_ratio x EA/R)
 UNSOURCED = ['gain', 'sign', 'F constant per shell triangle, taken at the segment midpoint', 'rest-length-weighted course mean', 'factor floor 0.2 (numerical guard)']
 
 
@@ -145,7 +148,8 @@ def main():
         print('shell strain rule (sign %+g, gain %g, UNSOURCED): segment stretch %.4f to %.4f, rest-length factor %.4f to %.4f, every course conserved' % (g.sign, g.gain, rec['stretch_min'], rec['stretch_max'], rec['factor_min'], rec['factor_max']), flush=True)
         return rec
     rj.run_shell = run_shell; lg.apply_start_grade = grade
-    sys.argv = ['relax_job.py', '--folder', g.out, '--shell', '--loop-grade', '0.01', '--kappa-scale', str(s.get('kappa_scale', 1.0))] + DEFAULTS + extra    # later options win in argparse
+    kc = YD.k_contact(_S['E'], json.load(open(os.path.join(g.out, 'meta.json')))['R'])          # kc_ratio x EA/R of THIS build (never an absolute number)
+    sys.argv = ['relax_job.py', '--folder', g.out, '--shell', '--loop-grade', '0.01', '--kappa-scale', str(s.get('kappa_scale', 1.0)), '--k-contact', repr(kc)] + DEFAULTS + extra    # later options win in argparse
     rj.main()
 
 if __name__ == '__main__':

@@ -43,6 +43,15 @@ check('strain colours and legend served', c.status_code == 200 and len(c.content
 check('list shows the run with its name and state', [x['name'] for x in cl.get('/api/shellsim').json()] [-1:] == ['blocks'] or any(x['name'] == 'blocks' and x['state'] == 'done' for x in cl.get('/api/shellsim').json()))
 check('bad ids are 404', cl.get('/api/shellsim/..%2F..').status_code in (404, 422) and cl.get('/api/shellsim/20260101-000000').status_code == 404)
 check('cancel of a finished run is refused (409)', cl.post('/api/shellsim/%s/cancel' % rid).status_code == 409)
+r_del = cl.post('/api/shellsim', json=dict(name='to delete', matrix=M, cpi=22, wpi=16, tiles=2)).json()['id']
+for _ in range(120):
+    if cl.get('/api/shellsim/' + r_del).json()['state'] != 'running': break
+    time.sleep(0.5)
+dr = cl.delete('/api/shellsim/' + r_del)
+check('delete (trash can): a finished run folder is removed and leaves the list; bad or unknown ids are 404; the other runs stay',
+      dr.status_code == 200 and not os.path.exists(os.path.join(TMP, 'sims', r_del)) and r_del not in [x['id'] for x in cl.get('/api/shellsim').json()]
+      and cl.delete('/api/shellsim/20260101-000000').status_code == 404 and cl.delete('/api/shellsim/..%2F..').status_code in (404, 405, 422) and os.path.isdir(os.path.join(TMP, 'sims', rid)), dr.text[:100])
+check('the Simulator list has a trash can for shell runs that calls DELETE /api/shellsim/<id>', "Delete this shell run" in open(os.path.join(ROOT, 'webui', 'index.html'), encoding='utf8').read())
 
 # ---- the pages: simulator dialog and viewer know the shell runs
 idx = open(os.path.join(ROOT, 'webui', 'index.html'), encoding='utf8').read(); sv = open(os.path.join(ROOT, 'webui', 'shellview.js'), encoding='utf8').read()
@@ -93,4 +102,21 @@ check('refused: workstation (not built), and GPU on this machine', refused(where
 kg = open(os.path.join(ROOT, 'scripts', 'kaggle', 'yarn_kaggle.py'), encoding='utf8').read()
 fl = kg.split('FETCH_PREFIX = ')[1].splitlines()[0]; il = kg.split('INPUT_FILES = ')[1].splitlines()[0]
 check('yarn_kaggle: kernel name differs from its dataset (409 otherwise), fetch never overwrites the built fab_* files, no .env uploaded', "ks = slug + '-k'" in kg and 'fab_' not in fl and '.env' not in il)
+# ---- every page script parses (2026-11-28: a misplaced comment twice commented out code: "out is not defined" in the viewer, and the home page boxes never loaded)
+import esprima, re as _re
+for fn in ('home.html', 'index.html', 'shell.html', 'shellview.html', 'strain.html', 'run.html', 'legacy/campaigns.html'):
+    src = open(os.path.join(ROOT, 'webui', fn), encoding='utf8').read()
+    for attrs, body in _re.findall(r'<script([^>]*)>(.*?)</script>', src, _re.S):
+        if 'src=' in attrs or 'importmap' in attrs or not body.strip(): continue
+        try: (esprima.parseModule if 'module' in attrs else esprima.parseScript)(body); ok_ = True; err = ''
+        except Exception as e: ok_ = False; err = str(e)[:120]
+        check('%s: inline script parses' % fn, ok_, err)
+for fn in ('shell.js', 'chartkit.js', 'run.js', 'legacy/campaigns.js'):
+    try: esprima.parseScript(open(os.path.join(ROOT, 'webui', fn), encoding='utf8').read()); ok_ = True; err = ''
+    except Exception as e: ok_ = False; err = str(e)[:120]
+    check('%s parses' % fn, ok_, err)
+for fn in ('shellview.js', 'viewer_core.js', 'strain.js'):
+    try: esprima.parseModule(open(os.path.join(ROOT, 'webui', fn), encoding='utf8').read()); ok_ = True; err = ''
+    except Exception as e: ok_ = False; err = str(e)[:120]
+    check('%s parses (module)' % fn, ok_, err)
 print('\n' + ('ALL OK' if not bad else 'FAILURES: ' + ', '.join(bad))); sys.exit(1 if bad else 0)

@@ -20,6 +20,7 @@ PRESET_FILE = HERE / "presets.json"
 JOBS = {}                                    # result id -> subprocess.Popen (one at a time)
 
 # Sourced inputs offered to the form. Everything else the solver needs (mu) is entered by the user.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / 'scripts' / 'yarn_model')); import yarn_defaults as YD          # the one set of standard settings (2026-11-28)
 CONFIG = {
     "yarn_E_MPa": 500.0,          # 2026-11-26 (K approved): was 3700 (Kharkova 2011, below); see yarn_E_source
     "yarn_E_source": "500 MPa = EA 26.9 N on the Peirce area of Ne 12 (R 0.1309 mm). Derived, not measured: Xiong et al. 2026, Materials 19, 560, cotton ring-spun yarns ASTM D2256, Fig. 8b p. 9 and Table 1 p. 4: 36.9 tex (the count nearest to Ne 12 = 49.2 tex) has E 594 MPa on its SEM diameter 0.208 mm, i.e. EA 20.2 N = 0.547 N/tex, scaled to 49.2 tex. Xiong range for 14.8-36.9 tex: 0.55-0.96 N/tex, i.e. 500-880 MPa here. Replace by a measured EA (--ea) from K's tensile test (task 17). Previous default: Kharkova, Kononova, Krasnikovs, Eiduks, Machanovskis, Dzelzitis (2011), 'Elastic properties of cotton fabric based "
@@ -37,6 +38,8 @@ CONFIG = {
     "perturb": 0.02, "outer": 40, "maxiter": 300,
     "shell_w": 1.0,                          # hold on the shell fold, x EA/R per vertex. Numerical choice, not tested on the real solver.
 }
+CONFIG.update(yarn_E_MPa=YD.STANDARD['E'], kc_ratio=YD.STANDARD['kc_ratio'], perturb=YD.STANDARD['perturb'], outer=YD.STANDARD['outer'], maxiter=YD.STANDARD['maxiter'],
+              stall_tol=YD.STANDARD['stall_tol'], tension_cN=YD.STANDARD['tension_cN'])          # one source: scripts/yarn_model/yarn_defaults.py
 
 def _orphan(d):
     """The job recorded in d/job.json if that process is still alive although this web service did not start it (the service was restarted while the job ran:
@@ -209,12 +212,12 @@ class SimBody(BaseModel):
     E: float = Field(gt=0, description="yarn modulus: MPa (N/mm^2) for mm results, any positive number for R-unit results")
     mu: float = Field(ge=0, le=2, description="yarn-yarn friction coefficient")
     kc_ratio: float = Field(gt=0, le=10000)
-    perturb: float = Field(0.02, ge=0, le=0.2)
-    outer: int = Field(40, ge=1, le=500)
-    maxiter: int = Field(300, ge=10, le=3000)
+    perturb: float = Field(YD.STANDARD['perturb'], ge=0, le=0.2)          # API defaults = yarn_defaults.STANDARD (ECC review 2026-11-28: an API call that omits a field got the old values)
+    outer: int = Field(YD.STANDARD['outer'], ge=1, le=500)
+    maxiter: int = Field(YD.STANDARD['maxiter'], ge=10, le=3000)
     curl: float = Field(0.0, ge=0, le=0.5, description="stored curl, turning angle (rad) per vertex")
     curl_aniso: bool = False
-    ref_scale: float = Field(0.0, ge=0, le=1, description="stress-free curvature = ref_scale x baseline loop curvature")
+    ref_scale: float = Field(YD.STANDARD['ref_scale'], ge=0, le=1, description="stress-free curvature = ref_scale x baseline loop curvature (1 = knitted loop shape, the standard)")
     tension_cN: float = Field(0.0, ge=0, le=200)
     creep_tau_h: float = Field(0.0, ge=0)
     device: str = Field("cpu", pattern="^(cpu|gpu)$", description="cpu = SciPy L-BFGS (the default, faster on CPU); gpu = FIRE on the JAX device (2026-11-27). This machine has no GPU: gpu is refused here")
@@ -253,7 +256,7 @@ class SimBody(BaseModel):
     slip_drive: float = Field(0.0, ge=-0.1, le=0.1, description="persistent slip drive e (0 = off) from the sectioned loop field (grade target and minimum strength). UNSOURCED (task 25)")
     slip_drive_decay: float = Field(0.0, ge=0, le=1000, description="drive decay N in outer rounds (0 = none); needs a slip drive. UNSOURCED (task 25)")
     diagnostics: bool = Field(False, description="write diagnostics.csv, one row per outer round; no effect on the result (task 25)")
-    stall_tol: float = Field(0.0, ge=0, le=0.01, description="early stop: relative energy change per outer round below this for 3 rounds (0 = off)")
+    stall_tol: float = Field(YD.STANDARD['stall_tol'], ge=0, le=0.01, description="stop: relative energy change per outer round below this for 3 rounds (0 = off; on by default since 2026-11-28)")
 
 class TileBody(BaseModel):
     model_config = ConfigDict(allow_inf_nan=False)
