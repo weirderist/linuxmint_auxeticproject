@@ -3,7 +3,7 @@
 <title>Older yarn campaigns</title>
 <link rel="stylesheet" href="/theme.css">
 </head><body>
-<header class="topbar"><h1>Campaigns <span class="mut">older yarn campaigns (fidelity, screen1, ...): kept for reference, not in use</span></h1><a href="/campaigns">Home</a><a href="/shell">Pure shell runs</a><a href="/">Simulator and 3D viewer</a></header>
+<header class="topbar"><h1>Older campaigns <span class="mut">read only</span></h1><a href="/">Home</a><a href="/sim">Simulator</a><a href="/shell">Shell runs</a></header>
 <main>
 <div id="tabs" class="tabs"></div>
 <div id="empty" class="mut" hidden>No campaign folders found.</div>
@@ -11,22 +11,17 @@
  <section class="card">
   <div class="card-h">
    <div class="titlerow"><h2 id="cname"></h2><span id="pill" class="pill idle">idle</span><span id="pdetail" class="mut small"></span></div>
-   <div class="btnrow"><button id="bStart" class="primary">Start / Resume</button><button id="bStop">Pause</button></div>
-  </div>
-  <div class="hints">
-   <p class="hint">Start / Resume runs <code>campaign.py run &lt;name&gt; --detach</code> in the background; finished runs are never repeated, and a run cut off by a power failure resumes from its checkpoint. <span id="bgNote">Closing this page or the terminal does not stop it.</span></p>
-   <p class="hint">Pause asks the runner to stop after the run in progress finishes (it creates the STOP file). Nothing is killed, so it can take as long as one run.</p>
+   <div class="btnrow"><button id="bStart" class="primary" title="campaign.py run --detach; finished runs are never repeated; a cut run resumes from its checkpoint">Start / Resume</button><button id="bStop" title="stop after the run in progress (STOP file)">Pause</button></div>
   </div>
   <div id="msg"></div>
   <div class="bar" id="bar" title=""></div>
   <div class="counts" id="barTxt"></div>
   <div class="small mut" id="eta"></div>
  </section>
- <section class="card"><div class="card-h"><span class="card-t">Summary</span><span class="mut small">generated from the numbers by fixed rules</span></div><ul class="sum" id="sum"></ul></section>
+ <section class="card"><div class="card-h"><span class="card-t">Summary</span></div><ul class="sum" id="sum"></ul></section>
  <section class="card">
-  <div class="card-h"><span class="card-t">Runs</span><span class="mut small">click a header to sort, a row for the detail</span></div>
-  <p class="legend-text" id="rleg">Flags: <b>failed</b> the run ended in failure; <b>not settled</b> the iteration limit was reached before the energy stopped changing; <b>interpenetration</b> the closest yarn approach is below 0.97 of the contact distance; <b>no fold</b> no fold above the threshold.</p>
-  <div class="tw"><table id="tbl"></table></div>
+  <div class="card-h"><span class="card-t">Runs</span></div>
+  <div class="tw" title="Flags: failed the run ended in failure; not settled the iteration limit was reached before the energy stopped changing; interpenetration the closest yarn approach is below 0.97 of the contact distance; no fold no fold above the threshold."><table id="tbl"></table></div>
   <p class="note" id="tnote"></p>
   <div id="detail"></div>
  </section>
@@ -39,7 +34,7 @@
  </section>
  <section><details class="box"><summary>What the columns mean</summary><div id="help" class="small"></div></details></section>
 </div>
-<section class="card"><div class="card-h"><span class="card-t">Datasets</span><span class="mut small">read only</span></div><div class="tw"><table id="dst" class="cols ds"></table></div></section>
+<section class="card"><div class="card-h"><span class="card-t">Datasets</span></div><div class="tw"><table id="dst" class="cols ds"></table></div></section>
 </main>
 <script src="/chartkit.js"></script>
 <script src="/legacy/campaigns.js"></script>

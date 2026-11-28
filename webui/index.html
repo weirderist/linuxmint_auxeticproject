@@ -1,125 +1,71 @@
-<!doctype html><html><head><meta charset="utf-8">
+<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Auxetic sim UI</title>
-<style>
-:root{color-scheme:light dark}
-*{box-sizing:border-box}
-body{margin:0;font-family:system-ui,sans-serif;display:flex;flex-direction:column;height:100vh}
-header{padding:.6rem 1rem;border-bottom:1px solid #8884;display:flex;gap:.6rem;align-items:center;flex-wrap:wrap}
-header h1{font-size:1.1rem;margin:0;flex:1}
-#fps{opacity:.7;font-size:.85rem;min-width:4.5rem;text-align:right}
-.seg{display:inline-flex}.seg button{border-radius:0;margin:0 -1px 0 0}.seg button.on{background:#4a90e255;font-weight:600}
-main{flex:1;display:flex;min-height:0}
-#list{width:260px;overflow-y:auto;border-right:1px solid #8884}
-.item{padding:.6rem .8rem;border-bottom:1px solid #8882;cursor:pointer}
-.item:hover{background:#8881}.item.sel{background:#4a90e233}
-.item small{display:block;opacity:.7}
-.del{cursor:pointer;opacity:.45;margin-right:.45rem;font-size:.85rem;user-select:none}.del:hover{opacity:1;color:#d33}
-.badge{font-size:.7rem;border:1px solid #8886;border-radius:6px;padding:0 .35rem;margin-left:.3rem}
-#right{flex:1;display:flex;flex-direction:column;min-width:0}
-#view{flex:1;min-height:0;position:relative}
-#view canvas{display:block;width:100%;height:100%}
-#tools{max-height:45%;overflow:auto;border-top:1px solid #8884;font-size:.85rem}
-#tools details{border-bottom:1px solid #8882;padding:.4rem 1rem}
-#tools summary{cursor:pointer;font-weight:600}
-.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:.5rem .9rem;margin:.5rem 0}
-.grid label{display:flex;flex-direction:column;gap:.15rem}
-.grid input[type=number]{width:100%;padding:.25rem}
-.grid .row{flex-direction:row;align-items:center;gap:.5rem}
-.note{opacity:.75;font-size:.78rem;margin:.2rem 0;white-space:pre-line}
-#simState{margin:.4rem 0;font-weight:600}
-progress{width:100%;height:.6rem}
-#info{max-height:30%;overflow:auto;margin:0;padding:.6rem 1rem;border-top:1px solid #8884;font-size:.8rem;white-space:pre-wrap}
-button{padding:.35rem .8rem;font-size:.9rem}
-button:disabled{opacity:.45}
-#toast{position:fixed;right:1rem;bottom:1rem;background:Canvas;color:CanvasText;border:1px solid #8888;border-radius:8px;padding:.8rem 1rem;box-shadow:0 4px 16px #0004;max-width:320px;z-index:5}
-#toast[hidden]{display:none}
-#toast button{margin:.5rem .5rem 0 0}
-@media (max-width:700px){main{flex-direction:column}#list{width:100%;max-height:30%;border-right:0;border-bottom:1px solid #8884}}
-#nGrid{display:grid;gap:2px;margin:.4rem 0;width:max-content;max-width:100%;overflow:auto}
-.cell{width:1.4rem;height:1.4rem;cursor:pointer;border-radius:2px}.c1{background:#e8575b}.c2{background:#57c27e}.cell.low{outline:2px solid #e0b000}
-#nPrev{max-width:520px;margin:.4rem 0}#nPrev canvas{max-width:100%;border:1px solid #8886}
-#nMat{width:min(28rem,100%);font-family:monospace}#sys{margin-left:1rem;font-size:.78rem;opacity:.8}
-.pill{padding:.05rem .4rem;border-radius:9px;background:#e0b00033;margin-left:.4rem}
-.srv{font-size:.8rem;border:1px solid #8886;border-radius:9px;padding:.05rem .55rem;white-space:nowrap}.srv::before{content:'';display:inline-block;width:.55rem;height:.55rem;border-radius:50%;margin-right:.4rem;background:#999}
-.srv.ok::before{background:#2fb344}.srv.off::before{background:#d63939}.srv.off{border-color:#d63939}
-#bNew{font-weight:700;padding:.35rem .7rem}
-dialog#newDlg{width:min(920px,96vw);max-height:92vh;overflow:auto;border:1px solid #8888;border-radius:10px;padding:.8rem 1.1rem;background:Canvas;color:CanvasText}
-dialog#newDlg::backdrop{background:#0006}
-.dh{display:flex;align-items:center;justify-content:space-between;margin-bottom:.4rem}
-#vinfo{opacity:.7;font-size:.85rem}
-#logSelect{max-width:100%;margin:.3rem 0}
-.runmode #simBox,.runmode #tileBox,.runmode #bNew{display:none}
-#runNote{font-size:.8rem;border:1px solid #8886;border-radius:9px;padding:.05rem .55rem}
-#legend{position:absolute;left:10px;bottom:10px;z-index:2;background:Canvas;color:CanvasText;border:1px solid #8888;border-radius:6px;padding:.4rem .6rem;font-size:.78rem;max-width:70%}
-#legend .bar{height:.7rem;border:1px solid #8886;margin:.25rem 0}#legend .tk{display:flex;justify-content:space-between;font-variant-numeric:tabular-nums}
-</style></head><body>
-<header><h1>Auxetic sim UI</h1><span id="fps"></span><span id="vinfo"></span><span id="srv" class="srv off">Server: connecting…</span><span id="sys"></span>
+<title>Simulator</title>
+<link rel="stylesheet" href="/theme.css"></head><body class="sim">
+<header class="topbar"><h1>Simulator</h1><a href="/">Home</a><a href="/shell">Shell runs</a><span class="grow"></span><span id="fps"></span><span id="vinfo"></span><span id="srv" class="srv off">connecting</span><span id="sys"></span>
 <span class="seg"><button id="bBase" class="on">Baseline</button><button id="bRelax" disabled>Relaxed</button></span>
-<span class="seg"><button id="bTube" class="on">Tube</button><button id="bAxis">Axis</button></span><span class="seg" id="colSeg"><button id="bColNone" class="on" title="plain colour">No colour</button><button id="bColLoop" title="loop length / as-built mean: rest length where the run saved it (relaxed_l0.csv), otherwise geometric arc length (does not show migration)">Loop length</button></span><span id="runNote" hidden></span><a href="/campaigns" id="aCamp" style="font-weight:600">Campaigns</a><button id="bNew" title="New fabric: photo or typed pattern, then build">+</button>
+<span class="seg"><button id="bTube" class="on">Tube</button><button id="bAxis">Axis</button></span><span class="seg" id="colSeg"><button id="bColNone" class="on" title="plain colour">Plain</button><button id="bColLoop" title="loop length / as-built mean: rest length where the run saved it (relaxed_l0.csv), otherwise geometric arc length (does not show migration)">Loop length</button></span><span id="runNote" hidden></span><button id="bNew" title="New fabric: photo or typed pattern, then build">+ New</button>
 <button id="bReset">Reset view</button></header>
-<main><div id="list"></div><div id="right"><div id="view"><div id="legend" hidden></div></div>
+<main><div id="list"></div><div id="right"><div id="view"><div id="legend" class="legend" hidden></div></div>
 <div id="tools">
-<details id="simBox" open><summary>Simulate (relaxation and yarn length migration)</summary>
+<details id="simBox" open><summary>Simulate</summary>
  <div class="grid">
   <label><span id="lE">Yarn modulus E</span><input id="fE" type="number" step="any" min="0"></label>
-  <label><span>Friction coefficient μ</span><input id="fMu" type="number" step="any" min="0" max="2" placeholder="enter a value"></label>
-  <label><span>Contact stiffness (× EA/R)</span><input id="fKc" type="number" step="any" min="0"></label>
-  <label><span>Out-of-plane perturbation (× R)</span><input id="fPert" type="number" step="any" min="0" max="0.2"></label>
-  <label><span>Outer iterations</span><input id="fOuter" type="number" step="1" min="1" max="500"></label>
+  <label><span>Friction &mu;</span><input id="fMu" type="number" step="any" min="0" max="2" placeholder="value"></label>
+  <label><span>Contact stiffness &times;EA/R</span><input id="fKc" type="number" step="any" min="0"></label>
+  <label title="out-of-plane start perturbation, in yarn radii"><span>Perturbation &times;R</span><input id="fPert" type="number" step="any" min="0" max="0.2"></label>
+  <label><span>Outer rounds</span><input id="fOuter" type="number" step="1" min="1" max="500"></label>
   <label><span>Iterations per round</span><input id="fMax" type="number" step="1" min="10" max="3000"></label>
-  <label><span>Stored curl (rad per vertex)</span><input id="fCurl" type="number" step="any" min="0" max="0.5"></label>
+  <label><span>Stored curl (rad/vertex)</span><input id="fCurl" type="number" step="any" min="0" max="0.5"></label>
   <label class="row"><input id="fAniso" type="checkbox"><span>Anticlastic curl</span></label>
-  <label><span>Reference curvature scale (0 = straight, 1 = knitted shape)</span><input id="fRef" type="number" step="any" min="0" max="1"></label>
-  <label><span>Straightening factor (0 = off)</span><input id="fStr" type="number" step="any" min="0" max="100"></label>
+  <label title="0 = straight yarn is stress-free, 1 = the knitted loop shape is stress-free"><span>Reference shape 0&ndash;1</span><input id="fRef" type="number" step="any" min="0" max="1"></label>
+  <label><span>Straightening (0 off)</span><input id="fStr" type="number" step="any" min="0" max="100"></label>
   <label><span>Feeder tension (cN)</span><input id="fTen" type="number" step="any" min="0" max="200"></label>
-  <label><span>Creep time constant (h, 0 = off)</span><input id="fTau" type="number" step="any" min="0"></label>
-  <label><span>Simulated duration (h)</span><input id="fHours" type="number" step="any" min="0"></label>
-  <label class="row"><input id="fShell" type="checkbox"><span>Use shell fold target (run first)</span></label>
-  <label><span>Shell hold (× EA/R; 0 = start only)</span><input id="fShellW" type="number" step="any" min="0" max="1000"></label>
-  <label class="row"><input id="fShellF" type="checkbox"><span>Turn stress-free curvature with the fold</span></label>
-  <label class="row"><input id="fShellTile" type="checkbox"><span>Shell curvature from yarn tile</span></label>
+  <label title="creep time constant; creep does not conserve the total rest length and can erase a grade"><span>Creep &tau; (h, 0 off)</span><input id="fTau" type="number" step="any" min="0"></label>
+  <label title="simulated duration for creep"><span>Duration (h)</span><input id="fHours" type="number" step="any" min="0"></label>
+  <label class="row" title="runs the shell first and uses its fold as the target"><input id="fShell" type="checkbox"><span>Shell fold target</span></label>
+  <label title="0 = the shell is used only at the start"><span>Shell hold &times;EA/R</span><input id="fShellW" type="number" step="any" min="0" max="1000"></label>
+  <label class="row" title="turn the stress-free curvature with the fold"><input id="fShellF" type="checkbox"><span>Turn rest curvature with fold</span></label>
+  <label class="row" title="shell curvature from the yarn tile analysis"><input id="fShellTile" type="checkbox"><span>Shell curvature from tile</span></label>
   <label><span>Tile rest-curvature scale</span><input id="fTileRef" type="number" step="any" min="0" max="1"></label>
   <label><span>Shell curvature factor</span><input id="fKScale" type="number" step="any" min="-5" max="5"></label>
-  <label><span>Axial stiffness scale (× EA)</span><input id="fStretch" type="number" step="any" min="0.0001" max="1"></label>
-  <label><span>Bending stiffness scale (× solid rod)</span><input id="fBend" type="number" step="any" min="0.00001" max="1"></label>
-  <label><span>Rest length ratio (1 = as built)</span><input id="fLenRatio" type="number" step="any" min="0.5" max="1"></label>
-  <label><span>Growth stages (0 = off)</span><input id="fRamp" type="number" step="1" min="0" max="40"></label>
-  <label><span>Iterations per growth stage</span><input id="fRampIt" type="number" step="1" min="10" max="3000"></label>
-  <label><span>Stitch seed (× R, 0 = off)</span><input id="fSeedSt" type="number" step="any" min="-1" max="1"></label>
-  <label><span>Starting loop-length grade a (0 = off) &mdash; UNSOURCED</span><input id="fGrade" type="number" step="any" min="-0.4" max="1"></label>
-  <label><span>Grade target &mdash; UNSOURCED weights</span><select id="fGradeT"><option value="both">both</option><option value="boundary">boundary</option><option value="tm">tm</option></select></label>
-  <label><span>Grade: minimum TM-axis strength &mdash; UNSOURCED</span><input id="fGradeS" type="number" step="any" min="0" max="1"></label>
-  <div class="note" style="grid-column:1/-1">Starting loop-length grade: a = how much longer the loops at the target are than the farthest loops of their section (0.02 = 2 %); the total rest length of every section is kept. Target: <b>boundary</b> = toward the boundary of each region of one loop type (the fabric edge counts), <b>tm</b> = along wales or courses that are mostly one type (stronger the purer they are), <b>both</b> = the two added. Minimum strength: the purity (0 = half and half, 1 = pure) below which a line is not an axis. Works with and without the shell. Creep (above) moves rest lengths without conserving the total and can partly erase the grade. Every value here is UNSOURCED until loop length has been measured by region.</div>
-  <label><span>Slip friction load &mu;<sub>n</sub> (0 = off) &mdash; UNSOURCED</span><input id="fSlipFL" type="number" step="any" min="0" max="10"></label>
-  <label><span>Slip drive e (0 = off) &mdash; UNSOURCED</span><input id="fSlipD" type="number" step="any" min="-0.1" max="0.1"></label>
-  <label><span>Slip drive decay N, outer rounds (0 = none) &mdash; UNSOURCED</span><input id="fSlipDec" type="number" step="any" min="0" max="1000"></label>
-  <label class="row"><input id="fDiag" type="checkbox"><span>Per-round diagnostics (diagnostics.csv; no effect on the result)</span></label>
-  <label><span>Device</span><select id="fDevice"><option value="cpu">CPU (L-BFGS, default)</option><option value="gpu">GPU (FIRE; this machine has no GPU)</option></select></label>
-  <label><span>Run on</span><select id="fWhere"><option value="server">Server</option><option value="workstation" disabled>Workstation (not built yet)</option><option value="kaggle" disabled>Kaggle (not built yet)</option></select></label>
-  <label><span>Yarn twist TPI (turns per inch) &mdash; yarn property</span><input id="fTpi" type="number" step="any" min="0" max="50"></label>
-  <label><span>Twist direction</span><select id="fTwDir"><option value="Z">Z</option><option value="S">S</option></select></label>
-  <label><span>Twist liveliness (0&ndash;1, share of the twist that still acts; 0 = off) &mdash; fold property, to be fitted, UNSOURCED</span><input id="fTwLive" type="number" step="any" min="0" max="1"></label>
-  <div class="note" style="grid-column:1/-1">Slip extensions (tests/NOTES_slip_model.md): &mu;<sub>n</sub> raises the slip limit by &mu;<sub>n</sub> times the contact force, so a tight fabric slips less; the drive e keeps rest length flowing toward the section boundaries / TM axes, using the Grade target and minimum-strength fields above (no grade needed); the decay N fades it as exp(-round/N). All three constants are UNSOURCED.</div>
-  <label><span>Fold search steps (0 = off)</span><input id="fFold" type="number" step="1" min="0" max="200"></label>
-  <label><span>Fold search: iterations per trial</span><input id="fFoldIt" type="number" step="1" min="10" max="5000"></label>
-  <label><span>Fold search: first step (1/mm, 0 = auto)</span><input id="fFoldD" type="number" step="any" min="0" max="1"></label>
-  <label class="row"><input id="fMacro" type="checkbox"><span>Large-scale bending modes as variables</span></label>
-  <label><span>Bent start along courses (1/mm)</span><input id="fWarpX" type="number" step="any" min="-1" max="1"></label>
-  <label><span>Bent start along wales (1/mm)</span><input id="fWarpY" type="number" step="any" min="-1" max="1"></label>
-  <label><span>Measured EA (N, 0 = from E)</span><input id="fEA" type="number" step="any" min="0"></label>
-  <label><span>Measured EI (N mm², 0 = from E)</span><input id="fEI" type="number" step="any" min="0"></label>
-  <label><span>Stretch curve (strain:cN, ...)</span><input id="fLaw" type="text" placeholder="strain:cN,strain:cN"></label>
-  <label><span>Stop when stalled (relative energy change, 0 = off)</span><input id="fStall" type="number" step="any" min="0" max="0.01"></label>
-  <label class="row"><input id="fSeedOnly" type="checkbox"><span>Quick mode (shell fold + 3 short rounds)</span></label>
+  <label><span>Axial stiffness &times;EA</span><input id="fStretch" type="number" step="any" min="0.0001" max="1"></label>
+  <label title="bending stiffness as a share of a solid rod"><span>Bending stiffness &times;rod</span><input id="fBend" type="number" step="any" min="0.00001" max="1"></label>
+  <label title="1 = as built"><span>Rest length ratio</span><input id="fLenRatio" type="number" step="any" min="0.5" max="1"></label>
+  <label><span>Growth stages (0 off)</span><input id="fRamp" type="number" step="1" min="0" max="40"></label>
+  <label><span>Iterations per stage</span><input id="fRampIt" type="number" step="1" min="10" max="3000"></label>
+  <label><span>Stitch seed &times;R (0 off)</span><input id="fSeedSt" type="number" step="any" min="-1" max="1"></label>
+  <label title="UNSOURCED. How much longer the loops at the target are than the farthest loops of their section (0.02 = 2 %); the total rest length of each section is kept. 0 = off"><span>Loop-length grade a</span><input id="fGrade" type="number" step="any" min="-0.4" max="1"></label>
+  <label title="UNSOURCED weights. boundary = toward the edge of each loop-type region; tm = along wales/courses that are mostly one type; both = the two added"><span>Grade target</span><select id="fGradeT"><option value="both">both</option><option value="boundary">boundary</option><option value="tm">tm</option></select></label>
+  <label title="UNSOURCED. Purity (0 = half and half, 1 = pure) below which a line is not an axis"><span>Grade min. axis strength</span><input id="fGradeS" type="number" step="any" min="0" max="1"></label>
+  <label title="UNSOURCED. Raises the slip limit by mu_n x contact force (tight fabric slips less). 0 = off"><span>Slip friction load &mu;<sub>n</sub></span><input id="fSlipFL" type="number" step="any" min="0" max="10"></label>
+  <label title="UNSOURCED. Keeps rest length flowing toward the section boundaries / axes (uses the grade target). 0 = off"><span>Slip drive e</span><input id="fSlipD" type="number" step="any" min="-0.1" max="0.1"></label>
+  <label title="UNSOURCED. Fades the drive as exp(-round/N); 0 = none"><span>Slip drive decay N</span><input id="fSlipDec" type="number" step="any" min="0" max="1000"></label>
+  <label title="yarn twist, turns per inch (yarn property); acts only with liveliness > 0"><span>Twist TPI</span><input id="fTpi" type="number" step="any" min="0" max="50"></label>
+  <label title="Z or S: reverses the sign of the twist torque. Which direction skews which way is not yet checked against a fabric"><span>Twist direction</span><select id="fTwDir"><option value="Z">Z</option><option value="S">S</option></select></label>
+  <label title="UNSOURCED fold property, to be fitted: share of the twist that still acts. 0 = off"><span>Twist liveliness 0&ndash;1</span><input id="fTwLive" type="number" step="any" min="0" max="1"></label>
+  <label><span>Fold search steps (0 off)</span><input id="fFold" type="number" step="1" min="0" max="200"></label>
+  <label title="iterations per trial"><span>Fold search iterations</span><input id="fFoldIt" type="number" step="1" min="10" max="5000"></label>
+  <label title="0 = automatic"><span>Fold search first step (1/mm)</span><input id="fFoldD" type="number" step="any" min="0" max="1"></label>
+  <label class="row" title="the three large-scale bending modes as variables"><input id="fMacro" type="checkbox"><span>Large-scale bending modes</span></label>
+  <label><span>Bent start, courses (1/mm)</span><input id="fWarpX" type="number" step="any" min="-1" max="1"></label>
+  <label><span>Bent start, wales (1/mm)</span><input id="fWarpY" type="number" step="any" min="-1" max="1"></label>
+  <label title="0 = from E"><span>Measured EA (N)</span><input id="fEA" type="number" step="any" min="0"></label>
+  <label title="0 = from E"><span>Measured EI (N mm&sup2;)</span><input id="fEI" type="number" step="any" min="0"></label>
+  <label title="measured yarn stretch curve, pairs strain:cN"><span>Stretch curve</span><input id="fLaw" type="text" placeholder="strain:cN,strain:cN"></label>
+  <label title="relative energy change per round; 0 = off"><span>Stop when stalled</span><input id="fStall" type="number" step="any" min="0" max="0.01"></label>
+  <label class="row" title="shell fold + 3 short rounds"><input id="fSeedOnly" type="checkbox"><span>Quick mode</span></label>
+  <label class="row" title="writes diagnostics.csv every round; no effect on the result"><input id="fDiag" type="checkbox"><span>Diagnostics</span></label>
+  <label title="GPU needs a machine with a GPU (Kaggle); this machine and the server have none"><span>Device</span><select id="fDevice"><option value="cpu">CPU (L-BFGS)</option><option value="gpu">GPU (FIRE)</option></select></label>
+  <label><span>Run on</span><select id="fWhere"><option value="server">Server</option><option value="workstation" disabled>Workstation (not built)</option><option value="kaggle" disabled>Kaggle (not built)</option></select></label>
  </div>
- <div class="grid"><label><span>Saved settings</span><select id="pSel"></select></label><label><span>Save the settings above as</span><input id="pName" maxlength="60" placeholder="name"></label></div>
+ <div class="grid"><label><span>Saved settings</span><select id="pSel"></select></label><label><span>Save as</span><input id="pName" maxlength="60" placeholder="name"></label></div>
  <div><button id="pLoad">Load</button> <button id="pSave">Save</button> <button id="pDel">Delete</button></div>
  <div><button id="bSim" disabled>Simulate</button> <button id="bCancel" disabled>Cancel</button> <button id="bResume" hidden>Resume from checkpoint</button> <button id="bRename" disabled>Rename result</button></div>
  <div id="simState">Select a result.</div><div id="simTimer" class="note"></div><progress id="simProg" value="0" max="1" hidden></progress>
  <p class="note" id="eNote"></p>
 </details>
-<details id="tileBox"><summary>Tile analysis (periodic yarn tile: natural curvature and Poisson's ratio)</summary>
+<details id="tileBox"><summary title="one periodic repeat of the stitch matrix: natural curvature and Poisson's ratio; one job at a time">Tile analysis</summary>
  <div class="grid">
   <label><span>Yarn modulus E (MPa)</span><input id="tE" type="number" step="any" min="0"></label>
   <label><span>Contact stiffness (x EA/R)</span><input id="tKc" type="number" step="any" min="0"></label>
@@ -135,10 +81,9 @@ dialog#newDlg::backdrop{background:#0006}
   <label class="row"><input id="tPois" type="checkbox" checked><span>Poisson ratio curve</span></label>
  </div>
  <div><button id="bTile" disabled>Run tile analysis</button> <button id="bTileCancel" disabled>Cancel</button></div>
- <div id="tileState">Select a result.</div><div id="tileBody" style="overflow:auto"></div><pre id="tileLog" class="note" style="white-space:pre-wrap"></pre>
- <p class="note">One tile = one repeat of the stitch matrix. One job at a time.</p>
+ <div id="tileState">Select a result.</div><div id="tileBody" class="scrollx"></div><pre id="tileLog" class="note wrap"></pre>
 </details>
-<details id="logBox"><summary>Simulation log (every round, saved in meta.json)</summary><select id="logSelect" hidden></select><div id="logHead" class="note"></div><div id="logBody" style="overflow:auto"></div></details>
+<details id="logBox"><summary title="every round, saved in meta.json">Simulation log</summary><select id="logSelect" hidden></select><div id="logHead" class="note"></div><div id="logBody" class="scrollx"></div></details>
 <details id="setBox"><summary>View settings</summary>
  <div class="grid">
   <label><span>Zoom speed <output id="oZoom"></output></span><input id="sZoom" type="range" min="0.5" max="8" step="0.1"></label>
@@ -154,8 +99,8 @@ dialog#newDlg::backdrop{background:#0006}
 </details>
 </div>
 <pre id="info"></pre></div></main>
-<dialog id="newDlg"><div class="dh"><b>New fabric: photo or typed pattern &rarr; matrix &rarr; build</b><button id="nClose">Close</button></div>
- <div class="note">Draw the pattern as you see it, top course first. Every cell is a stitch: 1 = knit (front, red), 2 = purl (back, green). Click a cell to switch it. The model gets an ID from its creation date and time; the name is yours.</div>
+<dialog id="newDlg"><div class="dh"><b>New fabric</b><button id="nClose">Close</button></div>
+ <div class="note">1 = knit (red), 2 = purl (green); click a cell to switch it.</div>
  <div class="grid">
   <label><span>Model name (required)</span><input id="nName" maxlength="80" placeholder="e.g. jersey control"></label>
   <label><span>Pattern photo (optional)</span><input id="nFile" type="file" accept="image/*"></label>
@@ -181,7 +126,7 @@ dialog#newDlg::backdrop{background:#0006}
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 const $ = s => document.querySelector(s);
-const LITE = new URLSearchParams(location.search).has('lite');   // open /?lite for a lighter render
+const LITE = new URLSearchParams(location.search).has('lite');   // open /sim?lite for a lighter render
 // ?run=<campaign>/<id>: read-only view of a campaign run (webui/runview.py). Simulate, rename and delete are hidden here and refused by the server (HTTP 403).
 const RUNQ = new URLSearchParams(location.search).get('run');
 const RUNID = RUNQ && /^[0-9A-Za-z_-]{1,64}\/[0-9]{1,6}$/.test(RUNQ) ? 'run~' + RUNQ.replace('/', '~') : null;
@@ -441,7 +386,8 @@ let colMode = 'none';
 function setLegend(l) {
   const el = $('#legend'); if (!l) { el.hidden = true; return; }
   const g = l.stops.map(c => 'rgb(' + c.join(',') + ')').join(','), f = x => (+x).toFixed(3);
-  el.innerHTML = '<b>' + l.label + '</b><div class="bar" style="background:linear-gradient(to right,' + g + ')"></div><div class="tk"><span>' + f(l.vmin) + ' (shorter)</span><span>' + f(l.ticks[1]) + ' (' + (l.centre_label || 'as-built mean') + ')</span><span>' + f(l.vmax) + ' (longer)</span></div><div>' + (l.note || '') + '</div><div style="opacity:.7">data ' + f(l.data_min) + ' to ' + f(l.data_max) + '</div>';
+  el.innerHTML = '<b>' + l.label + '</b><div class="bar" style="background:linear-gradient(to right,' + g + ')"></div><div class="tk"><span>' + f(l.vmin) + '</span><span>' + f(l.ticks[1]) + '</span><span>' + f(l.vmax) + '</span></div>';
+  el.title = 'low = shorter, centre = ' + (l.centre_label || 'as-built mean') + ', high = longer | data ' + f(l.data_min) + ' to ' + f(l.data_max) + (l.note ? ' | ' + l.note : '');
   el.hidden = false;
 }
 function setColButtons() { $('#bColNone').classList.toggle('on', colMode === 'none'); $('#bColLoop').classList.toggle('on', colMode === 'loop'); }
@@ -587,8 +533,8 @@ let buildSeen = null;
 let srvFail = 0, srvDown = false, jobOn = false;
 function markSrv(ok) {                                    // two failed requests in a row = disconnected; any success = active
   const el = $('#srv');
-  if (ok) { srvFail = 0; if (srvDown) { srvDown = false; poll(); pollState(); loadPresets(); } el.className = 'srv ok'; el.textContent = 'Server: active' + (jobOn ? ' \u00b7 job running' : ''); }
-  else if (++srvFail >= 2) { srvDown = true; el.className = 'srv off'; el.textContent = 'Server: disconnected'; $('#sys').textContent = ''; }
+  if (ok) { srvFail = 0; if (srvDown) { srvDown = false; poll(); pollState(); loadPresets(); } el.className = 'srv ok'; el.textContent = jobOn ? 'job running' : 'online'; }
+  else if (++srvFail >= 2) { srvDown = true; el.className = 'srv off'; el.textContent = 'offline'; $('#sys').textContent = ''; }
 }
 async function pollSys() {
   try {

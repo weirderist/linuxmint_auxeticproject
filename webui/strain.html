@@ -1,47 +1,24 @@
 <!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Run strain</title>
-<style>
-:root{color-scheme:light dark;--bg:#fcfcfb;--fg:#0b0b0b;--mut:#52514e;--line:#8884;--card:#8881;--s1:#2a78d6}
-@media (prefers-color-scheme:dark){:root:not([data-theme=light]){--bg:#1a1a19;--fg:#f0efec;--mut:#c3c2b7;--s1:#3987e5}}
-*{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--fg);font-family:system-ui,sans-serif;font-size:15px}
-header{padding:.6rem 1rem;border-bottom:1px solid var(--line);display:flex;gap:1rem;align-items:center;flex-wrap:wrap}
-header h1{font-size:1.1rem;margin:0;flex:1}a{color:var(--s1)}
-main{max-width:1250px;margin:0 auto;padding:1rem}
-section{margin:0 0 1.2rem}h2{font-size:1rem;margin:0 0 .4rem}
-.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:.7rem .9rem}
-.row{display:flex;gap:.8rem;flex-wrap:wrap;align-items:center;margin:.3rem 0}
-.seg{display:inline-flex}.seg button{border-radius:0;margin:0 -1px 0 0}.seg button.on{background:#4a90e255;font-weight:600}
-button{padding:.35rem .8rem;font-size:.9rem;cursor:pointer}
-.view{position:relative;height:58vh;min-height:300px;border:1px solid var(--line);border-radius:8px;overflow:hidden}
-.view canvas{display:block;width:100%;height:100%}
-.legend{position:absolute;left:10px;bottom:10px;z-index:2;background:Canvas;color:CanvasText;border:1px solid #8888;border-radius:6px;padding:.4rem .6rem;font-size:.78rem;max-width:70%}
-.legend .bar{height:.7rem;border:1px solid #8886;margin:.25rem 0}.legend .tk{display:flex;justify-content:space-between;gap:1rem;font-variant-numeric:tabular-nums}
-.status{position:absolute;right:10px;top:8px;z-index:2;font-size:.8rem;color:var(--mut)}
-.mut{color:var(--mut)}.small{font-size:.82rem}
-svg text{fill:var(--mut);font-size:10px;font-family:system-ui,sans-serif}svg .ax{stroke:var(--line);stroke-width:1}svg .gd{stroke:var(--line);stroke-width:.5;opacity:.5}
-#map{display:none}#gr svg,#map svg{width:100%;height:auto;display:block}
-.err{color:#d33}
-</style></head><body>
-<header><h1>Run strain <span id="rname" class="mut"></span></h1><a id="lv" href="/">Open in viewer</a><a id="lg" href="/run">Run graphs</a><a href="/campaigns">Campaigns</a></header>
+<link rel="stylesheet" href="/theme.css"></head><body>
+<header class="topbar"><h1>Run strain <span id="rname" class="mut"></span></h1><a href="/">Home</a><a id="lv" href="/sim">Viewer</a><a id="lg" href="/run">Run graphs</a></header>
 <main>
-<p class="small mut">Strain on this page is the <b>axial strain of the relaxed fabric</b> (segment length / rest length &minus; 1), not stretch-test strain. The rest length is reconstructed from the as-built length and the run's length ratio and tension, because the relaxed rest lengths are not saved.</p>
 <div id="err" class="err"></div>
-<section><h2>A &ndash; loop length</h2>
- <div class="row"><span class="seg"><button id="aBase">As built</button><button id="aRel" class="on">Relaxed</button></span><span class="mut small">colour: loop length / as-built mean (rest length if the run saved it, otherwise geometric arc length; the legend says which)</span></div>
+<section class="card"><h2>Loop length</h2>
+ <div class="row"><span class="seg"><button id="aBase">As built</button><button id="aRel" class="on">Relaxed</button></span></div>
  <div class="view" id="vA"><div class="status" id="sA"></div><div class="legend" id="lA" hidden></div></div></section>
-<div class="row card"><label><input type="checkbox" id="sync" checked> keep the two cameras synchronised</label></div>
-<section><h2>B &ndash; axial strain of the relaxed fabric</h2>
- <div class="row"><span class="seg"><button id="b3d" class="on">3D</button><button id="b2d">Flat map (courses against wales)</button></span>
-  <button id="flip" title="swap the colours of tension and compression">Flip tension / compression</button>
-  <label class="small">colour range = &plusmn; <input id="clip" type="number" min="50" max="100" step="1" value="98" style="width:4rem">-th percentile of |strain| <span class="mut">(UNSOURCED display choice)</span></label></div>
+<label class="chk"><input type="checkbox" id="sync" checked> sync cameras</label>
+<section class="card"><h2 title="segment length / rest length - 1; rest length reconstructed from the as-built length, length ratio and tension">Axial strain (relaxed)</h2>
+ <div class="row"><span class="seg"><button id="b3d" class="on">3D</button><button id="b2d">Flat map</button></span>
+  <button id="flip" title="swap the colours of tension and compression">Flip colours</button>
+  <label title="colour range = +- this percentile of |strain| (display choice)">range pct <input id="clip" class="narrow" type="number" min="50" max="100" step="1" value="98"></label></div>
  <div class="view" id="vB"><div class="status" id="sB"></div><div class="legend" id="lB" hidden></div></div>
  <div id="map" class="card"></div></section>
-<section><h2>C &ndash; strain graph</h2>
+<section class="card"><h2>Strain graph</h2>
  <div class="row"><span class="seg"><button id="gH" class="on">Histogram</button><button id="gW">Along a wale</button><button id="gC">Along a course</button></span>
   <label id="gSelL" class="small" hidden><span id="gSelT"></span> <select id="gSel"></select></label></div>
- <div class="card" id="gr"></div><div class="small mut" id="notes"></div></section>
+ <div id="gr"></div><div class="small mut" id="notes"></div></section>
 </main>
 <script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"}}</script>
 <script type="module" src="/strain.js"></script>

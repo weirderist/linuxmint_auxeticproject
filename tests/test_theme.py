@@ -55,10 +55,10 @@ check('3D views render at up to 2x the CSS pixels (device pixel ratio) in the sh
 
 # ---- strain legend wording (shell viewer)
 sv = PAGES['shellview.js']
-check('legend: plain first line "blue = squeezed (compression), red = stretched (tension)" for the strain fields', 'blue = squeezed (compression), red = stretched (tension)' in sv and "STRAIN.includes(l.field)" in sv)
-check('legend keeps compression / tension end labels, the technical note, and the data minimum and maximum', 'l.end_labels' in sv and 'l.note' in sv and 'data minimum' in sv and 'maximum' in sv)
-check('plain line comes before the technical lines in the legend markup', sv.index('lg-plain') < sv.index('lg-title') < sv.index('lg-bar') < sv.index('lg-note') < sv.index('lg-data'))
-check('legend is crisp and readable: 14 px text, solid card, 14 px colour bar (theme.css)', re.search(r'\.lg \{[^}]*font-size: var\(--fs-sm\)', css) and re.search(r'\.lg \{[^}]*background: var\(--card\)', css) and re.search(r'\.lg-bar \{[^}]*height: 14px', css))
+check('legend is compact (2026-11-28, K: it hid the shell): short name, bar, three ticks; strain ends are marked squeezed / stretched', "['squeezed', 'stretched']" in sv and "STRAIN.includes(l.field)" in sv and 'lg-plain' not in sv and 'lg-note' not in sv)
+check('legend keeps the end labels; the range note and the data minimum and maximum are in the tooltip', 'l.end_labels' in sv and 'legendTip' in sv and 'l.note' in sv and 'data_min' in sv and 'data_max' in sv)
+check('legend markup order: name, colour bar, ticks', sv.index('lg-title') < sv.index('lg-bar') < sv.index('lg-ticks'))
+check('legend box is small: fixed width 230 px at most and extra-small text', re.search(r'\.lg \{[^}]*width: 230px', css) is not None and re.search(r'\.lg \{[^}]*font-size: var\(--fs-xs\)', css) is not None)
 try:
     import numpy as np, shell_strain as ss
     rgbv, lg = ss.colours('area_strain', np.array([-0.2, 0.0, 0.1, 0.3]))

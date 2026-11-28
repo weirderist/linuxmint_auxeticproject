@@ -16,7 +16,7 @@ Safety:
   - atomic: every file is written to a temporary name, flushed and fsynced, then renamed;
   - interrupted attempts: status.json marks a tool 'running' before it starts; if a later copy (holding the lock) finds 'running', that attempt is recorded as 'interrupted' (power cut, kill, crash)
     and the tool is run again, at most MAX_ATTEMPTS times in all; a tool that raises an error is recorded as 'failed' with the error text and is not repeated for that run count.
-Usage: python3 shell_analysis_job.py <campaign> [--every 100] [--poll-s 600] [--once]"""
+Usage: python3 shell_analysis_job.py <campaign> [--every 100] [--poll-s 600] [--once] [--originals-only]"""
 import argparse, hashlib, json, os, shutil, subprocess, sys, time
 HERE = os.path.dirname(os.path.abspath(__file__)); sys.path.insert(0, HERE)
 _S = os.path.dirname(HERE)
@@ -67,14 +67,18 @@ def adir(camp): return os.path.join(camp.d, 'analysis', 'scheduled')
 def mdir(camp, m): return os.path.join(adir(camp), '%06d' % int(m))
 
 
-def finished_order(camp):
-    """Ids of the finished non-control runs, in the order they first reached 'done' (read only)."""
+def is_proposer(item): return str((item or {}).get('source', '')).startswith('proposer')
+
+
+def finished_order(camp, originals_only=False):
+    """Ids of the finished non-control runs, in the order they first reached 'done' (read only). originals_only (2026-11-28, K): leave out the runs the GP proposer chose
+    (source 'proposer:...'), so every run count is a random / seed-based design and the proposer-versus-random test and the averaged errors are not biased by GP-picked runs."""
     import shell_campaign as sc
     q = {x['id']: x for x in camp.queue_items()}; last = camp.index_last(); seen, order = set(), []
     for x in sc.read_lines(camp.index):
         rid = x.get('id')
         if x.get('status') == 'done' and rid and rid not in seen: seen.add(rid); order.append(rid)
-    return [r for r in order if (last.get(r) or {}).get('status') == 'done' and r in q and not q[r].get('control')]
+    return [r for r in order if (last.get(r) or {}).get('status') == 'done' and r in q and not q[r].get('control') and not (originals_only and is_proposer(q[r]))]
 
 
 def due(n, every=EVERY): return list(range(every, (n // every) * every + 1, every))
@@ -119,8 +123,11 @@ RUNNERS = dict(proposer_eval=run_proposer_eval, rules_sr=run_rules_sr)
 def process_milestone(camp, m, order, rows_by_id, params=None, log=print, runners=None):
     """Run what is still missing for run count m. Returns the status dict."""
     runners = runners or RUNNERS; params = params or {}; d = mdir(camp, m); os.makedirs(d, exist_ok=True); sp = os.path.join(d, 'status.json'); ids = order[:m]
-    st = rjson(sp) or dict(campaign=camp.name, milestone=m, n_used=m, run_ids_sha1=hashlib.sha1(','.join(ids).encode()).hexdigest(), created=now(),
-                           tools={t: dict(status='queued', attempts=[], result=t + '.json', what=TOOL_TEXT[t]) for t in TOOLS})
+    sha = hashlib.sha1(','.join(ids).encode()).hexdigest(); st = rjson(sp)
+    if st and st.get('run_ids_sha1') not in (None, sha):              # this run count was analysed on a different set of runs (e.g. before --originals-only): never mix the two
+        log('%s run count %d: existing results use another run set (run_ids_sha1 %s, now %s): skipped' % (now(), m, st.get('run_ids_sha1'), sha)); return st
+    st = st or dict(campaign=camp.name, milestone=m, n_used=m, run_ids_sha1=sha, created=now(),
+                    tools={t: dict(status='queued', attempts=[], result=t + '.json', what=TOOL_TEXT[t]) for t in TOOLS})
     wjson_atomic(sp, st)
     for t in TOOLS:
         tt = st['tools'][t]; out = os.path.join(d, t + '.json')
@@ -152,12 +159,12 @@ def process_milestone(camp, m, order, rows_by_id, params=None, log=print, runner
     return st
 
 
-def run_once(camp, every=EVERY, params=None, log=print, runners=None, loop_rec=None):
+def run_once(camp, every=EVERY, params=None, log=print, runners=None, loop_rec=None, originals_only=False):
     """One check: count, and run every due run count that is not complete. Returns a short dict (for the log and the tests)."""
     lk = Lock(camp)
     if not lk.acquire(): log('%s another copy holds %s: nothing done' % (now(), lk.path)); return dict(status='locked')
     try:
-        order = finished_order(camp); n = len(order); todo = due(n, every); out = dict(status='ok', finished=n, due=todo, processed=[])
+        order = finished_order(camp, originals_only); n = len(order); todo = due(n, every); out = dict(status='ok', finished=n, due=todo, processed=[])
         if todo:
             import shell_features as sf
             rows_by_id = {r['run']: r for r in sf.dataset(camp) if not r['control']}
@@ -165,7 +172,7 @@ def run_once(camp, every=EVERY, params=None, log=print, runners=None, loop_rec=N
                 st = rjson(os.path.join(mdir(camp, m), 'status.json'))
                 if st and all(st['tools'][t]['status'] in ('done', 'failed') for t in TOOLS) and all(st['tools'][t]['status'] == 'failed' or os.path.isfile(os.path.join(mdir(camp, m), t + '.json')) for t in TOOLS): continue
                 process_milestone(camp, m, order, rows_by_id, params, log, runners); out['processed'].append(m)
-        wjson_atomic(os.path.join(adir(camp), 'state.json'), dict(campaign=camp.name, every=every, finished=n, next_milestone=next_milestone(n, every), last_check=now(), loop=loop_rec or me()))
+        wjson_atomic(os.path.join(adir(camp), 'state.json'), dict(campaign=camp.name, every=every, originals_only=bool(originals_only), finished=n, next_milestone=next_milestone(n, every), last_check=now(), loop=loop_rec or me()))
         return out
     finally: lk.release()
 
@@ -180,13 +187,13 @@ def lower_priority():
 
 def main():
     a = argparse.ArgumentParser(description=__doc__.split('\n')[0]); a.add_argument('campaign'); a.add_argument('--every', type=int, default=EVERY); a.add_argument('--poll-s', type=float, default=600.0)
-    a.add_argument('--once', action='store_true'); g = a.parse_args()
+    a.add_argument('--once', action='store_true'); a.add_argument('--originals-only', action='store_true', help='count and analyse only the runs not chosen by the GP proposer'); g = a.parse_args()
     import shell_campaign as sc
     camp = sc.Camp(g.campaign)
     if not camp.exists(): sys.exit('no such shell campaign: %s' % g.campaign)
-    lower_priority(); rec = me(); print('%s analysis job for %s: every %d finished runs, check every %.0f s (pid %d)' % (now(), camp.name, g.every, g.poll_s, os.getpid()), flush=True)
+    lower_priority(); rec = me(); print('%s analysis job for %s: every %d finished runs%s, check every %.0f s (pid %d)' % (now(), camp.name, g.every, ' (originals only)' if g.originals_only else '', g.poll_s, os.getpid()), flush=True)
     while True:
-        try: r = run_once(camp, g.every, log=lambda s: print(s, flush=True), loop_rec=rec); print('%s check: %s' % (now(), r), flush=True)
+        try: r = run_once(camp, g.every, log=lambda s: print(s, flush=True), loop_rec=rec, originals_only=g.originals_only); print('%s check: %s' % (now(), r), flush=True)
         except Exception as e: print('%s check failed: %s: %s' % (now(), type(e).__name__, e), flush=True)
         if g.once: break
         time.sleep(g.poll_s)

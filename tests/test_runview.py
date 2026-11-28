@@ -104,5 +104,5 @@ d = c.get("/api/results/run~fid_copy~0010/strain").json(); check("saved rest len
 # ---- pages
 for pth, needle in (("/strain", "Run strain"), ("/run", "Run graphs"), ("/strain.js", "viewer_core"), ("/run.js", "foldGraph"), ("/viewer_core.js", "createViewer")):
     r = c.get(pth); check("page %s served" % pth, r.status_code == 200 and needle in r.text)
-check("the main page still serves and links the run-mode flag", "RUNID" in c.get("/").text)
+check("the simulator page (/sim, 2026-11-28) still serves and links the run-mode flag", "RUNID" in c.get("/sim").text)
 print("ALL OK" if ok else "FAILURES")

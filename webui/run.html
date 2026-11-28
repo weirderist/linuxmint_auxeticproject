@@ -1,36 +1,18 @@
 <!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Run graphs</title>
-<style>
-:root{color-scheme:light dark;--bg:#fcfcfb;--fg:#0b0b0b;--mut:#52514e;--line:#8884;--card:#8881;--s1:#2a78d6;--s2:#eb6834}
-@media (prefers-color-scheme:dark){:root:not([data-theme=light]){--bg:#1a1a19;--fg:#f0efec;--mut:#c3c2b7;--s1:#3987e5;--s2:#d95926}}
-*{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--fg);font-family:system-ui,sans-serif;font-size:15px}
-header{padding:.6rem 1rem;border-bottom:1px solid var(--line);display:flex;gap:1rem;align-items:center;flex-wrap:wrap}
-header h1{font-size:1.1rem;margin:0;flex:1}a{color:var(--s1)}
-main{max-width:1000px;margin:0 auto;padding:1rem}
-section{margin:0 0 1.4rem}h2{font-size:1rem;margin:0 0 .4rem}
-.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:.7rem .9rem}
-.row{display:flex;gap:.8rem;flex-wrap:wrap;align-items:center;margin:.3rem 0}
-.seg{display:inline-flex}.seg button{border-radius:0;margin:0 -1px 0 0}.seg button.on{background:#4a90e255;font-weight:600}
-button{padding:.35rem .8rem;font-size:.9rem;cursor:pointer}
-.mut{color:var(--mut)}.small{font-size:.82rem}
-svg{width:100%;height:auto;display:block}
-svg text{fill:var(--mut);font-size:10px;font-family:system-ui,sans-serif}svg .ax{stroke:var(--line);stroke-width:1}svg .gd{stroke:var(--line);stroke-width:.5;opacity:.5}
-.err{color:#d33}
-</style></head><body>
-<header><h1>Run graphs <span id="rname" class="mut"></span></h1><a id="lv" href="/">Open in viewer</a><a id="ls" href="/strain">Strain page</a><a href="/campaigns">Campaigns</a></header>
+<link rel="stylesheet" href="/theme.css"></head><body>
+<header class="topbar"><h1>Run graphs <span id="rname" class="mut"></span></h1><a href="/">Home</a><a id="lv" href="/sim">Viewer</a><a id="ls" href="/strain">Strain</a></header>
 <main>
 <div id="err" class="err"></div>
-<section><h2>Loop length: histogram</h2>
- <div class="row"><span class="seg"><button id="hA">As built</button><button id="hR" class="on">Relaxed</button></span><span class="small mut">loop yarn length / as-built mean loop length; 40 bins (display choice)</span></div>
- <div class="card" id="hist"></div></section>
-<section><h2>Loop length along a wale or a course</h2>
+<section class="card"><h2 title="loop yarn length / as-built mean loop length; 40 bins">Loop length histogram</h2>
+ <div class="row"><span class="seg"><button id="hA">As built</button><button id="hR" class="on">Relaxed</button></span></div>
+ <div id="hist"></div></section>
+<section class="card"><h2>Loop length profile</h2>
  <div class="row"><span class="seg"><button id="pW" class="on">Along a wale</button><button id="pC">Along a course</button></span>
   <label class="small"><span id="pT"></span> <select id="pSel"></select></label><span class="seg"><button id="pA">As built</button><button id="pR" class="on">Relaxed</button></span></div>
- <div class="card" id="prof"></div></section>
-<section><h2>Fold profile along the fold direction</h2>
- <div class="card"><div id="foldTxt" class="small"></div><div id="fold"></div></div></section>
+ <div id="prof"></div></section>
+<section class="card"><h2>Fold profile</h2><div id="foldTxt" class="small"></div><div id="fold"></div></section>
 <p class="small mut" id="notes"></p>
 </main>
 <script src="/run.js"></script>

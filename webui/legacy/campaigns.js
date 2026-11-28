@@ -8,7 +8,7 @@ const SHOW = ["exit_code", "rel_dE_last", "min_dist_over_2R_end", "fold_directio
 const FOLD_Y = "fold_amplitude_mm";
 // display-only tightness columns, computed by the server from each run's CPI, WPI and Ne (definitions in the note under the table)
 const TIGHT = ["stitch_density", "tf_rel", "tf_c_rel", "tf_w_rel"], HEAD = { stitch_density: "S", tf_rel: "TF_rel", tf_c_rel: "TF_c_rel", tf_w_rel: "TF_w_rel" }, hname = h => HEAD[h] || h;
-function tnote() { const t = data.tightness; $("#tnote").innerHTML = t ? "<b>S</b>: " + esc(t.label_stitch_density) + ". <b>TF_rel</b>: " + esc(t.label_tf_rel) + (t.constant_note ? ". S and TF_rel are " + esc(t.constant_note) : "") + ". <b>TF_c_rel</b>: " + esc(t.label_tf_c_rel) + ". <b>TF_w_rel</b>: " + esc(t.label_tf_w_rel) + (t.constant_note ? ". TF_c_rel and TF_w_rel are NOT constant: they change with CPI and WPI separately (in opposite directions at constant S)" : "") + ". " + esc(t.note) + " The yarn-level tightness factor recorded in meta.json (from the as-built loop length) is a separate value." : ""; }
+function tnote() { const t = data.tightness; $("#tnote").textContent = ""; $("#tbl").title = t ? [t.label_stitch_density, t.label_tf_rel, t.label_tf_c_rel, t.label_tf_w_rel, t.constant_note, t.note].filter(Boolean).join(" | ") : ""; }          // tightness definitions in the tooltip
 
 async function api(path, opt) {
   const r = await fetch(path, opt);
@@ -113,7 +113,7 @@ async function openRun(id) {
     const kv = o => "<dl>" + Object.keys(o).map(k => "<dt>" + esc(k) + "</dt><dd>" + esc(fmt(o[k], k)) + "</dd>").join("") + "</dl>";
     el.innerHTML = '<div class="card mt"><h2>Run ' + esc(j.run) + " &ndash; " + esc(j.status) + (j.stage ? " (stage " + esc(j.stage) + ")" : "") + " " + flagTags(j.flags || {}) + "</h2>" +
       (j.reason ? '<div class="small"><b>Reason:</b> ' + esc(j.reason) + "</div>" : "") +
-      '<div class="small links">' + [["/?run=", "Open in viewer"], ["/strain?run=", "Strain page"], ["/run?run=", "Run graphs"]].map(l => '<a href="' + l[0] + encodeURIComponent(j.campaign) + "/" + encodeURIComponent(j.run) + '" target="_blank" rel="noopener">' + l[1] + "</a>").join(" &middot; ") + "</div>" +
+      '<div class="small links">' + [["/sim?run=", "Open in viewer"], ["/strain?run=", "Strain page"], ["/run?run=", "Run graphs"]].map(l => '<a href="' + l[0] + encodeURIComponent(j.campaign) + "/" + encodeURIComponent(j.run) + '" target="_blank" rel="noopener">' + l[1] + "</a>").join(" &middot; ") + "</div>" +
       '<div class="small mut">attempts ' + j.attempts + ", interruptions " + j.interrupted + ", exit code " + esc(j.exit_code == null ? "-" : j.exit_code) + ", wall time " + esc(j.wall_s == null ? "-" : dur(j.wall_s)) + "</div>" +
       '<div class="row"><div class="col"><b>Parameters</b>' + kv(j.params) + (j.nominal ? '<b>Nominal tightness (display only)</b>' + kv({ "S (stitches per square inch)": j.nominal.stitch_density, "TF_rel (tex^0.5 per inch)": j.nominal.tf_rel, "TF_c_rel = sqrt(tex) x CPI": j.nominal.tf_c_rel, "TF_w_rel = sqrt(tex) x WPI": j.nominal.tf_w_rel }) : "") + '</div><div class="col col2"><b>Metrics</b>' + kv(j.metrics) + "</div></div>" +
       "<b>Last 40 lines of relax.log</b><pre>" + esc(j.log_tail || "(no log yet)") + "</pre></div>";

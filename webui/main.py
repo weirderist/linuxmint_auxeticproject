@@ -752,5 +752,10 @@ def sys_status():
 
 
 @app.get("/", response_class=HTMLResponse)
+def home():
+    """Home (K 2026-11-28: localhost opens here): boxes for the simulator, each shell campaign and the older campaigns. /campaigns serves the same page."""
+    return (HERE / "home.html").read_text(encoding="utf8")
+
+@app.get("/sim", response_class=HTMLResponse)
 def index():
-    return (HERE / "index.html").read_text()      # re-read each time: editing index.html needs no restart
+    return (HERE / "index.html").read_text(encoding="utf8")      # the simulator and 3D viewer; re-read each time: editing index.html needs no restart

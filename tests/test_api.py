@@ -69,6 +69,6 @@ jr_ = json.loads((main.RESULTS / "r1" / "job_request.json").read_text()); check(
 ds = c.get("/api/datasets").json(); print(json.dumps([{k: x[k] for k in ("id", "kind", "role", "provenance", "rows", "warnings")} for x in ds], indent=1)[:1200])
 check("datasets", len(ds) == 2 and all(x["rows"] for x in ds))
 h = c.get("/api/campaign-help").json(); check("help rows", len(h["rows"]) == 18 and h["rows"][0][0] == "`exit_code`" and h["caveats"], (len(h["rows"]), h["caveats"][:40]))
-check("pages", c.get("/campaigns").status_code == 200 and "Campaigns" in c.get("/campaigns").text and c.get("/campaigns.js").status_code == 200 and c.get("/").status_code == 200 and "/campaigns" in c.get("/").text)
+check("pages: / and /campaigns serve the home page, which links the simulator (/sim) and the older campaigns; /sim serves the simulator", c.get("/campaigns").status_code == 200 and c.get("/").text == c.get("/campaigns").text and 'href="/sim"' in c.get("/").text and 'href="/legacy/campaigns"' in c.get("/").text and c.get("/campaigns.js").status_code == 200 and "RUNID" in c.get("/sim").text)
 check("real campaigns folder untouched", before == sorted(os.listdir(os.path.join(P, "campaigns"))))
 print("ALL OK" if ok else "FAILURES")

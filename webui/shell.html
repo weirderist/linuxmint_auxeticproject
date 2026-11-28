@@ -1,22 +1,17 @@
 <!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Pure shell runs</title>
-<link rel="stylesheet" href="/theme.css">
+<link rel="stylesheet" href="/theme.css">
 </head><body>
-<header class="topbar"><h1>Pure shell runs <span class="mut">thin-shell fold only, no yarn mesh</span></h1><a href="/campaigns">Home</a><a href="/">Simulator and 3D viewer</a></header>
+<header class="topbar"><h1>Shell runs</h1><a href="/">Home</a><a href="/sim">Simulator</a></header>
 <main>
 <div id="tabs" class="tabs"></div>
-<div id="empty" class="mut small" hidden>No shell campaigns yet. Create one on the server with <code>campaign.py shell-plan &lt;name&gt; --policy campaigns/shell_policy.json</code>.</div>
+<div id="empty" class="mut small" hidden>No shell campaigns.</div>
 <div id="cur" class="stack" hidden>
  <section class="card">
   <div class="card-h">
    <div class="titlerow"><h2 id="cname"></h2><span id="pill" class="pill idle">idle</span><span id="pdetail" class="mut small"></span></div>
-   <div class="btnrow"><button id="bStart" class="primary">Start</button><button id="bPause">Pause</button><button id="bCont">Continue</button><button id="bStop">Stop after current run</button></div>
-  </div>
-  <div class="hints">
-   <p class="hint"><b>Start</b> starts the runner in the background from the campaign's frozen code (it survives closing this page or the SSH tunnel). If a runner is alive it only sets run.</p>
-   <p class="hint"><b>Pause</b> lets the run in progress finish, then the runner waits. Nothing is killed. <b>Continue</b> takes the next queued run again.</p>
-   <p class="hint"><b>Stop after current run</b> lets the run in progress finish, then the runner exits.</p>
+   <div class="btnrow"><button id="bStart" class="primary" title="starts the runner in the background from the frozen code; if one is alive it only sets run">Start</button><button id="bPause" title="the run in progress finishes, then the runner waits">Pause</button><button id="bCont" title="take the next queued run again">Continue</button><button id="bStop" title="the run in progress finishes, then the runner exits">Stop after current run</button></div>
   </div>
   <div id="msg"></div>
   <div class="workers" id="workers" aria-label="workers"></div>
@@ -24,15 +19,14 @@
   <div class="small mut" id="code"></div>
  </section>
  <section class="card">
-  <div class="card-h"><span class="card-t">Runs</span><span class="mut small">click a header to sort, a row for the detail; tick finished runs to compare, view or delete their 3D data</span></div>
+  <div class="card-h"><span class="card-t">Runs</span></div>
   <div class="btnrow">
    <label>show <select id="fStatus"><option value="">all</option><option>done</option><option>queued</option><option>failed</option><option>timeout</option><option>rejected</option></select></label>
    <label>source <select id="fSource"><option value="">all</option><option>seed</option><option>control</option><option>variant</option><option>filler</option><option>proposer</option></select></label>
-   <button id="bCompare" disabled>Compare selected</button><button id="bView" disabled>Open 3D and strain map</button><button id="bDel" disabled>Delete heavy files of the selected runs</button>
+   <button id="bCompare" disabled>Compare selected</button><button id="bView" disabled>Open 3D</button><button id="bDel" disabled title="removes only shell.npz and shell.bin (3D data) of finished runs; settings, descriptors and log stay; typed confirmation">Delete 3D data</button>
   </div>
-  <p class="note">Delete removes only <code>shell.npz</code> and <code>shell.bin</code> (the 3D data) of finished runs. Settings, descriptors and the log stay, so the same settings are not proposed again. A typed confirmation is required.</p>
   <div class="tw"><table id="tbl"></table></div>
-  <p class="note" id="tnote"></p>
+  <p class="note" id="tnote" hidden></p>
   <div id="detail"></div>
  </section>
  <section class="charts">
@@ -42,13 +36,13 @@
    <div id="gr"></div>
   </div>
  </section>
- <section class="card" id="cmpsec" hidden><div class="card-h"><span class="card-t">Comparison of the selected runs</span><span class="mut small">settings that differ are shaded</span></div><div class="tw"><table id="cmp"></table></div></section>
- <section class="card"><div class="card-h"><span class="card-t">Rules framed from the finished runs</span><span class="mut small">offline job, numpy only, not shown below 100 runs</span></div><div class="small rules" id="rules">loading</div></section>
- <section class="card" id="ansec"><div class="card-h"><span class="card-t">Analysis</span><span class="mut small">scheduled offline job, every 100 finished runs; this panel only displays results and starts nothing</span><label>results of <select id="anpick" aria-label="run count"></select></label></div>
+ <section class="card" id="cmpsec" hidden><div class="card-h"><span class="card-t">Selected runs</span></div><div class="tw"><table id="cmp"></table></div></section>
+ <section class="card"><div class="card-h"><span class="card-t">Rules</span></div><div class="small rules" id="rules">loading</div></section>
+ <section class="card" id="ansec"><div class="card-h"><span class="card-t">Analysis</span><label>results of <select id="anpick" aria-label="run count"></select></label></div>
   <div id="anstat" class="small"></div>
-  <h3>Proposer evaluation against random picking</h3><div id="anpe" class="small"></div>
+  <h3>Proposer vs random</h3><div id="anpe" class="small"></div>
   <div class="charts" id="ancharts"></div><div class="leg" id="anleg"></div>
-  <h3>Open-ended rule search</h3><div id="ansr" class="small rules"></div>
+  <h3>Rule search</h3><div id="ansr" class="small rules"></div>
   <details class="box mt"><summary>Definitions</summary><dl class="an-defs" id="andefs"></dl></details>
  </section>
 </div>

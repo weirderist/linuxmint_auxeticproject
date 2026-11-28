@@ -100,7 +100,8 @@ export async function fetchColors(id, field, variant, kind, extra) {
   return { rgb: new Uint8Array(await r.arrayBuffer()), legend: JSON.parse(r.headers.get('X-Legend')) };
 }
 
-export function legendHTML(l) {
-  const g = l.stops.map(c => 'rgb(' + c.join(',') + ')').join(','), f = x => (+x).toPrecision(4), e = l.end_labels || ['low', 'high'];
-  return '<b>' + l.label + '</b><div class="bar" style="background:linear-gradient(to right,' + g + ')"></div><div class="tk"><span>' + f(l.vmin) + ' (' + e[0] + ')</span><span>' + f(l.ticks[1]) + (l.centre != null ? ' (' + (l.centre_label || 'as-built mean') + ')' : '') + '</span><span>' + f(l.vmax) + ' (' + e[1] + ')</span></div>' + (l.note ? '<div>' + l.note + '</div>' : '') + (l.data_min != null ? '<div style="opacity:.7">data ' + f(l.data_min) + ' to ' + f(l.data_max) + '</div>' : '');
+export function legendHTML(l) {          // compact (2026-11-28, K): name, colour bar, three ticks; the note and the data range are in legendTip (tooltip)
+  const g = l.stops.map(c => 'rgb(' + c.join(',') + ')').join(','), f = x => (+x).toPrecision(3), e = l.end_labels || ['low', 'high'];
+  return '<b>' + l.label + '</b><div class="bar" style="background:linear-gradient(to right,' + g + ')"></div><div class="tk"><span>' + f(l.vmin) + ' ' + e[0] + '</span><span>' + f(l.ticks[1]) + '</span><span>' + e[1] + ' ' + f(l.vmax) + '</span></div>';
 }
+export const legendTip = l => [l.centre != null ? 'centre = ' + (l.centre_label || 'as-built mean') : '', l.data_min != null ? 'data ' + (+l.data_min).toPrecision(4) + ' to ' + (+l.data_max).toPrecision(4) : '', l.note || ''].filter(Boolean).join(' | ');

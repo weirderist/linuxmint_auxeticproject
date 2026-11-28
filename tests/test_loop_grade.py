@@ -193,7 +193,7 @@ r = c.put("/api/presets/gradetest", json=dict(body0, loop_grade=0.03, loop_grade
 check("a saved preset keeps the grade settings", r.status_code == 200 and pr.get("loop_grade") == 0.03 and pr.get("loop_grade_target") == "boundary" and pr.get("loop_grade_min_strength") == 0.2)
 html = (P / "webui" / "index.html").read_text(encoding="utf8")
 check("the Simulate form has the three fields (a, target, minimum strength), their defaults, their save/load mapping, the UNSOURCED labels and the creep warning",
-      all(x in html for x in ('id="fGrade"', 'id="fGradeT"', 'id="fGradeS"', "loop_grade: ['#fGrade', 'n']", "loop_grade_target: ['#fGradeT', 's']", "loop_grade_min_strength: ['#fGradeS', 'n']", "$('#fGradeS').value = 0.2")) and html.count("UNSOURCED") >= 4 and "Creep (above) moves rest lengths without conserving the total" in html)
+      all(x in html for x in ('id="fGrade"', 'id="fGradeT"', 'id="fGradeS"', "loop_grade: ['#fGrade', 'n']", "loop_grade_target: ['#fGradeT', 's']", "loop_grade_min_strength: ['#fGradeS', 'n']", "$('#fGradeS').value = 0.2")) and html.count("UNSOURCED") >= 4 and "creep does not conserve the total rest length" in html)
 
 # ---------------------------------------------------------------- 9. the viewer shows the graded rest length (synthetic relaxed_l0.csv made from the field)
 def make_run(rn, src, a, target="both"):

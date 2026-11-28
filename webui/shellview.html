@@ -3,17 +3,16 @@
 <title>Shell viewer</title>
 <link rel="stylesheet" href="/theme.css">
 </head><body>
-<header class="topbar"><h1>Shell viewer <span id="rname" class="mut"></span></h1><a id="back" href="/shell">Pure shell runs</a><a href="/campaigns">Home</a></header>
+<header class="topbar"><h1>Shell viewer <span id="rname" class="mut"></span></h1><a href="/">Home</a><a id="back" href="/shell">Shell runs</a></header>
 <main>
 <div id="err" class="bold"></div>
-<p class="note">The sheet is the folded thin shell (mm). Colours are <b>membrane</b> quantities computed from the saved vertices (deformation gradient of every triangle against the flat sheet): the folds are bending and cost no stretch, so strain shows where the sheet stretches or compresses while folding. The strain colour range is a display choice (UNSOURCED).</p>
 <section class="card">
  <div class="btnrow">
-  <label>left: field <select id="fA"></select></label>
-  <label>right: field <select id="fB"></select></label>
-  <label>right: run <select id="rB"></select></label>
-  <label>strain range = &plusmn; <input id="clip" class="narrow" type="number" min="50" max="100" step="1" value="98">-th percentile of |value|</label>
-  <label class="chk"><input type="checkbox" id="sync" checked> keep the two cameras synchronised</label>
+  <label>left <select id="fA"></select></label>
+  <label>right <select id="fB"></select></label>
+  <label>right run <select id="rB"></select></label>
+  <label title="colour range = +- this percentile of |value| (display choice)">range pct <input id="clip" class="narrow" type="number" min="50" max="100" step="1" value="98"></label>
+  <label class="chk"><input type="checkbox" id="sync" checked> sync cameras</label>
  </div>
 </section>
 <div class="grid2">

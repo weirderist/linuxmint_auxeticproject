@@ -1,4 +1,4 @@
-import { createViewer, syncCameras, loadTubeBase, tubeMesh, fetchColors, legendHTML, rid } from '/viewer_core.js';
+import { createViewer, syncCameras, loadTubeBase, tubeMesh, fetchColors, legendHTML, legendTip, rid } from '/viewer_core.js';
 // Strain page for one campaign run: A = loop length (3D), B = axial strain of the relaxed fabric (3D or flat map), C = strain graph (SVG).
 // Both 3D viewers share one loaded geometry per variant (same position / normal / index arrays); only the colour attribute differs.
 const $ = s => document.querySelector(s);
@@ -6,7 +6,7 @@ const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&a
 const q = new URLSearchParams(location.search).get('run');
 if (!q || !/^[0-9A-Za-z_-]{1,64}\/[0-9]{1,6}$/.test(q)) { $('#err').textContent = 'Open this page from a run: /strain?run=<campaign>/<id>'; throw new Error('no run'); }
 const [campaign, run] = q.split('/'), id = rid(campaign, run);
-$('#rname').textContent = q; $('#lv').href = '/?run=' + q; $('#lg').href = '/run?run=' + q;
+$('#rname').textContent = q; $('#lv').href = '/sim?run=' + q; $('#lg').href = '/run?run=' + q;
 // Structure for a later stretch-test state: every data call takes `step` (0 = the relaxed fabric). Only step 0 exists; the server refuses any other value.
 const STEP = 0;
 const fail = e => { $('#err').textContent = String(e && e.message || e); };
@@ -27,7 +27,7 @@ async function showA(refit) {
     const c = await fetchColors(id, 'loop', v, 'tube');
     if (v !== aVariant) return;
     disposeMesh(meshA); meshA = tubeMesh(base, c.rgb); vA.show(meshA, refit || firstA); firstA = false;
-    $('#lA').innerHTML = legendHTML(c.legend); $('#lA').hidden = false; st.textContent = base.nv.toLocaleString() + ' vertices';
+    $('#lA').innerHTML = legendHTML(c.legend); $('#lA').title = legendTip(c.legend); $('#lA').hidden = false; st.textContent = base.nv.toLocaleString() + ' vertices';
   } catch (e) { st.textContent = ''; fail(e); }
 }
 async function showB() {
@@ -37,7 +37,7 @@ async function showB() {
     st.textContent = 'colouring…';
     const c = await fetchColors(id, 'strain', 'relaxed', 'tube', '&flip=' + (flipB ? 1 : 0) + '&clip=' + clipV());
     disposeMesh(meshB); meshB = tubeMesh(base, c.rgb); vB.show(meshB, firstB); firstB = false;
-    $('#lB').innerHTML = legendHTML(c.legend); $('#lB').hidden = false; st.textContent = base.nv.toLocaleString() + ' vertices';
+    $('#lB').innerHTML = legendHTML(c.legend); $('#lB').title = legendTip(c.legend); $('#lB').hidden = false; st.textContent = base.nv.toLocaleString() + ' vertices';
   } catch (e) { st.textContent = ''; fail(e); }
 }
 Promise.all([showA(true), showB()]);          // both viewers fit the same geometry, so their cameras start identical
@@ -70,7 +70,7 @@ async function drawMap() {
     for (let j = 0; j < nw; j += Math.max(1, Math.round(nw / 8))) s += '<text x="' + (pl + (j + .5) * cs) + '" y="' + (nc * cs + 12) + '" text-anchor="middle">' + j + '</text>';
     for (let ci = 0; ci < nc; ci += Math.max(1, Math.round(nc / 8))) s += '<text x="' + (pl - 4) + '" y="' + ((nc - 1 - ci + .7) * cs) + '" text-anchor="end">' + ci + '</text>';
     s += '<text x="' + (pl + nw * cs / 2) + '" y="' + (H - 2) + '" text-anchor="middle">wale (column, left to right)</text></svg>';
-    el.innerHTML = '<div class="small mut">Each cell is one loop: mean axial strain of its segments. Courses run upward from course 0 (the bottom row of the matrix).</div>' + s + '<div class="legend" style="position:static;display:inline-block;margin-top:.4rem">' + legendHTML(L) + '</div>';
+    el.title = 'one cell = one loop (mean axial strain of its segments); course 0 = bottom row'; el.innerHTML = s + '<div class="legend lg-static">' + legendHTML(L) + '</div>';
   } catch (e) { el.textContent = String(e.message || e); }
 }
 

@@ -5,7 +5,7 @@ const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&a
 const q = new URLSearchParams(location.search).get('run');
 if (!q || !/^[0-9A-Za-z_-]{1,64}\/[0-9]{1,6}$/.test(q)) { $('#err').textContent = 'Open this page from a run: /run?run=<campaign>/<id>'; throw new Error('no run'); }
 const [campaign, run] = q.split('/'), id = 'run~' + campaign + '~' + run;
-$('#rname').textContent = q; $('#lv').href = '/?run=' + q; $('#ls').href = '/strain?run=' + q;
+$('#rname').textContent = q; $('#lv').href = '/sim?run=' + q; $('#ls').href = '/strain?run=' + q;
 const get = async p => { const r = await fetch('/api/results/' + id + p); if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.detail || 'HTTP ' + r.status); } return r.json(); };
 const ticks = (lo, hi, n) => { if (!(hi > lo)) return [lo]; const raw = (hi - lo) / n, p = Math.pow(10, Math.floor(Math.log10(raw))), m = raw / p, st = (m < 1.5 ? 1 : m < 3.5 ? 2 : m < 7.5 ? 5 : 10) * p, o = []; for (let v = Math.ceil(lo / st) * st; v <= hi + st * 1e-9; v += st) o.push(+v.toPrecision(10)); return o; };
 const num = v => +(+v).toPrecision(4);
@@ -25,7 +25,7 @@ function histogram() {
   const v = g.flat().filter(x => x != null), lo = Math.min(...v), hi = Math.max(...v), nb = 40, w = (hi - lo) / nb || 1, c = new Array(nb).fill(0);
   for (const x of v) c[Math.min(nb - 1, Math.floor((x - lo) / w))]++;
   const f = frame(760, 280, 48, 10, 10, 38, lo, lo + w * nb, 0, Math.max(...c), 'loop length / as-built mean loop length', 'loops');
-  let s = f.s; c.forEach((n, i) => { s += '<rect x="' + f.X(lo + i * w) + '" y="' + f.Y(n) + '" width="' + Math.max(1, f.X(lo + (i + 1) * w) - f.X(lo + i * w) - 1) + '" height="' + (f.Y(0) - f.Y(n)) + '" fill="var(--s1)"><title>' + num(lo + i * w) + ' to ' + num(lo + (i + 1) * w) + ': ' + n + ' loops</title></rect>'; });
+  let s = f.s; c.forEach((n, i) => { s += '<rect x="' + f.X(lo + i * w) + '" y="' + f.Y(n) + '" width="' + Math.max(1, f.X(lo + (i + 1) * w) - f.X(lo + i * w) - 1) + '" height="' + (f.Y(0) - f.Y(n)) + '" fill="var(--chart-line)"><title>' + num(lo + i * w) + ' to ' + num(lo + (i + 1) * w) + ': ' + n + ' loops</title></rect>'; });
   s += '<line x1="' + f.X(1) + '" x2="' + f.X(1) + '" y1="10" y2="242" stroke="currentColor" stroke-dasharray="3 3" opacity=".6"/>';
   el.innerHTML = s + '</svg><div class="small mut">' + v.length + ' loops; min ' + num(lo) + ', max ' + num(hi) + ', mean ' + num(v.reduce((a, b) => a + b, 0) / v.length) + '. Dashed line: 1 = the as-built mean loop length (' + num(loops.mean_loop_asbuilt) + ' ' + esc(loops.units === 'mm' ? 'mm' : 'length units') + ').</div>';
 }
@@ -40,8 +40,8 @@ function profile() {
   const all = [...lo, ...hi].filter(Number.isFinite), y0 = Math.min(...all), y1 = Math.max(...all), pad = (y1 - y0) * .08 || .01;
   const f = frame(760, 280, 48, 10, 10, 38, 0, Math.max(n - 1, 1), y0 - pad, y1 + pad, pWale ? 'course (0 = bottom)' : 'wale (column, left to right)', 'loop length / as-built mean', v => Math.round(v));
   const pts = a => a.map((v, i) => v == null || !Number.isFinite(v) ? null : f.X(i) + ',' + f.Y(v)).filter(Boolean);
-  let s = f.s + '<polygon points="' + pts(hi).concat(pts(lo).reverse()).join(' ') + '" fill="var(--s1)" opacity=".15"/><polyline fill="none" stroke="var(--s1)" stroke-width="1" opacity=".5" stroke-dasharray="4 3" points="' + pts(mean).join(' ') + '"/><polyline fill="none" stroke="var(--s1)" stroke-width="2" points="' + pts(ys).join(' ') + '"/>';
-  ys.forEach((v, i) => { if (v != null) s += '<circle cx="' + f.X(i) + '" cy="' + f.Y(v) + '" r="3.5" fill="var(--s1)"><title>' + (pWale ? 'course ' : 'wale ') + i + ': ' + num(v) + '</title></circle>'; });
+  let s = f.s + '<polygon points="' + pts(hi).concat(pts(lo).reverse()).join(' ') + '" fill="var(--chart-line)" opacity=".15"/><polyline fill="none" stroke="var(--chart-line)" stroke-width="1" opacity=".5" stroke-dasharray="4 3" points="' + pts(mean).join(' ') + '"/><polyline fill="none" stroke="var(--chart-line)" stroke-width="2" points="' + pts(ys).join(' ') + '"/>';
+  ys.forEach((v, i) => { if (v != null) s += '<circle cx="' + f.X(i) + '" cy="' + f.Y(v) + '" r="3.5" fill="var(--chart-line)"><title>' + (pWale ? 'course ' : 'wale ') + i + ': ' + num(v) + '</title></circle>'; });
   el.innerHTML = s + '</svg><div class="small mut">Line: ' + (pWale ? 'wale ' : 'course ') + k + '. Band: range over all ' + (pWale ? 'wales' : 'courses') + '; dashed: their mean. Loops at the fabric edge have fewer neighbours and may differ.</div>';
 }
 function foldGraph(f) {
@@ -56,7 +56,7 @@ function foldGraph(f) {
     if (!ok.length) continue;
     const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ok.map(p => p[1]), 0), y1 = Math.max(...ok.map(p => p[1]), 0), pad = (y1 - y0) * .08 || .01;
     const fr = frame(760, 240, 52, 10, 10, 38, x0, x1, y0 - pad, y1 + pad, (which === 'course' ? 'x along the courses' : 'y along the wales') + ' (' + (f.units === 'mm' ? 'mm' : 'length units') + ')', 'mean height after plane removal');
-    h += '<div class="small">' + (which === 'course' ? 'Along the courses (x)' : 'Along the wales (y)') + '</div>' + fr.s + '<line x1="52" x2="750" y1="' + fr.Y(0) + '" y2="' + fr.Y(0) + '" stroke="currentColor" stroke-dasharray="3 3" opacity=".6"/><polyline fill="none" stroke="var(--s1)" stroke-width="2" points="' + ok.map(p => fr.X(p[0]) + ',' + fr.Y(p[1])).join(' ') + '"/>' + ok.map(p => '<circle cx="' + fr.X(p[0]) + '" cy="' + fr.Y(p[1]) + '" r="3" fill="var(--s1)"><title>' + num(p[0]) + ': ' + num(p[1]) + '</title></circle>').join('') + '</svg>';
+    h += '<div class="small">' + (which === 'course' ? 'Along the courses (x)' : 'Along the wales (y)') + '</div>' + fr.s + '<line x1="52" x2="750" y1="' + fr.Y(0) + '" y2="' + fr.Y(0) + '" stroke="currentColor" stroke-dasharray="3 3" opacity=".6"/><polyline fill="none" stroke="var(--chart-line)" stroke-width="2" points="' + ok.map(p => fr.X(p[0]) + ',' + fr.Y(p[1])).join(' ') + '"/>' + ok.map(p => '<circle cx="' + fr.X(p[0]) + '" cy="' + fr.Y(p[1]) + '" r="3" fill="var(--chart-line)"><title>' + num(p[0]) + ': ' + num(p[1]) + '</title></circle>').join('') + '</svg>';
   }
   el.innerHTML = h || '<div class="small mut">No profile available.</div>';
 }

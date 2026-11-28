@@ -62,7 +62,7 @@ check('after the delete of S000001 its mesh and colours say the 3D data was dele
 check('status carries the frozen code (commit, dirty flag, shell_sim hash)', 'git_commit' in cl.get('/api/shell/demo').json()['code'] and cl.get('/api/shell/demo').json()['code']['shell_sim_sha256'])
 check('runner_busy (used by the Simulate endpoint) is empty with no live runner', api.runner_busy() == '')
 html = cl.get('/campaigns').text; js = cl.get('/campaigns.js').text; sh = cl.get('/shell').text; shjs = cl.get('/shell.js').text; sv = cl.get('/shellview').text; svjs = cl.get('/shellview.js').text
-check('the Pure shell section is gone from the Campaigns page and replaced by a link to /shell', 'shellsec' not in html and 'api/shell' not in js and 'href="/shell"' in html)
+check('the home page has a box per shell campaign linking /shell?c=<name>; the older campaigns page has no shell section', 'shellsec' not in html and 'api/shell' not in js and 'href="/shell?c=' in html)
 check('/shell is its own page with the controls, table, comparison and graph', all(k in sh for k in ('bStart', 'bPause', 'bCont', 'bStop', 'bDel', 'bCompare', 'gx')) and 'api/shell' in shjs and 'shellview' in shjs)
 check('/shellview is the viewer page (importmap, viewer_core, two views)', 'viewer_core' in svjs and 'vA' in sv and 'vB' in sv and 'importmap' in sv and 'colors?field=' in svjs)
 try:

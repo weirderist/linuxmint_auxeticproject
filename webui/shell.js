@@ -17,9 +17,9 @@ let cur = new URLSearchParams(location.search).get("c"), data = null, busy = fal
 const COLS = ["status", "worker", "source", "label", "tiles", "cpi", "wpi", "ratio", "stitch_density", "tf_rel", "tf_c_rel", "tf_w_rel", "matrix", "knit_fraction", "plan_x", "plan_y", "thickness", "shrink_x", "shrink_y", "wave_k", "wave_amp_median_mm", "mid_over_end", "steps_at_cap", "score", "wall_s", "git_commit"];
 const NUM = ["tiles", "cpi", "wpi", "ratio", "stitch_density", "tf_rel", "tf_c_rel", "tf_w_rel", "knit_fraction", "plan_x", "plan_y", "thickness", "shrink_x", "shrink_y", "fold_kx_per_mm", "fold_ky_per_mm", "wave_k", "wave_amp_median_mm", "mid_over_end", "steps_at_cap", "iterations_total", "wall_s", "solver_seconds", "tier", "score"];
 const TEXTCOL = ["run", "label", "source", "status", "matrix", "git_commit"];
-// display-only tightness columns (computed by the server from the recorded CPI and WPI; definitions in the note under the table)
+// display-only tightness columns (computed by the server from the recorded CPI and WPI; definitions in the tooltip)
 const HEAD = { stitch_density: "S", tf_rel: "TF_rel", tf_c_rel: "TF_c_rel", tf_w_rel: "TF_w_rel" }, hname = h => HEAD[h] || h;
-function tnote() { const t = data.tightness; $("#tnote").innerHTML = t ? "<b>S</b>: " + esc(t.label_stitch_density) + ". <b>TF_rel</b>: " + esc(t.label_tf_rel) + (t.constant_note ? ". S and TF_rel are " + esc(t.constant_note) : "") + ". <b>TF_c_rel</b>: " + esc(t.label_tf_c_rel) + ". <b>TF_w_rel</b>: " + esc(t.label_tf_w_rel) + (t.constant_note ? ". TF_c_rel and TF_w_rel are NOT constant: they change with CPI and WPI separately (in opposite directions at constant S)" : "") + ". " + esc(t.note) : ""; }
+function tnote() { const t = data.tightness; $("#tbl").title = t ? [t.label_stitch_density, t.label_tf_rel, t.label_tf_c_rel, t.label_tf_w_rel, t.constant_note, t.note].filter(Boolean).join(" | ") : ""; }          // the tightness definitions are in the tooltip of the table
 const SETT = ["tiles", "cpi", "wpi", "kappa_scale", "h_scale", "sub", "steps", "iter", "nu", "springs", "seed", "ne", "matrix"];
 function msg(t, err) { const m = $("#msg"); m.textContent = t ? (err ? "Error: " : "") + t : ""; m.className = err ? "err" : ""; }
 const kind = r => (r.source || "").split(":")[0], seedOf = r => (r.source || "").split(":")[1] || "";
@@ -218,14 +218,14 @@ async function workers() {
   const sv = "<div class=\"wbox server\"><h3>Server</h3><div class=\"small\">" + (s.runner_alive ? "runner " + esc(s.state || "alive") + (s.current ? ", running " + esc(s.current) : "") : "no runner") + "<br>control " + esc(s.control) + ", finished here " + s.done + "</div></div>";
   const sl = Object.entries(k.slots || {}).map(([n, v]) => esc(n) + (v.gpu ? " (GPU)" : " (CPU)") + ": " + esc(v.status) + (v.status === "running" ? ", " + v.n_runs + " runs, pushed " + esc(v.t_push_iso || "") : "")).join("<br>");
   const kg = "<div class=\"wbox kaggle\"><h3>Kaggle</h3><div class=\"small\">" + (k.enabled ? "on" : "off") + ", controller " + (k.controller_alive ? "running" : "not running") + (k.last_tick ? ", last check " + esc(k.last_tick) : "") +
-    "<br>" + (sl || "no session yet") + "<br>runs on Kaggle now " + k.leased + ", finished there " + k.done + "</div><div class=\"btnrow\"><button id=\"bKag\">" + (k.enabled ? "Turn Kaggle off" : "Turn Kaggle on") + "</button></div>" +
-    "<div class=\"small mut\">Off: no new sessions; sessions already on Kaggle finish and are imported.</div></div>";
+    "<br>" + (sl || "no session yet") + "<br>runs on Kaggle now " + k.leased + ", finished there " + k.done + "</div><div class=\"btnrow\"><button id=\"bKag\" title=\"off: no new sessions; sessions on Kaggle finish and are imported\">" + (k.enabled ? "Turn Kaggle off" : "Turn Kaggle on") + "</button></div>" +
+    "</div>";
   const seen = ws.agent_seen_s_ago == null ? "agent never seen" : ws.agent_seen_s_ago < 180 ? "agent online" : "agent last seen " + dur(ws.agent_seen_s_ago) + " ago";
   const wk = "<div class=\"wbox workstation\"><h3>Workstation</h3><div class=\"small\">" + (ws.enabled ? "allowed: " + ws.allowance_left + " of " + ws.n + " run(s) left" : "not allowed") + ", " + esc(seen) +
     (ws.agent_current ? "<br>running " + esc(ws.agent_current) : "") + "<br>runs there now " + ws.leased + ", finished there " + ws.done + "</div>" +
-    "<div class=\"btnrow\"><label>runs <input id=\"wsN\" type=\"number\" min=\"1\" max=\"2000\" value=\"" + (ws.n || 5) + "\" class=\"num5\"></label><button id=\"bWsOk\">Allow</button><button id=\"bWsNo\"" + (ws.enabled ? "" : " disabled") + ">Cancel</button></div>" +
+    "<div class=\"btnrow\"><label>runs <input id=\"wsN\" type=\"number\" min=\"1\" max=\"2000\" value=\"" + (ws.n || 5) + "\" class=\"num5\"></label><button id=\"bWsOk\">Allow</button><button id=\"bWsNo\" title=\"stops its run; the run goes back to the queue\"" + (ws.enabled ? "" : " disabled") + ">Cancel</button></div>" +
     "<div class=\"btnrow\"><label>specific runs (optional) <input id=\"wsIds\" placeholder=\"S000123 S000124\" value=\"" + esc((ws.ids || []).join(" ")) + "\"></label></div>" +
-    "<div class=\"small mut\">" + esc(ws.note) + ". Cancel stops its run; the run goes back to the server and Kaggle.</div></div>";
+    "</div>";
   box.innerHTML = sv + kg + wk;
   const wsPost = async body => { busy = true; msg("Working"); try { const j = await api("/api/shell/" + encodeURIComponent(cur) + "/workstation", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }); msg(j.message, false); } catch (e) { msg(e.message, true); } busy = false; workers(); };
   $("#bWsOk").onclick = () => { const ids = $("#wsIds").value.split(/[\s,]+/).filter(Boolean), n = parseInt($("#wsN").value, 10) || 0; wsPost({ enabled: true, n: ids.length && !n ? ids.length : n, ids: ids }); };

@@ -15,15 +15,15 @@ async function colours(r, field, clip) {
   const resp = await fetch(url(r) + '/colors?field=' + field + '&clip=' + clip); if (!resp.ok) { const e = await resp.json().catch(() => ({})); throw new Error(e.detail || 'HTTP ' + resp.status); }
   return { rgb: new Uint8Array(await resp.arrayBuffer()), legend: JSON.parse(resp.headers.get('X-Legend')) };
 }
-// Legend: a plain-language first line for the strain fields, then the technical lines (label, colour bar with compression / tension ends, range note) and the data minimum and maximum.
-// The only inline style is the colour ramp itself, which the server sends with the data.
+// Legend (compact, 2026-11-28 K: it hid the shell): short name, colour bar, three ticks; the strain fields mark the ends squeezed / stretched.
+// The range note and the data minimum and maximum are in the tooltip. The only inline style is the colour ramp itself, which the server sends with the data.
+const SHORT = { area_strain: 'area strain', stretch_max: 'max stretch - 1', stretch_min: 'min stretch - 1', z: 'height z (mm)', tilt: 'tilt (deg)' };
 function legendHTML(l) {
-  const f = x => (+x).toPrecision(4), e = l.end_labels || ['low', 'high'], ramp = l.stops.map(c => 'rgb(' + c.join(',') + ')').join(',');
-  return (STRAIN.includes(l.field) ? '<div class="lg-plain">blue = squeezed (compression), red = stretched (tension)</div>' : '') +
-    '<div class="lg-title">' + esc(l.label) + '</div><div class="lg-bar" style="background:linear-gradient(to right,' + ramp + ')"></div>' +
-    '<div class="lg-ticks"><span>' + f(l.vmin) + ' (' + esc(e[0]) + ')</span><span>' + f(l.ticks[1]) + '</span><span>' + f(l.vmax) + ' (' + esc(e[1]) + ')</span></div>' +
-    (l.note ? '<div class="lg-note">' + esc(l.note) + '</div>' : '') + '<div class="lg-data">data minimum ' + f(l.data_min) + ', maximum ' + f(l.data_max) + '</div>';
+  const f = x => (+x).toPrecision(3), e = STRAIN.includes(l.field) ? ['squeezed', 'stretched'] : (l.end_labels || ['low', 'high']), ramp = l.stops.map(c => 'rgb(' + c.join(',') + ')').join(',');
+  return '<div class="lg-title">' + esc(SHORT[l.field] || l.label) + '</div><div class="lg-bar" style="background:linear-gradient(to right,' + ramp + ')"></div>' +
+    '<div class="lg-ticks"><span>' + f(l.vmin) + ' ' + esc(e[0]) + '</span><span>' + f(l.ticks[1]) + '</span><span>' + esc(e[1]) + ' ' + f(l.vmax) + '</span></div>';
 }
+const legendTip = l => l.label + ' | data ' + (+l.data_min).toPrecision(4) + ' to ' + (+l.data_max).toPrecision(4) + (l.note ? ' | ' + l.note : '');
 const views = { A: createViewer($('#vA')), B: createViewer($('#vB')) }; syncCameras([views.A, views.B], () => $('#sync').checked);
 for (const v of [views.A, views.B]) { v.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2)); v.resize(); }          // shell meshes are small: render at up to 2x the CSS pixels so the 3D view is crisp on high-density screens
 const bases = {}; let runBsel = runB0 || runA;
@@ -32,17 +32,16 @@ async function draw(which, r, field) {
   const st = $('#s' + which), lg = $('#l' + which), v = views[which]; st.textContent = 'loading';
   try {
     const b = await base(r, st), c = await colours(r, field, +$('#clip').value || 98), first = !v.__shown; v.show(tubeMesh(b, c.rgb), first); v.__shown = true;
-    lg.innerHTML = legendHTML(c.legend); lg.hidden = false; st.textContent = '';
-    $('#t' + which).textContent = (which === 'A' ? 'Left: ' : 'Right: ') + r + ' - ' + c.legend.label;
+    lg.innerHTML = legendHTML(c.legend); lg.title = legendTip(c.legend); lg.hidden = false; st.textContent = '';
+    $('#t' + which).textContent = r + ' · ' + (SHORT[field] || c.legend.label);
   } catch (e) { st.textContent = e.message; lg.hidden = true; }
 }
 async function info() {
   try {
     const rows = [await (await fetch(url(runA))).json()]; if (runBsel !== runA) rows.push(await (await fetch(url(runBsel))).json());
     $('#info').innerHTML = rows.map(d => { const s = d.settings || {}, m = d.metrics || {}, sd = d.seed || {};
-      return '<p><b>' + esc(d.run) + '</b> ' + esc(d.label || '') + ' <span class="mut">(' + esc(d.source) + ')</span>: ' + (s.matrix ? s.matrix.length + ' x ' + s.matrix[0].length + ' per tile, ' : '') + 'tiles ' + esc(s.tiles) + ', CPI ' + esc(s.cpi) + ', WPI ' + esc(s.wpi) + ' (R ' + (s.cpi / s.wpi).toFixed(3) + '); plan ' + (+m.plan_x).toFixed(1) + ' x ' + (+m.plan_y).toFixed(1) + ' mm, thickness ' + (+m.thickness).toFixed(1) + ' mm, waves ' + esc(m.wave_k) +
-        (d.tightness ? '<br>Nominal tightness (display only): S = CPI x WPI = ' + esc(d.tightness.stitch_density == null ? 'n/a' : (+d.tightness.stitch_density).toFixed(1)) + ' stitches per square inch; TF_rel = sqrt(tex x S) = ' + esc(d.tightness.tf_rel == null ? 'n/a' : (+d.tightness.tf_rel).toFixed(2)) + ' tex^0.5 per inch (Ne ' + esc(d.tightness.ne) + ')' + (d.tightness.constant_note ? ' (S and TF_rel: ' + esc(d.tightness.constant_note) + ')' : '') + '; TF_c_rel = sqrt(tex) x CPI = ' + esc(d.tightness.tf_c_rel == null ? 'n/a' : (+d.tightness.tf_c_rel).toFixed(2)) + ', TF_w_rel = sqrt(tex) x WPI = ' + esc(d.tightness.tf_w_rel == null ? 'n/a' : (+d.tightness.tf_w_rel).toFixed(2)) + ' tex^0.5 per inch. <span class="mut">All three are proportional to the tightness factor TF = sqrt(tex)/l (l = loop length): TF_rel from the stitch density, TF_c_rel from the courses (cpi = k_c / l), TF_w_rel from the wales (wpi = k_w / l); the scale constants are UNSOURCED, so TF itself is not shown.</span>' : '') +
-        (sd.real_fold ? '<br><span class="mut">Real fold (K\'s report, ' + esc(sd.sample || '') + '): ' + esc(sd.real_fold) + '</span>' : '') + '</p>'; }).join('');
+      return '<p><b>' + esc(d.run) + '</b> ' + esc(d.label || '') + ' <span class="mut">' + esc(d.source) + '</span> · ' + (s.matrix ? s.matrix.length + 'x' + s.matrix[0].length + ' x' + esc(s.tiles) : '') + ' · CPI ' + esc(s.cpi) + ' WPI ' + esc(s.wpi) + ' R ' + (s.cpi / s.wpi).toFixed(3) + ' · plan ' + (+m.plan_x).toFixed(1) + ' x ' + (+m.plan_y).toFixed(1) + ' mm · thick ' + (+m.thickness).toFixed(1) + ' mm · waves ' + esc(m.wave_k) +
+        (d.tightness && d.tightness.tf_rel != null ? ' · TF_rel ' + (+d.tightness.tf_rel).toFixed(2) : '') + (sd.real_fold ? '<br><span class="mut">real fold (' + esc(sd.sample || '') + '): ' + esc(sd.real_fold) + '</span>' : '') + '</p>'; }).join('');
   } catch (e) { $('#info').textContent = ''; }
 }
 async function runList() {
