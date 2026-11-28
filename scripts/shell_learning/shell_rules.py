@@ -7,7 +7,8 @@ For every target (shell_features.TARGETS: scale-free fold descriptors) it regres
   2. a shallow regression tree (depth <= 3, at least 10 runs per leaf) as a cross-check, with its cross-validated R^2 and the rules as text.
 Symbolic regression is NOT done (it needs an extra package: K decides). Nothing is reported from fewer than MIN_RUNS = 100 finished runs (a rule from fewer is not shown: status 'waiting').
 Every rule carries the label: learned from the shell, not confirmed on real fabric. Controls and rejected runs are excluded. The thresholds in the features are UNSOURCED (shell_features.py).
-Usage: python3 shell_rules.py <campaign> [--once] [--every N] [--poll-s 300]   (the loop lowers its priority with os.nice(19))"""
+Usage: python3 shell_rules.py <campaign> [--once] [--every N] [--poll-s 300] [--originals-only]
+Writes also analysis/rules_readable.md and analysis/rules_model.json (shell_rules_model.py).   (the loop lowers its priority with os.nice(19))"""
 import json, math, os, sys, time
 import numpy as np
 HERE = os.path.dirname(os.path.abspath(__file__)); sys.path.insert(0, HERE)
@@ -85,7 +86,7 @@ def analyse_target(rows, target, boots=40, seed=0):
     lams = np.geomspace(max(np.abs(Z.T @ (y - y.mean())).max() / n, 1e-9), 1e-3 * max(np.abs(Z.T @ (y - y.mean())).max() / n, 1e-9), 12); cvm, cvse = cv_lasso(X, y, lams)
     i0 = int(np.argmin(cvm)); i1 = next(i for i in range(len(lams)) if cvm[i] <= cvm[i0] + cvse[i0]); lam = lams[i1]; b = lasso(Z, y, lam); rng = np.random.default_rng(seed); sel = np.zeros(len(names))
     for _ in range(boots): ix = rng.integers(0, n, n); Zb, _, _ = standardise(X[ix]); sel += lasso(Zb, y[ix], lam) != 0
-    coef = [dict(feature=names[j], coefficient_std=float(b[j]), per_unit=float(b[j] / s[j]), stability=float(sel[j] / boots)) for j in np.argsort(-np.abs(b)) if b[j] != 0]
+    coef = [dict(feature=names[j], coefficient_std=float(b[j]), per_unit=float(b[j] / s[j]), mean=float(m[j]), std=float(s[j]), stability=float(sel[j] / boots)) for j in np.argsort(-np.abs(b)) if b[j] != 0]          # mean/std: so the rule can be applied to a new pattern (shell_rules_model.py)
     tmse = []
     for te in folds(n, 5, 1): tr = np.setdiff1d(np.arange(n), te); t = fit_tree(X[tr], y[tr]); tmse.append(np.mean([(predict_tree(t, X[i]) - y[i]) ** 2 for i in te]))
     tree = fit_tree(X, y)
@@ -94,19 +95,22 @@ def analyse_target(rows, target, boots=40, seed=0):
     return out
 
 
-def run(camp):
-    rows = [r for r in sf.dataset(camp) if not r['control']]; res = dict(campaign=camp.name, generated=time.strftime('%Y-%m-%dT%H:%M:%S'), n_finished=len(rows), min_runs=MIN_RUNS, label=LABEL,
+def run(camp, originals_only=False):
+    """originals_only (2026-11-28, K): leave out the runs the GP proposer chose (source 'proposer:...'); the GP proposer itself still learns from every run."""
+    rows = [r for r in sf.dataset(camp) if not r['control'] and not (originals_only and str(r.get('source', '')).startswith('proposer'))]
+    res = dict(campaign=camp.name, generated=time.strftime('%Y-%m-%dT%H:%M:%S'), n_finished=len(rows), originals_only=bool(originals_only), min_runs=MIN_RUNS, label=LABEL,
                                                                       method='lasso (CV, 1-SE rule, bootstrap stability) and a depth-3 tree; no symbolic regression (needs an extra package, K decides)', features=list(sf.FEATURES),
                                                                       targets=[analyse_target(rows, t) for t in sf.TARGETS])
     d = os.path.join(camp.d, 'analysis'); os.makedirs(d, exist_ok=True)
     for path in (os.path.join(d, 'rules_%06d.json' % len(rows)), os.path.join(d, 'rules.json')):
         tmp = path + '.tmp'; json.dump(res, open(tmp, 'w'), indent=1); os.replace(tmp, path)
+    import shell_rules_model as srm; srm.write(res, d)          # the same rules as rules_readable.md (people) and rules_model.json (the yarn model)
     return res
 
 
 def main():
     import shell_campaign as sc
-    a = sys.argv[1:]; name = a[0]; once = '--once' in a; every = int(a[a.index('--every') + 1]) if '--every' in a else 25; poll = float(a[a.index('--poll-s') + 1]) if '--poll-s' in a else 300.0
+    a = sys.argv[1:]; name = a[0]; once = '--once' in a; orig = '--originals-only' in a; every = int(a[a.index('--every') + 1]) if '--every' in a else 25; poll = float(a[a.index('--poll-s') + 1]) if '--poll-s' in a else 300.0
     camp = sc.Camp(name)
     if not camp.exists(): sys.exit('no such shell campaign: %s' % name)
     try: os.nice(19)
@@ -115,7 +119,7 @@ def main():
     while True:
         n = sum(1 for x in camp.index_last().values() if x.get('status') == 'done')
         if n - last >= every or once:
-            res = run(camp); last = n; print('%s rules: %d finished runs, %s' % (time.strftime('%F %T'), n, ', '.join('%s %s' % (t['target'], t['status']) for t in res['targets'])), flush=True)
+            res = run(camp, orig); last = n; print('%s rules: %d finished runs, %s' % (time.strftime('%F %T'), n, ', '.join('%s %s' % (t['target'], t['status']) for t in res['targets'])), flush=True)
         if once: break
         time.sleep(poll)
 

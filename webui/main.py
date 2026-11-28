@@ -1,4 +1,4 @@
-import base64, json, logging, math, os, re, shutil, signal, subprocess, sys, threading, time
+import base64, gzip, hashlib, json, logging, math, os, re, shutil, signal, subprocess, sys, threading, time
 from datetime import datetime
 from pathlib import Path
 from fastapi import FastAPI, HTTPException, Request
@@ -58,6 +58,8 @@ def _any_running():
 
 sys.path.insert(0, str(HERE)); import campaign_api          # Campaigns page and its API (webui/campaign_api.py)
 campaign_api.setup(app, _any_running)
+import shellsim                                              # single shell runs from the Simulator page (webui/shellsim.py, 2026-11-28)
+shellsim.setup(app, campaign_api, _any_running)
 import runview                                              # read-only run viewer: path-safe run lookup, loop / strain colours, tube on demand (webui/runview.py)
 runview.setup(app, RESULTS)
 
@@ -532,7 +534,7 @@ def _obj_to_bin(obj, binp):
     os.replace(tmp, binp)
 
 @app.get("/api/results/{rid}/mesh")
-def mesh(rid: str, v: str = "baseline"):
+def mesh(rid: str, request: Request, v: str = "baseline"):
     if v not in ("baseline", "relaxed"):
         raise HTTPException(404)
     d = runview.view_dir(rid); rel = (v == "relaxed")
@@ -547,7 +549,27 @@ def mesh(rid: str, v: str = "baseline"):
         objs = sorted(h for h in d.glob("*_tube.obj") if h.name.startswith("relaxed_") == rel)
         if not objs: raise HTTPException(404)
         _obj_to_bin(objs[0], objs[0].with_suffix(".bin")); cand = [objs[0].with_suffix(".bin")]
-    return FileResponse(cand[0], media_type="application/octet-stream", headers={"Content-Encoding": "identity"})   # float data barely compresses: skip gzip
+    return _mesh_response(cand[0], request)
+
+GZ_CACHE = HERE / "cache" / "mesh_gz"          # gzipped copies of the meshes (2026-11-28): never inside results/, keyed by the source path, size and modification time; safe to delete at any time
+
+def _gz_copy(src):
+    """Path of a gzip (level 6) copy of src, made once per version of src. Measured 2026-11-28: a KMSH tube mesh shrinks to about 33 % (the triangle indices compress well, the float
+    positions less), 0.11 s per 11 MB on the workstation; the 130 MB meshes took about 2 min to download over the server's 1 MB/s Wi-Fi."""
+    st = src.stat(); key = hashlib.sha1(("%s|%d|%d" % (src.resolve(), st.st_size, st.st_mtime_ns)).encode()).hexdigest()[:24]
+    out = GZ_CACHE / (key + ".gz")
+    if out.is_file(): return out
+    GZ_CACHE.mkdir(parents=True, exist_ok=True); tmp = out.with_suffix(".tmp%d" % os.getpid())
+    with open(src, "rb") as fi, gzip.open(tmp, "wb", compresslevel=6) as fo: shutil.copyfileobj(fi, fo, 1 << 20)
+    os.replace(tmp, out); return out
+
+def _mesh_response(src, request):
+    """The mesh gzipped when the browser accepts it (it unpacks it itself); X-Raw-Length = the size before gzip, for the progress readout and the single-buffer read."""
+    raw = src.stat().st_size; hd = {"X-Raw-Length": str(raw), "Access-Control-Expose-Headers": "X-Raw-Length"}
+    if raw > 1 << 20 and "gzip" in (request.headers.get("accept-encoding") or ""):
+        try: return FileResponse(_gz_copy(src), media_type="application/octet-stream", headers=dict(hd, **{"Content-Encoding": "gzip"}))
+        except OSError: pass                      # no room for the cache: send it as it is
+    return FileResponse(src, media_type="application/octet-stream", headers=dict(hd, **{"Content-Encoding": "identity"}))
 
 def _kill_group(pid, hard=False, start_ticks=None):
     """Stop a job's process group. Linux: os.killpg exactly as before. Windows (workstation, 2026-11-27): the process tree (taskkill /T /F), and for a job this service did not start only if

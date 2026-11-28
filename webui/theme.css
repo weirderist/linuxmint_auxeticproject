@@ -182,7 +182,8 @@ details.box > summary { cursor: pointer; font-weight: 600; }
 .lg { position: absolute; left: 8px; bottom: 8px; z-index: 2; background: color-mix(in srgb, var(--card) 88%, transparent); border: 1px solid var(--line); border-radius: var(--radius-s); padding: 5px 8px; font-size: var(--fs-xs); line-height: 1.3; width: 230px; max-width: calc(100% - 16px); }
 .lg-title { color: var(--fg); }
 .lg-bar { height: 8px; border: 1px solid var(--line-strong); margin: 3px 0 2px; }
-.lg-ticks { display: flex; justify-content: space-between; gap: 6px; font-variant-numeric: tabular-nums; color: var(--mut); }
+.lg-ticks { display: flex; justify-content: space-between; gap: 6px; font-variant-numeric: tabular-nums; color: var(--mut); white-space: nowrap; }
+.lg-ends { color: var(--fg); }
 
 @media (max-width: 700px) {
   main { padding: 12px; gap: 12px; }
@@ -215,7 +216,7 @@ a.card.tile { display: block; color: var(--fg); } a.card.tile:hover { text-decor
 .seg button.on { background: var(--sel); border-color: var(--fg); font-weight: 600; }
 .legend { position: absolute; left: 8px; bottom: 8px; z-index: 2; background: color-mix(in srgb, var(--card) 88%, transparent); border: 1px solid var(--line); border-radius: var(--radius-s); padding: 6px 8px; font-size: var(--fs-xs); line-height: 1.3; width: 220px; max-width: calc(100% - 16px); }
 .legend .bar { height: 8px; border: 1px solid var(--line-strong); margin: 4px 0 2px; }
-.legend .tk { display: flex; justify-content: space-between; gap: 8px; font-variant-numeric: tabular-nums; color: var(--mut); }
+.legend .tk { display: flex; justify-content: space-between; gap: 8px; font-variant-numeric: tabular-nums; color: var(--mut); white-space: nowrap; }
 .err { color: var(--dot-bad); font-weight: 600; }
 .view .legend { left: 8px; }
 svg.plot { width: 100%; height: auto; display: block; }
@@ -271,3 +272,5 @@ dialog#newDlg::backdrop { background: color-mix(in srgb, var(--bg) 60%, transpar
 @media (max-width: 700px) { body.sim main { flex-direction: column; } #list { width: 100%; max-height: 30%; border-right: 0; border-bottom: 1px solid var(--line); } }
 .scrollx { overflow: auto; } .wrap { white-space: pre-wrap; }
 .legend.lg-static { position: static; display: inline-block; margin-top: 6px; }
+.item.head { cursor: default; color: var(--mut); font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: .04em; background: var(--bg); } .item.head:hover { background: var(--bg); }
+#nKind { margin: 0 12px; }

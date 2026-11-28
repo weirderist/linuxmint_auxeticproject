@@ -42,7 +42,7 @@ export function syncCameras(viewers, enabled) {
 }
 
 async function readWithProgress(resp, onProgress) {
-  const total = +resp.headers.get('Content-Length') || 0, rd = resp.body.getReader(); let got = 0, out = total ? new Uint8Array(total) : null; const chunks = [];
+  const total = +(resp.headers.get('X-Raw-Length') || resp.headers.get('Content-Length')) || 0, rd = resp.body.getReader();          // X-Raw-Length: size before gzip (meshes are sent gzipped, 2026-11-28) let got = 0, out = total ? new Uint8Array(total) : null; const chunks = [];
   for (;;) {
     const { done, value } = await rd.read(); if (done) break;
     if (out && got + value.length <= out.length) out.set(value, got); else { if (out) { chunks.push(out.subarray(0, got)); out = null; } chunks.push(value); }
@@ -102,6 +102,6 @@ export async function fetchColors(id, field, variant, kind, extra) {
 
 export function legendHTML(l) {          // compact (2026-11-28, K): name, colour bar, three ticks; the note and the data range are in legendTip (tooltip)
   const g = l.stops.map(c => 'rgb(' + c.join(',') + ')').join(','), f = x => (+x).toPrecision(3), e = l.end_labels || ['low', 'high'];
-  return '<b>' + l.label + '</b><div class="bar" style="background:linear-gradient(to right,' + g + ')"></div><div class="tk"><span>' + f(l.vmin) + ' ' + e[0] + '</span><span>' + f(l.ticks[1]) + '</span><span>' + e[1] + ' ' + f(l.vmax) + '</span></div>';
+  return '<b>' + l.label + '</b><div class="bar" style="background:linear-gradient(to right,' + g + ')"></div><div class="tk"><span>' + f(l.vmin) + '</span><span>' + f(l.ticks[1]) + '</span><span>' + f(l.vmax) + '</span></div><div class="tk"><span>' + e[0] + '</span><span>' + e[1] + '</span></div>';
 }
 export const legendTip = l => [l.centre != null ? 'centre = ' + (l.centre_label || 'as-built mean') : '', l.data_min != null ? 'data ' + (+l.data_min).toPrecision(4) + ' to ' + (+l.data_max).toPrecision(4) : '', l.note || ''].filter(Boolean).join(' | ');

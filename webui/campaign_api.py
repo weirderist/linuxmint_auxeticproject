@@ -25,6 +25,8 @@ TEXT_COLS = {"relax_state", "settled_by", "fold_direction", "reason"}
 PROJECT_PY = Path(os.environ.get("CAMPAIGN_PYTHON") or (ROOT / "venv" / "Scripts" / "python.exe" if os.name == "nt" else ROOT / "venv" / "bin" / "python"))      # the interpreter of the README commands (venv/bin/python); the web service itself runs in webui/venv
 START_GUARD_S = 20            # a second Start for the same campaign within this time is refused (the first runner may not have written its lock yet)
 
+for _d in (sorted(p for p in SCRIPTS.iterdir() if p.is_dir() and p.name not in ("legacy", "__pycache__")) if SCRIPTS.is_dir() else []):          # the script folders (shell_model, campaigns, ...) import each other by
+    if str(_d) not in sys.path: sys.path.append(str(_d))                                                                                               # bare name; before 2026-11-28 this depended on which request came first
 router = APIRouter()
 _any_web_job = lambda: False  # replaced by setup(): True while the web UI has a simulation or tile job of its own running
 _last_start = {}
@@ -328,25 +330,76 @@ def _shell(name):
     try: c = sc.Camp(name)
     except ValueError: raise HTTPException(404, "unknown shell campaign")
     if not c.exists(): raise HTTPException(404, "unknown shell campaign")
+    _speedups(sc)
     return sc, c
+
+# ---- speed (2026-11-28, K: the pages were slow even locally). Measured on the workstation with shell2 (1310 runs): status() 0.7-2.9 s (it walks the whole campaign folder for its size and
+# reads ~1000 lease files), rows() 0.3 s, /api/shell/<c> 3 s; the shell page asks for these every 15 s. The web layer now (a) keeps the parsed queue.jsonl / index.jsonl until the file changes
+# (mtime + size), (b) measures the folder size at most every DIR_SIZE_TTL_S, (c) keeps status() and the run table of a campaign until one of its state files changes, at most CACHE_TTL_S
+# (so runner liveness and lease expiry are still re-read). Nothing in scripts/ changes, so the runners and the frozen campaign copies behave exactly as before. Both TTLs are UNSOURCED design choices.
+CACHE_TTL_S = 20
+DIR_SIZE_TTL_S = 600
+_cache = {}
+_cache_lock = threading.Lock()
+
+def _fsig(*paths):
+    out = []
+    for p in paths:
+        try: st = os.stat(p); out.append((st.st_mtime_ns, st.st_size))
+        except OSError: out.append(None)
+    return tuple(out)
+
+def _speedups(sc):
+    if getattr(sc, "_web_speedups", False): return
+    raw_read, raw_size = sc.read_lines, sc.dir_size
+    def read_lines(path, *a, **k):
+        if a or k: return raw_read(path, *a, **k)
+        key = ("lines", str(path)); sig = _fsig(path); hit = _cache.get(key)
+        if hit and hit[0] == sig: return list(hit[1])
+        v = raw_read(path); _cache[key] = (sig, v); return list(v)
+    def dir_size(d):
+        key = ("size", str(d)); hit = _cache.get(key)
+        if hit and time.time() - hit[0] < DIR_SIZE_TTL_S: return hit[1]
+        v = raw_size(d); _cache[key] = (time.time(), v); return v
+    sc.read_lines, sc.dir_size, sc._web_speedups = read_lines, dir_size, True
+
+def _camp_sig(c):
+    return _fsig(c.queue, c.index, c.control, c.runner, c.lock, c.leaselog, c.spec, os.path.join(c.d, "next_id"))
+
+def _cached(kind, c, fn):
+    """fn() once per change of the campaign's state files (and at least every CACHE_TTL_S). The value is shared: callers must not change it (copy first)."""
+    key = (kind, c.name); sig = _camp_sig(c); hit = _cache.get(key)
+    if hit and hit[0] == sig and time.time() - hit[1] < CACHE_TTL_S: return hit[2]
+    with _cache_lock:
+        hit = _cache.get(key)
+        if hit and hit[0] == sig and time.time() - hit[1] < CACHE_TTL_S: return hit[2]
+        v = fn(); _cache[key] = (sig, time.time(), v); return v
+
+def _status(c): return _cached("status", c, c.status)
 
 @router.get("/api/shell")
 def shell_list():
-    sc = _sc(); root = Path(sc.SHELL_ROOT); out = []
+    sc = _sc(); _speedups(sc); root = Path(sc.SHELL_ROOT); out = []
     if root.is_dir():
         for d in sorted(p for p in root.iterdir() if p.is_dir() and NAME_RE.match(p.name) and (p / "spec.json").exists()):
-            st = sc.Camp(d.name).status(); out.append({"name": d.name, "control": st["control"], "runner_alive": st["runner_alive"], "state": (st["runner"] or {}).get("state", ""), "counts": st["counts"]})
+            st = _status(sc.Camp(d.name)); out.append({"name": d.name, "control": st["control"], "runner_alive": st["runner_alive"], "state": (st["runner"] or {}).get("state", ""), "counts": st["counts"]})
     return {"campaigns": out}
 
-@router.get("/api/shell/{name}")
-def shell_detail(name: str):
-    sc, c = _shell(name); st = c.status(); rows = c.rows(); sco = _load("shell_score", SCRIPTS / "shell_model" / "shell_score.py")
+def _detail_rows(c):
+    rows = c.rows(); sco = _load("shell_score", SCRIPTS / "shell_model" / "shell_score.py")
     for r in rows: r["score"] = sco.score(r)          # similarity out of 100 where a measured reference exists (Pattern 1), else None
     tg = _tight()
     for r in rows: tr = tg.record(r); r["stitch_density"], r["tf_rel"], r["tf_c_rel"], r["tf_w_rel"] = tr["stitch_density"], tr["tf_rel"], tr["tf_c_rel"], tr["tf_w_rel"]          # display only, computed on read (Ne fixed at 12); nothing is written to the runs
-    st["tightness"] = tg.campaign_info([r["stitch_density"] for r in rows], c.policy())
-    st["n_rows"] = len(rows); st["rows"] = rows[-1500:]
-    return st
+    return rows, tg.campaign_info([r["stitch_density"] for r in rows], c.policy())
+
+@router.get("/api/shell/{name}")
+def shell_detail(name: str, request: Request):
+    """The whole table (about 300 kB gzipped for 1300 runs). The page asks every 15 s: an ETag from the cached entries lets the browser get '304 not modified' while nothing changed."""
+    sc, c = _shell(name); st0 = _status(c); rows, tight = _cached("rows", c, lambda: _detail_rows(c))
+    tag = '"%s"' % hashlib.sha1(repr((_cache[("status", c.name)][1], _cache[("rows", c.name)][1], c.name)).encode()).hexdigest()[:20]
+    if request.headers.get("if-none-match") == tag: return Response(status_code=304, headers={"ETag": tag, "Cache-Control": "no-cache"})
+    st = dict(st0); st["tightness"] = tight; st["n_rows"] = len(rows); st["rows"] = rows[-1500:]
+    return Response(json.dumps(st, default=str), media_type="application/json", headers={"ETag": tag, "Cache-Control": "no-cache"})
 
 def _shell_guard(name):
     why = _yarn_busy()
@@ -402,7 +455,7 @@ def _kaggle_info(sc, c):
 
 @router.get("/api/shell/{name}/workers")
 def shell_workers(name: str):
-    sc, c = _shell(name); st = c.status(); rn = st.get("runner") or {}
+    sc, c = _shell(name); st = _status(c); rn = st.get("runner") or {}
     return {"server": {"runner_alive": st["runner_alive"], "state": rn.get("state"), "current": rn.get("current"), "control": st["control"], "done": (st.get("done_by_worker") or {}).get("server", 0)},
             "kaggle": dict(_kaggle_info(sc, c), done=(st.get("done_by_worker") or {}).get("kaggle", 0), leased=(st.get("leased_by_worker") or {}).get("kaggle", 0)),
             "workstation": dict(_ws_info(sc, c), done=(st.get("done_by_worker") or {}).get("workstation", 0), leased=(st.get("leased_by_worker") or {}).get("workstation", 0))}
@@ -484,7 +537,7 @@ def shell_run(name: str, rid: str):
     try: d = c.run_detail(rid)
     except ValueError as e: raise HTTPException(404, str(e))
     tg = _tight(); d["tightness"] = dict(tg.record(d.get("settings") or {}), label_stitch_density=tg.LABEL_S, label_tf_rel=tg.LABEL_TF, label_tf_c_rel=tg.LABEL_TF_C, label_tf_w_rel=tg.LABEL_TF_W, note=tg.NOTE)          # display only, computed on read
-    d["tightness"]["constant_note"] = tg.campaign_info([tg.record(q.get("settings") or {})["stitch_density"] for q in c.queue_items()], c.policy())["constant_note"]
+    d["tightness"]["constant_note"] = _cached("rows", c, lambda: _detail_rows(c))[1]["constant_note"]          # same campaign-wide note as the table (cached)
     return d
 
 @router.get("/api/shell/{name}/runs/{rid}/mesh")

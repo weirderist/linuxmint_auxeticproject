@@ -99,7 +99,7 @@
 </details>
 </div>
 <pre id="info"></pre></div></main>
-<dialog id="newDlg"><div class="dh"><b>New fabric</b><button id="nClose">Close</button></div>
+<dialog id="newDlg"><div class="dh"><b>New</b><span class="seg" id="nKind"><button id="nKYarn" class="on">Yarn mesh</button><button id="nKShell" title="one pure-shell run with the shell2 settings (plate bending, FIRE); not part of any campaign">Shell</button></span><button id="nClose">Close</button></div>
  <div class="note">1 = knit (red), 2 = purl (green); click a cell to switch it.</div>
  <div class="grid">
   <label><span>Model name (required)</span><input id="nName" maxlength="80" placeholder="e.g. jersey control"></label>
@@ -112,7 +112,7 @@
  <textarea id="nMat" rows="5" spellcheck="false" placeholder="one row per line, digits 1 and 2, e.g.&#10;1 2 1 1&#10;2 2 1 2"></textarea>
  <div id="nGrid"></div><div id="nDims" class="note"></div>
  <div class="grid">
-  <label><span>Yarn count Ne</span><input id="nNe" type="number" step="any" min="1" value="10"></label>
+  <label id="nNeL"><span>Yarn count Ne</span><input id="nNe" type="number" step="any" min="1" value="10"></label>
   <label><span>Courses per inch (CPI)</span><input id="nCpi" type="number" step="any" min="1" value="14"></label>
   <label><span>Wales per inch (WPI)</span><input id="nWpi" type="number" step="any" min="1" value="18"></label>
   <label><span>Repeats of the pattern (tiles, each way)</span><input id="nTiles" type="number" min="1" max="40" value="4"></label>
@@ -229,7 +229,7 @@ const ckey = id => id + '|' + variant + '|' + stamp(recOf(id));
 // Each result view is downloaded and built once; switching Tube/Axis or going back to a result reuses it.
 const cache = new Map();                       // key -> { tube: Promise<Object3D>, axis: Promise<Object3D> }
 async function readWithProgress(resp, tag) {
-  const total = +resp.headers.get('Content-Length') || 0, rd = resp.body.getReader(); let got = 0, out = total ? new Uint8Array(total) : null; const chunks = [];
+  const total = +(resp.headers.get('X-Raw-Length') || resp.headers.get('Content-Length')) || 0, rd = resp.body.getReader();          // X-Raw-Length: size before gzip (meshes are sent gzipped, 2026-11-28) let got = 0, out = total ? new Uint8Array(total) : null; const chunks = [];
   for (;;) {
     const { done, value } = await rd.read(); if (done) break;
     if (out && got + value.length <= out.length) out.set(value, got); else { if (out) { chunks.push(out.subarray(0, got)); out = null; } chunks.push(value); }      // known size: one buffer, no copy of the whole file at the end
@@ -313,9 +313,20 @@ function stateLabel(s) {
   return FINAL[s.state] || (s.state === 'loaded' || s.state === 'armed' || s.state === 'released' || s.state === 'relaxing' ? FINAL.interrupted : s.state);
 }
 const fmt = r => r.created ? new Date(r.created).toLocaleString() : r.id;
+let shells = [];
+function renderShells(el) {
+  if (RUNID || !shells.length) return;
+  const h = document.createElement('div'); h.className = 'item head'; h.textContent = 'Shell runs'; el.append(h);
+  for (const r of shells) {
+    const d = document.createElement('div'); d.className = 'item'; d.title = r.id;
+    const a = document.createElement('div'); a.append(r.name); const b = document.createElement('span'); b.className = 'badge'; b.textContent = r.state === 'done' ? 'shell' : r.state; a.append(b);
+    const sm = document.createElement('small'); sm.textContent = r.id + ' | ' + r.matrix + ' x' + r.tiles + ' | CPI ' + r.cpi + ' WPI ' + r.wpi + (r.fold_direction ? ' | fold ' + r.fold_direction : '');
+    d.append(a, sm); d.onclick = () => { location.href = '/shellview?sim=' + encodeURIComponent(r.id); }; el.append(d);
+  }
+}
 function renderList() {
   const el = $('#list'); el.textContent = '';
-  if (!results.length) { el.textContent = 'No results yet.'; return; }
+  if (!results.length) { el.textContent = 'No results yet.'; renderShells(el); return; }
   for (const r of results) {
     const d = document.createElement('div'); d.className = 'item' + (r.id === current ? ' sel' : ''); d.dataset.id = r.id;
     const a = document.createElement('div');
@@ -325,6 +336,7 @@ function renderList() {
     const s = document.createElement('small'); s.textContent = r.id + ' | ' + (r.matrix_text ? r.matrix_text + ' | ' : '') + fmt(r); d.title = r.id;
     d.append(a, s); d.onclick = () => show(r.id, true); el.append(d);
   }
+  renderShells(el);
 }
 async function delResult(r) {
   if (!confirm('Delete "' + (r.name || fmt(r)) + '" (' + r.id + ') permanently? This removes its whole folder and cannot be undone.')) return;
@@ -512,9 +524,22 @@ $('#nRead').onclick = async () => {
     $('#nReadNote').textContent = 'Done. Compare the green boxes with the photo, then fix any wrong cell by clicking it.';
   } catch (e) { toast('Could not read the photo: ' + e); } finally { $('#nRead').disabled = false; }
 };
+// New: yarn mesh (build_knit) or a single pure-shell run (webui/shellsim.py, 2026-11-28)
+let newKind = 'yarn';
+function setKind(k) { newKind = k; $('#nKYarn').classList.toggle('on', k === 'yarn'); $('#nKShell').classList.toggle('on', k === 'shell'); $('#nNeL').hidden = k === 'shell'; $('#nBuild').textContent = k === 'shell' ? 'Run shell' : 'Build'; }
+$('#nKYarn').onclick = () => setKind('yarn'); $('#nKShell').onclick = () => setKind('shell');
+async function runShell(name, rows) {
+  const body = { name, matrix: rows.map(r => r.join(' ')).join('/'), tiles: +$('#nTiles').value, cpi: +$('#nCpi').value, wpi: +$('#nWpi').value };
+  $('#nBuild').disabled = true;
+  const r = await fetch('/api/shellsim', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); const j = await r.json().catch(() => ({}));
+  $('#nBuild').disabled = false;
+  if (!r.ok) return toast('Could not start: ' + (typeof j.detail === 'string' ? j.detail : JSON.stringify(j.detail || r.status)));
+  location.href = '/shellview?sim=' + encodeURIComponent(j.id);
+}
 $('#nBuild').onclick = async () => {
   const name = $('#nName').value.trim(), M = parseMat(); if (!name) return toast('Give the model a name first.'); if (!M.length || !renderGrid()) return toast('The matrix is empty or its rows differ in length.');
   const rows = $('#nTop').checked ? M.slice().reverse() : M;
+  if (newKind === 'shell') return runShell(name, rows);
   const body = { name, matrix: rows.map(r => r.join(' ')).join('/'), tiles: +$('#nTiles').value, ne: +$('#nNe').value, cpi: +$('#nCpi').value, wpi: +$('#nWpi').value };
   $('#nBuild').disabled = true;
   const r = await fetch('/api/build', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
@@ -577,9 +602,9 @@ async function pollState() {
 async function poll() {
   try {
     if (RUNID) { const ri = await fetch('/api/results/' + RUNID + '/info'); if (!ri.ok) { const e = await ri.json().catch(() => ({})); $('#info').textContent = 'Run ' + RUNQ + ': ' + (e.detail || ('HTTP ' + ri.status)); markSrv(true); return; } results = [await ri.json()]; }
-    else results = await (await fetch('/api/results')).json();
+    else { results = await (await fetch('/api/results')).json(); try { shells = await (await fetch('/api/shellsim')).json(); } catch (e) { shells = []; } }
     markSrv(true);
-    const s = results.map(r => r.id + ':' + ((r.sim && r.sim.state) || '') + ((r.sim && r.sim.relaxed_at) || '')).join(',');
+    const s = results.map(r => r.id + ':' + ((r.sim && r.sim.state) || '') + ((r.sim && r.sim.relaxed_at) || '')).join(',') + '|' + shells.map(r => r.id + r.state).join(',');
     if (s !== sig) { sig = s; renderList(); setVariantButtons(); }
     const newest = results.length ? results[0].id : '';
     if (known === null) { known = newest; if (newest && !current) show(newest, true); }
