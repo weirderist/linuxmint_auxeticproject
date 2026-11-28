@@ -21,14 +21,28 @@ sys.path.insert(0, os.path.join(SCRIPTS, 'campaigns')); import platform_compat a
 
 INPUT_FILES = ('fab_axis.csv', 'fab_nodes.csv', 'meta.json', 'shell.npz', 'relaxed_axis.csv', 'relaxed_l0.csv', 'checkpoint.npz')
 FETCH_PREFIX = ('relaxed_', 'state.json', 'meta.json', 'checkpoint', 'diagnostics.csv', 'shell.npz', 'relax.log', 'fold_')
+ACCELERATOR = 'NvidiaTeslaT4'          # 2026-11-28: a GPU kernel pushed WITHOUT --accelerator stayed QUEUED for hours (it waited for a retired default type) and blocked one of the 2 GPU session slots
 BUDGET_S = 8 * 3600          # stop starting jobs after this (Kaggle GPU sessions end at 12 h; UNSOURCED margin)
 
 KERNEL = r'''
 import json, os, subprocess, sys, tarfile, time, glob, shutil
 JOBS = json.loads(__JOBS__); BUDGET_S = __BUDGET__
 W = '/kaggle/working'; t0 = time.time(); man = dict(jobs={}, t_start=time.strftime('%Y-%m-%dT%H:%M:%S'))
-src = os.path.dirname(sorted(glob.glob('/kaggle/input/**/code.tar', recursive=True))[0])
-with tarfile.open(os.path.join(src, 'code.tar')) as tf: tf.extractall(os.path.join(W, 'code'))
+# Kaggle unpacks archives in a dataset (2026-11-28: code.tar arrived as a folder): accept the archive or the unpacked folder
+tars = sorted(glob.glob('/kaggle/input/**/code.tar', recursive=True)); rj = sorted(glob.glob('/kaggle/input/**/scripts/yarn_model/relax_job.py', recursive=True))
+if tars:
+    with tarfile.open(tars[0]) as tf: tf.extractall(os.path.join(W, 'code'))
+elif rj: shutil.copytree(os.path.dirname(os.path.dirname(os.path.dirname(rj[0]))), os.path.join(W, 'code'))
+else: raise SystemExit('no code.tar and no scripts/yarn_model/relax_job.py under /kaggle/input')
+itar = sorted(glob.glob('/kaggle/input/**/input.tar', recursive=True)); iax = sorted(glob.glob('/kaggle/input/*/fab_axis.csv')) or sorted(glob.glob('/kaggle/input/**/fab_axis.csv', recursive=True))          # the dataset's top folder first (not a copy inside the code tree)
+def put_input(d):
+    if itar:
+        with tarfile.open(itar[0]) as tf: tf.extractall(d)
+    elif iax:
+        for f in os.listdir(os.path.dirname(iax[0])):
+            q = os.path.join(os.path.dirname(iax[0]), f)
+            if os.path.isfile(q): shutil.copy2(q, os.path.join(d, f))
+    else: raise SystemExit('no input.tar and no fab_axis.csv under /kaggle/input')
 try:
     import jax; man['jax'] = jax.__version__; man['devices'] = [str(d) for d in jax.devices()]
 except Exception as e: man['jax_error'] = repr(e)
@@ -39,7 +53,7 @@ save()
 for j in JOBS:
     if time.time() - t0 > BUDGET_S: man['jobs'][j['name']] = dict(status='skipped', reason='budget'); save(); continue
     d = os.path.join(W, 'run_' + j['name']); os.makedirs(d, exist_ok=True)
-    with tarfile.open(os.path.join(src, 'input.tar')) as tf: tf.extractall(d)
+    put_input(d)
     cmd = [sys.executable, os.path.join(W, 'code', 'scripts', 'yarn_model', 'relax_job.py'), '--folder', d] + j['args']
     t1 = time.time(); log = open(os.path.join(d, 'relax.log'), 'w'); p = subprocess.run(cmd, stdout=log, stderr=subprocess.STDOUT); log.close()
     man['jobs'][j['name']] = dict(status='done' if p.returncode == 0 else 'failed', exit=p.returncode, seconds=round(time.time() - t1, 1), args=j['args']); save()
@@ -84,7 +98,7 @@ def push(folder, jobs, gpu=True, log=print):
     ks = slug + '-k'          # the kernel needs a name of its own: the same name as its dataset is refused (409 Conflict, 2026-11-28)
     json.dump(dict(id='%s/%s' % (user, ks), title=ks, code_file='yarn_kernel.py', language='python', kernel_type='script', is_private=True, enable_gpu=bool(gpu), enable_internet=False,
                    dataset_sources=['%s/%s' % (user, slug)], competition_sources=[], kernel_sources=[]), open(os.path.join(kd, 'kernel-metadata.json'), 'w'))
-    rc, o = kc.run(['kernels', 'push', '-p', kd], timeout=600); log('push:', rc, o.strip()[-200:])
+    rc, o = kc.run(['kernels', 'push', '-p', kd] + (['--accelerator', ACCELERATOR] if gpu else []), timeout=600); log('push:', rc, o.strip()[-200:])
     rec = dict(slug=ks, dataset=slug, user=user, gpu=bool(gpu), jobs=jobs, workdir=wd, pushed=time.strftime('%Y-%m-%dT%H:%M:%S'), state='pushed' if rc == 0 and 'success' in o.lower() else 'push failed', push_out=o.strip()[-300:])
     _wj(os.path.join(folder, 'kaggle.json'), rec); return rec
 

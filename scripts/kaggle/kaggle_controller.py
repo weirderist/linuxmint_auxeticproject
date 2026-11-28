@@ -78,7 +78,7 @@ s.worker(slot['name']), len(chosen), budget + cf['lease_margin_s'], 'kaggle %s' 
         open(os.path.join(kd, 'worker.py'), 'w').write(tpl)
         json.dump(dict(id='%s/%s' % (s.user, slug), title=slug, code_file='worker.py', language='python', kernel_type='script', is_private=True, enable_gpu=gpu, enable_internet=False,
                        dataset_sources=['%s/%s' % (s.user, s.ds)], competition_sources=[], kernel_sources=[]), open(os.path.join(kd, 'kernel-metadata.json'), 'w'))
-        rc, o = kc.run(['kernels', 'push', '-p', kd], timeout=600)
+        rc, o = kc.run(['kernels', 'push', '-p', kd] + (['--accelerator', 'NvidiaTeslaT4'] if gpu else []), timeout=600)          # 2026-11-28: without it GPU kernels stayed QUEUED for hours (k3, 15:47 on) and held a GPU slot
         if rc != 0 or 'successfully' not in o.lower():
             s.c.release([x['id'] for x in got], s.worker(slot['name']), 'push failed'); say('push failed for', slot['name'], o.strip()[-300:]); s.log(event='push_failed', slot=slot['name'], out=o.strip()[-300:]); return None
         ent = dict(status='running', slot=slot['name'], slug=slug, gpu=gpu, ids=[x['id'] for x in got], t_push=time.time(), t_push_iso=cm.now(), budget_s=budget)
@@ -141,6 +141,12 @@ s.worker(slot['name']), len(chosen), budget + cf['lease_margin_s'], 'kaggle %s' 
             if ent.get('status') == 'running':
                 rc, o = kc.run(['kernels', 'status', '%s/%s' % (s.user, ent['slug'])]); low = o.lower(); age = time.time() - ent['t_push']
                 alive = rc == 0 and any(w in low for w in ('running', 'queued'))
+                if ent.get('gpu') and rc == 0 and 'queued' in low and 'running' not in low and age > cf.get('queue_max_s', 3600):          # 2026-11-28: a GPU kernel pushed without --accelerator stayed QUEUED for 5 h and held one
+                    rd, od = kc.run(['kernels', 'delete', '%s/%s' % (s.user, ent['slug']), '-y'])                         # of the 2 GPU slots: never started, so nothing to import; delete it on Kaggle,
+                    if rd != 0: say('%s: queued %.1f h, delete failed (%s): kept, retried next tick' % (name, age / 3600, od.strip()[-80:])); s.log(event='queue_stuck_delete_failed', slot=name, slug=ent['slug']); s.renew(name, ent, cf); continue          # ECC review: never release runs of a kernel that may still start
+                    back = s.c.release(ent['ids'], s.worker(name), 'kaggle session never left the queue: deleted')        # give its runs back and push again next tick (1 h is UNSOURCED)
+                    say('%s: still queued after %.1f h: deleted on Kaggle (%s), %d runs back to the queue' % (name, age / 3600, od.strip()[-80:], len(back))); s.log(event='queue_stuck', slot=name, slug=ent['slug'], released=back, delete_rc=rd)
+                    st[name] = dict(status='idle', last=ent['slug'], t_last=cm.now()); s.save(st); continue
                 if alive and age < cf.get('hard_limit_s', 13 * 3600):          # still working on Kaggle (it may have waited in Kaggle's queue): keep its leases from expiring (review 2026-11-27)
                     s.renew(name, ent, cf); continue
                 old = age > (cf.get('hard_limit_s', 13 * 3600) if alive else ent['budget_s'] + cf['lease_margin_s'])
