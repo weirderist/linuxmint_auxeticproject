@@ -218,7 +218,7 @@ class SimBody(BaseModel):
     tension_cN: float = Field(0.0, ge=0, le=200)
     creep_tau_h: float = Field(0.0, ge=0)
     device: str = Field("cpu", pattern="^(cpu|gpu)$", description="cpu = SciPy L-BFGS (the default, faster on CPU); gpu = FIRE on the JAX device (2026-11-27). This machine has no GPU: gpu is refused here")
-    where: str = Field("server", pattern="^(server|workstation|kaggle)$", description="where the run executes; only server is built (workstation and kaggle yarn runs are not built yet)")
+    where: str = Field("server", pattern="^(server|workstation|kaggle)$", description="where the run executes: server (this machine) or kaggle (scripts/kaggle/yarn_kaggle.py, 2026-11-28); workstation is not built")
     tpi: float = Field(0.0, ge=0, le=50, description="yarn twist, turns per inch (a yarn property). Drives skew only with twist_live > 0 (relax_solver twist drive, 2026-11-27)")
     twist_dir: str = Field("Z", pattern="^(Z|S)$", description="twist direction; which sign skews which way is not yet verified against a fabric")
     twist_live: float = Field(0.0, ge=0, le=1, description="share of the twist that still acts (0..1): a FOLD property, to be fitted. UNSOURCED. 0 = off")
@@ -279,8 +279,17 @@ def _law_points(s):
     return p
 
 def _sim_cmd(d, b, R):
-    if b.where != "server": raise HTTPException(422, "where = %s is not built yet: yarn runs execute on the server only" % b.where)
-    if b.device == "gpu": raise HTTPException(422, "no GPU on this machine (JAX sees the CPU only): choose cpu, or run gpu on Kaggle once that path is built")
+    if b.where == "workstation": raise HTTPException(422, "where = workstation is not built: run here (server) or on Kaggle")
+    if b.device == "gpu" and b.where != "kaggle": raise HTTPException(422, "no GPU on this machine (JAX sees the CPU only): choose cpu, or Run on: Kaggle")
+    cmd, kc = _relax_cmd(d, b, R)
+    if b.where == "kaggle":          # tasks 56/58 (2026-11-28): the same relax_job arguments, run on a Kaggle session by scripts/kaggle/yarn_kaggle.py (push, wait, fetch into this folder)
+        args = cmd[4:]                # everything after  python relax_job.py --folder <d>
+        if b.device == "gpu": args[args.index("--solver") + 1] = "fire"          # FIRE is the GPU solver; L-BFGS stays on a CPU session
+        if any(" " in a for a in args): raise HTTPException(422, "a setting contains a space, which the Kaggle job line cannot carry")
+        cmd = [sys.executable, "-u", str(SCRIPTS / "kaggle" / "yarn_kaggle.py"), "run", str(d), "--job", "sim", " ".join(args)] + ([] if b.device == "gpu" else ["--cpu"])
+    return cmd, kc
+
+def _relax_cmd(d, b, R):
     EA_in = b.ea or (_law_points(b.stretch_law)[0][1]/_law_points(b.stretch_law)[0][0] if b.stretch_law else None)
     kc = b.kc_ratio * (EA_in if EA_in else b.E * math.pi * R**2) / R          # kc = ratio * EA / R; EA = E pi R^2 unless EA or a stretch law is entered (then the entered EA)
     cmd = [sys.executable, str(SCRIPTS / "yarn_model" / "relax_job.py"), "--folder", str(d), "--E", repr(b.E), "--mu", repr(b.mu),

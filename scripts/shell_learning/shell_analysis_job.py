@@ -18,6 +18,7 @@ Safety:
     and the tool is run again, at most MAX_ATTEMPTS times in all; a tool that raises an error is recorded as 'failed' with the error text and is not repeated for that run count.
 Usage: python3 shell_analysis_job.py <campaign> [--every 100] [--poll-s 600] [--once] [--originals-only]"""
 import argparse, hashlib, json, os, shutil, subprocess, sys, time
+for _v in ('OMP_NUM_THREADS', 'OPENBLAS_NUM_THREADS', 'MKL_NUM_THREADS'): os.environ.setdefault(_v, '1')          # task 53b: one thread for numpy's linear algebra (a nice-19 background job; set before numpy loads)
 HERE = os.path.dirname(os.path.abspath(__file__)); sys.path.insert(0, HERE)
 _S = os.path.dirname(HERE)
 if os.path.basename(_S) == 'scripts': sys.path.extend(os.path.join(_S, _d) for _d in sorted(os.listdir(_S)) if _d not in ('legacy', '__pycache__') and os.path.isdir(os.path.join(_S, _d)))          # the other folders of scripts/ (not in a flat frozen copy)
@@ -63,7 +64,8 @@ def holder_alive(rec):
 
 
 # ------------------------------------------------------------------ paths and counting
-def adir(camp): return os.path.join(camp.d, 'analysis', 'scheduled')
+METHOD_VERSION = 2          # 2026-11-28 (task 53): CV and held-out by seed family, budgets up to 300, Bonferroni criterion for repeated looks. Version 1 results stay in analysis/scheduled/ and are never mixed in
+def adir(camp): return os.path.join(camp.d, 'analysis', 'scheduled' if METHOD_VERSION == 1 else 'scheduled_v%d' % METHOD_VERSION)
 def mdir(camp, m): return os.path.join(adir(camp), '%06d' % int(m))
 
 
@@ -87,9 +89,17 @@ def next_milestone(n, every=EVERY): return (n // every + 1) * every
 
 # ------------------------------------------------------------------ lock
 class Lock:
-    def __init__(s, camp): s.path = os.path.join(adir(camp), 'job.lock'); s.held = False
+    """One copy per campaign. Task 53d (2026-11-28): an operating-system lock (flock on Linux, a byte lock on Windows, platform_compat.try_lock) on job.flock decides; it is released by the system
+    when the holder dies, so two copies can no longer both take over a stale job.lock at the same moment. job.lock still records who holds it (pid, boot id) for the page."""
+    def __init__(s, camp): s.path = os.path.join(adir(camp), 'job.lock'); s.held = False; s.fh = None
     def acquire(s):
         os.makedirs(os.path.dirname(s.path), exist_ok=True); rec = me()
+        import platform_compat as pc
+        s.fh = pc.try_lock(os.path.join(os.path.dirname(s.path), 'job.flock'))
+        if s.fh is None: return False                                # another live copy holds the OS lock
+        wjson_atomic(s.path, rec); s.held = True; return True
+    def _old_acquire(s):          # before task 53d (kept for reference, unused)
+        rec = me()
         try:
             fd = os.open(s.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
             with os.fdopen(fd, 'w') as f: json.dump(rec, f); f.flush(); os.fsync(f.fileno())
@@ -103,6 +113,10 @@ class Lock:
         if s.held and (rjson(s.path) or {}).get('pid') == os.getpid():
             try: os.remove(s.path)                                    # the job's own lock file only
             except OSError: pass
+        if s.fh is not None:
+            try: s.fh.close()                                         # releases the OS lock
+            except OSError: pass
+            s.fh = None
         s.held = False
 
 
@@ -146,7 +160,9 @@ def process_milestone(camp, m, order, rows_by_id, params=None, log=print, runner
         att = dict(me(), status='running', started=now()); tt['attempts'].append(att); tt['status'] = 'running'; wjson_atomic(sp, st); t0 = time.time()
         log('%s %s at %d runs: started' % (now(), t, m))
         try:
-            rows = [rows_by_id[i] for i in ids]; res = runners[t](rows, params.get(t))
+            p = dict(params.get(t) or {})
+            if t == 'proposer_eval': p.setdefault('looks', max(1, int(m) // EVERY))          # task 53c: every run count so far was a look at the same held-out runs
+            rows = [rows_by_id[i] for i in ids]; res = runners[t](rows, p or None)
             res = dict(res, campaign=camp.name, generated=now(), scheduled=dict(milestone=m, n_used=len(rows), run_ids=ids, seconds=round(time.time() - t0, 1)))
             if not os.path.isfile(out): wjson_atomic(out, res)
             tt['status'] = 'done'; att.update(status='done', finished=now(), seconds=round(time.time() - t0, 1)); tt.pop('reason', None)

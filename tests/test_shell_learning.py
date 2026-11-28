@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Tests of the pattern features (shell_features.py), the rule job (shell_rules.py) and the proposer (shell_proposer.py) on SYNTHETIC finished runs: no solver, numpy only, temporary folders.
 Run from the repository root: python tests/test_shell_learning.py"""
-import json, os, subprocess, sys, tempfile
+import math, json, os, subprocess, sys, tempfile
 import numpy as np
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TMP = tempfile.mkdtemp(prefix='shelllearn_')
@@ -44,7 +44,11 @@ few = rl.analyse_target(rows[:60], 'thickness_rel'); check('fewer than 100 runs:
 res = rl.analyse_target(rows, 'thickness_rel'); la = res['lasso']; top = [x['feature'] for x in la['coefficients']][:3]
 check('lasso finds the generating features of thickness_rel (tm_wale_share, dilution_wale, log_ratio) with a high cross-validated R^2', res['status'] == 'ok' and 'tm_wale_share' in top and la['cv_r2'] > 0.6, 'top %s, cv R2 %.3f, selected %d' % (top, la['cv_r2'], la['n_selected']))
 check('every coefficient has a bootstrap stability and the rule carries the not-confirmed-on-real-fabric label', all(0 <= x['stability'] <= 1 for x in la['coefficients']) and res['label'] == rl.LABEL and la['support'] == 130)
-check('the tree cross-check gives readable rules and its own cross-validated R^2', res['tree']['rules'] and all(isinstance(t, str) for t in res['tree']['rules']) and res['tree']['cv_r2'] > 0.2, res['tree']['rules'][0])
+check('the tree cross-check gives readable rules and its own cross-validated R^2 (CV by seed family since task 53a: here the 130 runs are ~10 seed families, so the tree must predict unseen families: it is reported with its honest R^2, not required to be good; it was > 0.2 with row folds, which leaked siblings)', res['tree']['rules'] and all(isinstance(t, str) for t in res['tree']['rules']) and math.isfinite(res['tree']['cv_r2']), 'cv R2 %.3f (measured -0.23 on 2026-11-28: the tree does not carry over to unseen families; the lasso does, R2 0.96); %s' % (res['tree']['cv_r2'], res['tree']['rules'][0]))
+fam = [sf.family(r_['source'], r_['run']) for r_ in rows]; fo = rl.folds(len(rows), 5, 0, fam)
+check('task 53a: the CV folds never split a seed family (every family in one fold) and every fold has runs', all(len(f) for f in fo) and all(len({fi for fi, f in enumerate(fo) if j in set(f.tolist())}) == 1 for j in range(len(rows))) and all(len({fam[j] for j in f} & {fam[j] for f2 in fo if f2 is not f for j in f2}) == 0 for f in fo), '%d families' % len(set(fam)))
+check('task 53a: family() = seed:<id> for seeds and their edits / variants / fillers, the run id for a random pattern', sf.family('edit:seed03', 'S1') == 'seed:seed03' and sf.family('seed:seed03', 'S2') == 'seed:seed03' and sf.family('variant:seed03', 'S3') == 'seed:seed03' and sf.family('random:blocks', 'S4') == 'S4' and sf.family('proposer:gp', 'S5') == 'S5')
+check('task 53a: with no families (every run its own) the folds are exactly the old row folds', all((a_ == b_).all() for a_, b_ in zip(rl.folds(50, 5, 0, [str(i) for i in range(50)]), rl.folds(50, 5, 0))))
 step = [dict(r_, targets=dict(r_['targets'], shrink_x=0.3 if r_['features']['axis_direction'] > 0 else -0.3)) for r_ in rows]
 trr = rl.analyse_target(step, 'shrink_x')['tree']; check('a step function of axis_direction is found by the tree (first split on axis_direction)', 'axis_direction' in trr['rules'][0], trr['rules'][0])
 out = rl.run(c); rj = json.load(open(os.path.join(c.d, 'analysis', 'rules.json')))

@@ -84,6 +84,12 @@ def cmdlines():
     return out
 
 
+def proc_rows():
+    """[(pid, ppid, args)] of the live processes in ONE scan (2026-11-28: on Windows every scan is a CIM query of about a second; busy checks need parents and command lines together)."""
+    if WIN: return [(pid, ppid, _split_cmdline(cl)) for pid, ppid, _, cl in _win_processes() if cl]
+    tb = proc_table(); return [(pid, tb.get(pid, (0, 0))[0], args) for pid, args in cmdlines()]
+
+
 def proc_table():
     """{pid: (ppid, rss_kb)}"""
     if WIN: return {pid: (ppid, rss) for pid, ppid, rss, _ in _win_processes()}

@@ -3,6 +3,7 @@
 1. smoke_test/campaigns/smoke1        a synthetic 6-run campaign (tests/make_smoke.py)
 2. smoke_test/campaigns/fid_copy/runs/0020   a REAL single-jersey build (build_knit.py, matrix "1", 12 x 12 loops, Ne 12, CPI 22, WPI 16): needs numpy and scipy, about a minute
 3. smoke_test/campaigns/fid_copy/runs/0001 and 0003   copies of two finished fidelity runs: they must be copied from the server; the commands are printed if they are missing
+4. smoke_test/campaigns/README.md     a copy of campaigns/README.md (the column help of the Campaigns page)
 Nothing here touches campaigns/ or scripts/ (build_knit.py is run with its output and cell cache inside smoke_test/).
 """
 import os, shutil, subprocess, sys
@@ -12,6 +13,7 @@ env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
 
 subprocess.run([sys.executable, str(ROOT / "tests" / "make_smoke.py")], check=True, env=env, stdout=subprocess.DEVNULL)
 print("smoke1 campaign ready")
+shutil.copy(ROOT / "campaigns" / "README.md", SM / "campaigns" / "README.md")          # the column help (/api/campaign-help) reads README.md of CAMPAIGN_DIR (2026-11-28: was missing on the server)
 
 j = SM / "jersey_build12"
 if not (j / "meta.json").exists():

@@ -92,8 +92,10 @@ def proc_alive(pid, ctime=None):
             c, e, kk, u = wt.FILETIME(), wt.FILETIME(), wt.FILETIME(), wt.FILETIME(); k.GetProcessTimes(h, ctypes.byref(c), ctypes.byref(e), ctypes.byref(kk), ctypes.byref(u))
             return ((c.dwHighDateTime << 32) | c.dwLowDateTime) == ctime
         finally: k.CloseHandle(h)
-    try: return os.path.exists('/proc/%d' % pid) and (ctime is None or open('/proc/%d/stat' % pid).read().rsplit(')', 1)[1].split()[19] == str(ctime))
-    except OSError: return False
+    try:
+        f = open('/proc/%d/stat' % pid).read().rsplit(')', 1)[1].split()
+        return f[0] != 'Z' and (ctime is None or f[19] == str(ctime))          # a zombie (ended, not yet reaped) is not alive (2026-11-28: the power-cut test failed on Linux)
+    except (OSError, IndexError): return False
 
 def proc_ctime(pid):
     if os.name == 'nt':

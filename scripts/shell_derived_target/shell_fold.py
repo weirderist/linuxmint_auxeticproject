@@ -339,7 +339,7 @@ def run_fold(g, out, sh, meta):
     """Everything after the build: setup as relax_job.main, the stages, the final relaxation, the files."""
     import argparse as ap, relax_state as rs
     rj, sv = _rj(), _sv(); t_all = time.time(); folder = out; ck_path = os.path.join(out, 'fold_checkpoint.npz')
-    ns = ap.Namespace(stretch_scale=g.stretch_scale, bend_scale=g.bend_scale, ea=g.ea, ei=g.ei, stretch_law=g.stretch_law)
+    ns = ap.Namespace(E=g.E, stretch_scale=g.stretch_scale, bend_scale=g.bend_scale, ea=g.ea, ei=g.ei, stretch_law=g.stretch_law)          # E: relax_job.yarn_inputs needs it since 2026-11-27 (crash found 2026-11-28 on the first real run)
     try: EA, EI = rj.yarn_inputs(ns, meta['R'])
     except ValueError as err: sys.exit(str(err))
     if g.ref_scale == 0: print('note: --ref-scale 0 (straight-yarn reference), as shell_target.py; relax_job advises --ref-scale 1 with a shell (open parameter, task 47)', flush=True)

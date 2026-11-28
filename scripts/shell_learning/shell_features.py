@@ -25,6 +25,14 @@ TARGETS = ('thickness_rel', 'shrink_x', 'shrink_y', 'fold_turn_x_rad', 'fold_tur
 def tile(M, n): return np.tile(np.array(M), (n, n))
 
 
+FAMILY_KINDS = ('seed', 'edit', 'variant', 'filler')
+def family(source, run):
+    """The seed family of a run (task 53a, 2026-11-28): 'seed:seed03' for the seed itself and every run made from it (edit:, variant:, filler:), else the run id (a random pattern is its own
+    family). Cross-validation folds and the held-out set are drawn by family, so siblings of one seed never sit on both sides (they share most of the pattern and leak the answer)."""
+    k = str(source or '').split(':')
+    return 'seed:' + k[1] if len(k) > 1 and k[0] in FAMILY_KINDS and k[1] else str(run)
+
+
 def sections(T):
     """Sizes of the 4-connected regions of equal value (iterative flood fill)."""
     R, C = T.shape; seen = np.zeros((R, C), bool); sizes = []

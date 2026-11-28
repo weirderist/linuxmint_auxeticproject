@@ -56,16 +56,26 @@ def curve(Xp, Yp, Xt, Yt, start_idx, budgets, rule, batch, rng):
     return out
 
 
-def evaluate_rows(rows, repeats=30, start=10, step=10, batch=3, test_frac=0.25, split_seed=0, seed=0, targets=pr.PROP_TARGETS, rule_a=proposer_rule, rule_b=random_rule, min_runs=MIN_RUNS):
+MAX_BUDGET = 300          # task 53b (2026-11-28): budgets stop here (UNSOURCED). The GP cost grows about n^3 per fit, so budgets up to the whole pool made one evaluation take hours at 1000 runs;
+                          # the question (does the proposer's choice beat random picking?) is decided at small budgets, where the choice matters
+def z_for(looks, alpha=0.05):
+    """SE multiple for the verdict (task 53c): the conventional 2 SE for one look, raised by a Bonferroni correction for `looks` evaluations on the SAME held-out runs
+    (two-sided normal quantile at alpha / looks: 2.24 for 2 looks, 2.58 for 5, 2.81 for 10); never below 2."""
+    from statistics import NormalDist
+    return max(2.0, NormalDist().inv_cdf(1 - alpha / 2 / max(1, int(looks))))
+
+
+def evaluate_rows(rows, repeats=30, start=10, step=10, batch=3, test_frac=0.25, split_seed=0, seed=0, targets=pr.PROP_TARGETS, rule_a=proposer_rule, rule_b=random_rule, min_runs=MIN_RUNS, max_budget=MAX_BUDGET, looks=1):
     """rows: shell_features.dataset() rows (controls already removed). Returns the result dict (see the module docstring)."""
     rows = [r for r in rows if all(r['targets'].get(t) is not None and math.isfinite(r['targets'][t]) for t in targets) and all(math.isfinite(r['features'][k]) for k in pr.PROP_FEATURES)]
     out = dict(n_runs=len(rows), min_runs=min_runs, targets=list(targets), features=list(pr.PROP_FEATURES))
     if len(rows) < min_runs: out.update(status='waiting', note='%d finished runs with all targets; the test needs %d' % (len(rows), min_runs)); return out
-    test = [r for r in rows if is_test(r['run'], test_frac, split_seed)]; pool = [r for r in rows if not is_test(r['run'], test_frac, split_seed)]
+    fam = lambda r: sf.family(r.get('source', ''), r['run'])          # task 53a: held out by seed family (siblings of a seed never on both sides)
+    test = [r for r in rows if is_test(fam(r), test_frac, split_seed)]; pool = [r for r in rows if not is_test(fam(r), test_frac, split_seed)]
     Xall, mu, sd = pr.design(rows); X = lambda rr: (np.array([[r['features'][k] for k in pr.PROP_FEATURES] for r in rr], float) - mu) / sd
     Y = lambda rr: np.array([[r['targets'][t] for t in targets] for r in rr], float)
     Xp, Yp, Xt, Yt = X(pool), Y(pool), X(test), Y(test); sdt = Yt.std(0); sdt[sdt < 1e-12] = 1.0
-    budgets = list(range(start + step, len(pool), step))
+    budgets = list(range(start + step, min(len(pool), int(max_budget) + 1), step))
     if len(test) < 5 or not budgets: out.update(status='too few runs', note='held-out %d, pool %d: no budget between start %d and the pool size' % (len(test), len(pool), start)); return out
     A = np.zeros((repeats, len(budgets), len(targets))); B = np.zeros_like(A); rng = np.random.default_rng(seed)
     for r in range(repeats):
@@ -75,7 +85,7 @@ def evaluate_rows(rows, repeats=30, start=10, step=10, batch=3, test_frac=0.25, 
         A[r] = [ca[b] for b in budgets]; B[r] = [cb[b] for b in budgets]
     se = lambda v: float(v.std(ddof=1) / math.sqrt(len(v))) if len(v) > 1 else float('nan')
     D = ((A - B) / sdt[None, None, :]).mean(axis=(1, 2)); md, sdd = float(D.mean()), se(D)
-    verdict = VERDICTS[0] if md + 2 * sdd < 0 else VERDICTS[2] if md - 2 * sdd > 0 else VERDICTS[1]
+    z = z_for(looks); verdict = VERDICTS[0] if md + z * sdd < 0 else VERDICTS[2] if md - z * sdd > 0 else VERDICTS[1]
     per = []
     for i, b in enumerate(budgets):
         dn = ((A[:, i, :] - B[:, i, :]) / sdt[None, :]).mean(1)
@@ -84,11 +94,12 @@ def evaluate_rows(rows, repeats=30, start=10, step=10, batch=3, test_frac=0.25, 
                         diff_norm=dict(mean=float(dn.mean()), se=se(dn))))
     out.update(status='ok', n_test=len(test), n_pool=len(pool), repeats=repeats, start=start, step=step, batch=batch, test_frac=test_frac, split_seed=split_seed, seed=seed, budgets=budgets,
                heldout_target_std={t: float(sdt[k]) for k, t in enumerate(targets)}, per_budget=per, mean_diff_norm=md, se_diff_norm=sdd,
-               verdict='proposer selection is %s (mean normalised RMSE difference %+.4f, SE %.4f, %d repeats; negative = proposer better)' % (verdict, md, sdd, repeats), verdict_short=verdict,
+               verdict='proposer selection is %s (mean normalised RMSE difference %+.4f, SE %.4f, %d repeats; negative = proposer better; criterion %.2f SE for %d look(s) at these held-out runs)' % (verdict, md, sdd, repeats, z, looks), verdict_short=verdict,
+               criterion_se=z, looks=looks, max_budget=max_budget, method_version=2,
                method='pool-based test: rule (a) shell_proposer.select_batch imported unchanged (batch %d), rule (b) random; same random seed subset of %d runs per repeat; GP of shell_proposer.gp_fit for both; '
-                      'held-out by sha1 of the run id' % (batch, start),
+                      'held out by sha1 of the seed family (a random pattern is its own family); budgets up to %d' % (batch, start, max_budget),
                limits='SE = spread over seed subsets and random picks for these runs and this split, not over new campaigns; the real proposer picks among new pattern edits, here only among existing runs; '
-                      'the 2 SE criterion is a conventional choice')
+                      'the criterion is the 95 % two-sided normal quantile, Bonferroni-corrected for the number of run counts already evaluated on the same held-out runs (a conventional choice)')
     return out
 
 

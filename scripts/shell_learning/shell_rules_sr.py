@@ -234,9 +234,9 @@ def select(Xb, nb, y_sel, sel, P, rng):
 
 
 # ---------------------------------------------------------------- (e) baseline and guards
-def linear_baseline(F_sel, y_sel, F_test):
-    """The existing linear rules (shell_rules.analyse_target's lasso: 5-fold CV, 1-SE rule) fitted on the selection rows only; predictions for the held-out rows."""
-    Z, m, s = rl.standardise(F_sel); n = len(y_sel); g = max(np.abs(Z.T @ (y_sel - y_sel.mean())).max() / n, 1e-9); lams = np.geomspace(g, 1e-3 * g, 12); cvm, cvse = rl.cv_lasso(F_sel, y_sel, lams)
+def linear_baseline(F_sel, y_sel, F_test, groups=None):
+    """The existing linear rules (shell_rules.analyse_target's lasso: 5-fold CV by seed family, 1-SE rule) fitted on the selection rows only; predictions for the held-out rows."""
+    Z, m, s = rl.standardise(F_sel); n = len(y_sel); g = max(np.abs(Z.T @ (y_sel - y_sel.mean())).max() / n, 1e-9); lams = np.geomspace(g, 1e-3 * g, 12); cvm, cvse = rl.cv_lasso(F_sel, y_sel, lams, groups=groups)
     i0 = int(np.argmin(cvm)); i1 = next(i for i in range(len(lams)) if cvm[i] <= cvm[i0] + cvse[i0]); b = rl.lasso(Z, y_sel, lams[i1])
     return (F_test - m) / s @ b + y_sel.mean()
 
@@ -253,7 +253,8 @@ def search_target(rows, target, X0, names0, P=None, min_runs=MIN_RUNS):
     P = dict(PARAMS, **(P or {})); rng = np.random.default_rng(P['seed'])
     ok = [i for i, r in enumerate(rows) if r['targets'].get(target) is not None and math.isfinite(r['targets'][target])]; out = dict(target=target, n_runs=len(ok), label=LABEL)
     if len(ok) < min_runs: out.update(status='waiting', note='fewer than %d finished runs with this descriptor: no rule is reported' % min_runs); return out
-    rr = [rows[i] for i in ok]; Xb = X0[ok]; y = np.array([r['targets'][target] for r in rr], float); test = np.array([is_test(r['run'], P['test_frac'], P['split_seed']) for r in rr]); sel = ~test
+    rr = [rows[i] for i in ok]; Xb = X0[ok]; y = np.array([r['targets'][target] for r in rr], float); test = np.array([is_test(sf.family(r.get('source', ''), r['run']), P['test_frac'], P['split_seed']) for r in rr]); sel = ~test          # task 53a: held out by seed family
+    fam_sel = [sf.family(r.get('source', ''), r['run']) for r, t in zip(rr, test) if not t]
     Xb, nb, _ = clean(Xb, list(names0), [CPLX['base']] * len(names0), sel)
     X, names, cx, prob, qm = select(Xb, nb, y[sel], sel, P, rng); p = len(names); stable_all = [j for j in range(p) if prob[j] >= P['pi_thr']]
     stable = [j for j in stable_all if support(X[sel][:, j]) >= P['min_support']]                 # the support guard is per term: an unsupported stable term is removed (and listed), never reported
@@ -266,7 +267,7 @@ def search_target(rows, target, X0, names0, P=None, min_runs=MIN_RUNS):
                permutation=dict(perms=P['perms'], stable_terms_by_chance=perm_counts, mean_stable_terms_by_chance=mean_chance, share_of_perms_with_any=float(np.mean([c > 0 for c in perm_counts])) if perm_counts else None,
                                 fdr_estimate=fdr))
     guards = dict(enough_runs=True, stable=bool(stable_all), support=bool(stable))
-    yt = y[test]; mse_mean = float(np.mean((yt - y[sel].mean()) ** 2)); Fsf = np.array([[r['features'][k] for k in sf.FEATURES] for r in rr], float); pl = linear_baseline(Fsf[sel], y[sel], Fsf[test])
+    yt = y[test]; mse_mean = float(np.mean((yt - y[sel].mean()) ** 2)); Fsf = np.array([[r['features'][k] for k in sf.FEATURES] for r in rr], float); pl = linear_baseline(Fsf[sel], y[sel], Fsf[test], groups=fam_sel)
     mse_lin = float(np.mean((yt - pl) ** 2)); out.update(heldout_mse_mean=mse_mean, heldout_mse_linear_rules=mse_lin, heldout_r2_linear_rules=1 - mse_lin / mse_mean if mse_mean > 0 else None)
     if stable:
         A = np.c_[np.ones(int(sel.sum())), X[sel][:, stable]]; coef = np.linalg.lstsq(A, y[sel], rcond=None)[0]; pr_ = np.c_[np.ones(int(test.sum())), X[test][:, stable]] @ coef
@@ -290,7 +291,7 @@ def run_rows(rows, targets=sf.TARGETS, P=None, user_path=USER_FILE, min_runs=MIN
     rows = [r for r in rows if not r.get('control')]; X0, names0, notes = feature_table(rows, user_path) if rows else (np.zeros((0, 0)), [], {})
     P_ = dict(PARAMS, **(P or {}))
     return dict(generated=time.strftime('%Y-%m-%dT%H:%M:%S'), n_finished=len(rows), min_runs=min_runs, label=LABEL, params=P_, param_sources=PARAM_SOURCES, complexity_weights=CPLX, n_base_features=len(names0),
-                base_features=names0, notes=notes, method='feature registry + degree-2 derived terms + complexity-weighted stability selection (lasso); OLS refit on stable terms; held-out by run id; permutation test',
+                base_features=names0, notes=notes, method_version=2, heldout='by seed family (task 53a)', method='feature registry + degree-2 derived terms + complexity-weighted stability selection (lasso); OLS refit on stable terms; held-out by run id; permutation test',
                 targets=[search_target(rows, t, X0, names0, P_, min_runs) for t in targets])
 
 

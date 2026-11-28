@@ -42,7 +42,8 @@ export function syncCameras(viewers, enabled) {
 }
 
 async function readWithProgress(resp, onProgress) {
-  const total = +(resp.headers.get('X-Raw-Length') || resp.headers.get('Content-Length')) || 0, rd = resp.body.getReader();          // X-Raw-Length: size before gzip (meshes are sent gzipped, 2026-11-28) let got = 0, out = total ? new Uint8Array(total) : null; const chunks = [];
+  // X-Raw-Length: the size before gzip (meshes are sent gzipped since 2026-11-28)
+  const total = +(resp.headers.get('X-Raw-Length') || resp.headers.get('Content-Length')) || 0, rd = resp.body.getReader(); let got = 0, out = total ? new Uint8Array(total) : null; const chunks = [];
   for (;;) {
     const { done, value } = await rd.read(); if (done) break;
     if (out && got + value.length <= out.length) out.set(value, got); else { if (out) { chunks.push(out.subarray(0, got)); out = null; } chunks.push(value); }

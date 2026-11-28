@@ -44,7 +44,7 @@ def export(res, originals_only=None):
         md.append('- Goes **down** with: ' + (say(dn) or 'nothing'))
         if L['cv_r2'] < 0.2: md.append('- Weak rule: it predicts little of the variation; do not rely on it.')
         tr = t.get('tree') or {}
-        if tr.get('rules'): md += ['- Tree (R2 %.2f):' % tr.get('cv_r2', float('nan'))] + ['  - ' + r for r in tr['rules']]
+        if tr.get('rules'): md += ['- Tree (R2 %.2f%s):' % (tr.get('cv_r2', float('nan')), '; weak, do not rely on it' if not tr.get('cv_r2', 0) >= 0.2 else '')] + ['  - ' + r for r in tr['rules']]
         md.append('')
     return model, '\n'.join(md) + '\n'
 

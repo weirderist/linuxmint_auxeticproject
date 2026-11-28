@@ -64,7 +64,7 @@ check('at 100: both real tools ran and wrote their results with the run count th
 check('one at a time: the rule search started after the proposer evaluation finished', st['tools']['rules_sr']['attempts'][0]['started'] >= st['tools']['proposer_eval']['attempts'][0]['finished'])
 check('exactly the first 100 finished runs were used, in finishing order', pe_res['scheduled']['run_ids'] == done[:100] and sr_res['n_finished'] == 100)
 check('nothing written outside analysis/scheduled: run folders, queue.jsonl, index.jsonl, frozen code and spec.json have the same sha256 before and after the job', hp == ha and os.path.isdir(c.code_dir()))
-check('the job wrote only analysis/scheduled inside the campaign folder', set(os.listdir(os.path.join(c.d, 'analysis'))) == {'scheduled'})
+check('the job wrote only its own results folder inside the campaign folder (analysis/scheduled_v2 since task 53: method version 2 is never mixed with version 1)', set(os.listdir(os.path.join(c.d, 'analysis'))) == {os.path.basename(aj.adir(c))} and aj.adir(c).endswith('scheduled_v2'))
 check('no temporary file left behind', not [f for r_, ds_, fs in os.walk(aj.adir(c)) for f in fs if '.tmp' in f])
 
 # ---- idempotence: a second check changes nothing
@@ -74,10 +74,12 @@ finish(50); out = aj.run_once(c, log=quiet, runners=FAKES)
 check('150 finished runs: nothing new (next analysis at 200)', out['processed'] == [] and not calls and aj.rjson(os.path.join(aj.adir(c), 'state.json'))['next_milestone'] == 200)
 
 # ---- lock
-lk = os.path.join(aj.adir(c), 'job.lock'); aj.wjson_atomic(lk, aj.me())          # held by this (live) process, as another live copy would
+import platform_compat as pc
+lk = os.path.join(aj.adir(c), 'job.lock'); held = pc.try_lock(os.path.join(aj.adir(c), 'job.flock'))          # task 53d: another live copy holds the OPERATING-SYSTEM lock
 finish(50); out = aj.run_once(c, log=quiet, runners=FAKES)
-check('a live lock holder: this copy does nothing (no second copy runs)', out['status'] == 'locked' and not calls and not os.path.isdir(aj.mdir(c, 200)))
-aj.wjson_atomic(lk, dict(pid=DEAD, boot_id='x', start_ticks='1', t=cm.now()))         # holder gone (dead process / previous boot)
+check('a live lock holder (OS lock held): this copy does nothing (no second copy runs)', held is not None and out['status'] == 'locked' and not calls and not os.path.isdir(aj.mdir(c, 200)))
+held.close()                                                                                                   # the holder ends: the system releases its lock
+aj.wjson_atomic(lk, dict(pid=DEAD, boot_id='x', start_ticks='1', t=cm.now()))         # and its job.lock record stays behind (dead process / previous boot)
 out = aj.run_once(c, log=quiet, runners=FAKES); s200 = aj.rjson(os.path.join(aj.mdir(c, 200), 'status.json'))
 check('a stale lock (holder dead) is taken over; at 200 runs both tools run on the first 200 runs; the lock is released afterwards', out['processed'] == [200] and calls == [('proposer_eval', 200), ('rules_sr', 200)] and not os.path.exists(lk)
       and aj.rjson(os.path.join(aj.mdir(c, 200), 'proposer_eval.json'))['scheduled']['run_ids'] == done[:200], str(calls))

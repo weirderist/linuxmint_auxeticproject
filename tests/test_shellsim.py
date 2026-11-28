@@ -50,6 +50,11 @@ check('New dialog has Yarn mesh / Shell and posts to /api/shellsim; the list sho
 check('shell viewer opens ?sim=<id> from /api/shellsim and waits for a running one', "P.get('sim')" in sv and "'/api/shellsim/'" in sv and 'waitSim' in sv)
 check('legend end words sit on their own row (same place on both sides)', 'lg-ends' in sv)
 
+# both mesh readers: no line comment in front of code on the same line (2026-11-28: a comment swallowed "let got = 0, out = ..." -> "out is not defined" in the viewer)
+for fn in ('index.html', 'viewer_core.js'):
+    src = open(os.path.join(ROOT, 'webui', fn), encoding='utf8').read(); ln = next(l for l in src.splitlines() if "resp.headers.get('X-Raw-Length')" in l)
+    check('%s: the mesh reader declares got and out as code, not inside a comment' % fn, 'let got = 0, out =' in ln and '//' not in ln.split('let got')[0])
+
 # ---- rules in two formats
 import shell_rules_model as srm, shell_features as sf
 import numpy as np
@@ -74,4 +79,18 @@ import main
 f = os.path.join(TMP, 'm.bin'); open(f, 'wb').write(b'KMSH' + bytes(3 << 20))
 from pathlib import Path
 main.GZ_CACHE = Path(TMP) / "gz"; g = main._gz_copy(Path(f)); check('mesh gzip copy: unpacks to the same bytes, cached once per version', gzip.open(g).read() == open(f, 'rb').read() and main._gz_copy(Path(f)) == g and str(main.GZ_CACHE) in str(g))
+# ---- Run on: Kaggle (tasks 56/58): the Simulate command becomes scripts/kaggle/yarn_kaggle.py run with the same relax_job arguments
+from fastapi import HTTPException
+mk = lambda **kw: main.SimBody(E=500, mu=0.49, kc_ratio=30, **kw)
+c1, _ = main._sim_cmd(Path('RES'), mk(where='kaggle', device='gpu'), 0.13); c2, _ = main._sim_cmd(Path('RES'), mk(where='kaggle', device='cpu'), 0.13); c0, _ = main._sim_cmd(Path('RES'), mk(), 0.13)
+check('Kaggle + GPU: yarn_kaggle.py run <folder> --job sim "<the same relax_job arguments, solver fire>"', c1[2].endswith('yarn_kaggle.py') and c1[3:5] == ['run', 'RES'] and c1[5:7] == ['--job', 'sim'] and '--solver fire' in c1[7] and c1[7].replace('--solver fire', '--solver lbfgs').split() == c0[4:] and '--cpu' not in c1)
+check('Kaggle + CPU: L-BFGS on a Kaggle CPU session (--cpu)', '--solver lbfgs' in c2[7] and c2[-1] == '--cpu')
+check('this machine (server) unchanged: relax_job.py with --solver lbfgs', c0[1].endswith('relax_job.py') and c0[c0.index('--solver') + 1] == 'lbfgs')
+def refused(**kw):
+    try: main._sim_cmd(Path('RES'), mk(**kw), 0.13); return False
+    except HTTPException as e: return e.status_code == 422
+check('refused: workstation (not built), and GPU on this machine', refused(where='workstation') and refused(device='gpu'))
+kg = open(os.path.join(ROOT, 'scripts', 'kaggle', 'yarn_kaggle.py'), encoding='utf8').read()
+fl = kg.split('FETCH_PREFIX = ')[1].splitlines()[0]; il = kg.split('INPUT_FILES = ')[1].splitlines()[0]
+check('yarn_kaggle: kernel name differs from its dataset (409 otherwise), fetch never overwrites the built fab_* files, no .env uploaded', "ks = slug + '-k'" in kg and 'fab_' not in fl and '.env' not in il)
 print('\n' + ('ALL OK' if not bad else 'FAILURES: ' + ', '.join(bad))); sys.exit(1 if bad else 0)

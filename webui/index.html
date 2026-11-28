@@ -56,8 +56,8 @@
   <label title="relative energy change per round; 0 = off"><span>Stop when stalled</span><input id="fStall" type="number" step="any" min="0" max="0.01"></label>
   <label class="row" title="shell fold + 3 short rounds"><input id="fSeedOnly" type="checkbox"><span>Quick mode</span></label>
   <label class="row" title="writes diagnostics.csv every round; no effect on the result"><input id="fDiag" type="checkbox"><span>Diagnostics</span></label>
-  <label title="GPU needs a machine with a GPU (Kaggle); this machine and the server have none"><span>Device</span><select id="fDevice"><option value="cpu">CPU (L-BFGS)</option><option value="gpu">GPU (FIRE)</option></select></label>
-  <label><span>Run on</span><select id="fWhere"><option value="server">Server</option><option value="workstation" disabled>Workstation (not built)</option><option value="kaggle" disabled>Kaggle (not built)</option></select></label>
+  <label title="GPU = FIRE on a Kaggle GPU (choose Run on: Kaggle); this machine and the server have no GPU. Kaggle + CPU = L-BFGS on a Kaggle CPU session"><span>Device</span><select id="fDevice"><option value="cpu">CPU (L-BFGS)</option><option value="gpu">GPU (FIRE)</option></select></label>
+  <label><span>Run on</span><select id="fWhere"><option value="server">This machine</option><option value="workstation" disabled>Workstation (not built)</option><option value="kaggle">Kaggle</option></select></label>
  </div>
  <div class="grid"><label><span>Saved settings</span><select id="pSel"></select></label><label><span>Save as</span><input id="pName" maxlength="60" placeholder="name"></label></div>
  <div><button id="pLoad">Load</button> <button id="pSave">Save</button> <button id="pDel">Delete</button></div>
@@ -229,7 +229,8 @@ const ckey = id => id + '|' + variant + '|' + stamp(recOf(id));
 // Each result view is downloaded and built once; switching Tube/Axis or going back to a result reuses it.
 const cache = new Map();                       // key -> { tube: Promise<Object3D>, axis: Promise<Object3D> }
 async function readWithProgress(resp, tag) {
-  const total = +(resp.headers.get('X-Raw-Length') || resp.headers.get('Content-Length')) || 0, rd = resp.body.getReader();          // X-Raw-Length: size before gzip (meshes are sent gzipped, 2026-11-28) let got = 0, out = total ? new Uint8Array(total) : null; const chunks = [];
+  // X-Raw-Length: the size before gzip (meshes are sent gzipped since 2026-11-28)
+  const total = +(resp.headers.get('X-Raw-Length') || resp.headers.get('Content-Length')) || 0, rd = resp.body.getReader(); let got = 0, out = total ? new Uint8Array(total) : null; const chunks = [];
   for (;;) {
     const { done, value } = await rd.read(); if (done) break;
     if (out && got + value.length <= out.length) out.set(value, got); else { if (out) { chunks.push(out.subarray(0, got)); out = null; } chunks.push(value); }      // known size: one buffer, no copy of the whole file at the end

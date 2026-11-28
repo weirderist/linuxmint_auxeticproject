@@ -62,8 +62,14 @@ os.rename(os.path.join(c.tmp, 'S000001.9'), os.path.join(c.quar, 'S000001.manual
 c = newcamp(); [c.enqueue(S(seed=i, stub_seconds=0.6)) for i in range(4)]; c.set_control('pause')
 t = threading.Thread(target=lambda: sc.serve(c, poll_s=0.1, lock=False, run_poll=0.05)); t.start(); time.sleep(1.0)
 check('pause: nothing starts', not os.listdir(c.runs) and c.get_runner_state() == 'paused', c.get_runner_state())
-c.set_control('run'); time.sleep(0.9); c.set_control('pause')           # in the middle of a run: pause lets it finish
-time.sleep(1.2); k = len(os.listdir(c.runs)); time.sleep(1.0)
+c.set_control('run')
+def wait_for(cond, limit=30.0):          # 2026-11-28: wait for the event, not a fixed time (on Windows a run starts ~2 s after 'run': busy check + a new Python process; fixed sleeps made this flaky)
+    t0 = time.time()
+    while not cond() and time.time() - t0 < limit: time.sleep(0.05)
+    return cond()
+started = wait_for(lambda: c.get_runner_state() == 'running' or bool(os.listdir(c.tmp) if os.path.isdir(c.tmp) else []))
+c.set_control('pause')           # in the middle of a run: pause lets it finish
+wait_for(lambda: len(os.listdir(c.runs)) >= 1 and c.get_runner_state() == 'paused'); k = len(os.listdir(c.runs)); time.sleep(1.5)
 check('pause during a run: the run finishes, no further run starts', 1 <= k <= 2 and len(os.listdir(c.runs)) == k and c.get_runner_state() == 'paused', 'finished %d' % k)
 c.set_control('run'); time.sleep(0.5); c.set_control('stop'); t.join(timeout=15)
 check('stop after current run: runner exits after the run in progress', not t.is_alive() and c.get_runner_state() == 'stopped' and os.listdir(c.tmp) == [] and 0 < len(os.listdir(c.runs)) < 4, str(len(os.listdir(c.runs))))

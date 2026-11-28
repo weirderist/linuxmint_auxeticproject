@@ -35,21 +35,26 @@ def lasso(Z, y, lam, iters=300):
     return b
 
 
-def folds(n, k, seed):
-    idx = np.random.default_rng(seed).permutation(n); return [idx[i::k] for i in range(k)]
+def folds(n, k, seed, groups=None):
+    """k folds of range(n); with groups (one label per row, task 53a) every group falls in ONE fold (seed families never split)."""
+    g = None if groups is None else np.asarray(groups)
+    if g is None or len(np.unique(g)) == n or len(np.unique(g)) < 2 * k:          # no families (every run its own) -> the plain folds, unchanged; too few families to split -> plain folds too
+        idx = np.random.default_rng(seed).permutation(n); return [idx[i::k] for i in range(k)]
+    u = np.unique(g); u = u[np.random.default_rng(seed).permutation(len(u))]; fold_of = {x: i % k for i, x in enumerate(u)}
+    return [np.array([j for j in range(n) if fold_of[g[j]] == f], int) for f in range(k)]
 
 
-def cv_lasso(Z, y, lams, k=5, seed=0):
+def cv_lasso(Z, y, lams, k=5, seed=0, groups=None):
     mse = np.zeros((len(lams), k))
-    for f, te in enumerate(folds(len(y), k, seed)):
+    for f, te in enumerate(folds(len(y), k, seed, groups)):
         tr = np.setdiff1d(np.arange(len(y)), te); Zt, mt, st = standardise(Z[tr]); ym = y[tr].mean()
         for i, lam in enumerate(lams): b = lasso(Zt, y[tr], lam); mse[i, f] = np.mean(((Z[te] - mt) / st @ b + ym - y[te]) ** 2)
     return mse.mean(1), mse.std(1) / math.sqrt(k)
 
 
-def baseline_mse(y, k=5, seed=0):
+def baseline_mse(y, k=5, seed=0, groups=None):
     out = []
-    for te in folds(len(y), k, seed): tr = np.setdiff1d(np.arange(len(y)), te); out.append(np.mean((y[tr].mean() - y[te]) ** 2))
+    for te in folds(len(y), k, seed, groups): tr = np.setdiff1d(np.arange(len(y)), te); out.append(np.mean((y[tr].mean() - y[te]) ** 2))
     return float(np.mean(out))
 
 
@@ -79,16 +84,17 @@ def tree_rules(tr, names, prefix=''):
 
 
 def analyse_target(rows, target, boots=40, seed=0):
-    names = list(sf.FEATURES); pts = [(r['features'], r['targets'].get(target)) for r in rows if r['targets'].get(target) is not None and all(math.isfinite(v) for v in r['features'].values())]
+    names = list(sf.FEATURES); keep = [r for r in rows if r['targets'].get(target) is not None and all(math.isfinite(v) for v in r['features'].values())]
+    pts = [(r['features'], r['targets'][target]) for r in keep]; groups = [sf.family(r.get('source', ''), r.get('run', i)) for i, r in enumerate(keep)]          # task 53a: folds by seed family
     n = len(pts); out = dict(target=target, n_runs=n)
     if n < MIN_RUNS: out.update(status='waiting', note='fewer than %d finished runs with this descriptor: no rule is reported' % MIN_RUNS); return out
-    X = np.array([[f[k] for k in names] for f, _ in pts]); y = np.array([v for _, v in pts], float); Z, m, s = standardise(X); base = baseline_mse(y)
-    lams = np.geomspace(max(np.abs(Z.T @ (y - y.mean())).max() / n, 1e-9), 1e-3 * max(np.abs(Z.T @ (y - y.mean())).max() / n, 1e-9), 12); cvm, cvse = cv_lasso(X, y, lams)
+    X = np.array([[f[k] for k in names] for f, _ in pts]); y = np.array([v for _, v in pts], float); Z, m, s = standardise(X); base = baseline_mse(y, groups=groups)
+    lams = np.geomspace(max(np.abs(Z.T @ (y - y.mean())).max() / n, 1e-9), 1e-3 * max(np.abs(Z.T @ (y - y.mean())).max() / n, 1e-9), 12); cvm, cvse = cv_lasso(X, y, lams, groups=groups)
     i0 = int(np.argmin(cvm)); i1 = next(i for i in range(len(lams)) if cvm[i] <= cvm[i0] + cvse[i0]); lam = lams[i1]; b = lasso(Z, y, lam); rng = np.random.default_rng(seed); sel = np.zeros(len(names))
     for _ in range(boots): ix = rng.integers(0, n, n); Zb, _, _ = standardise(X[ix]); sel += lasso(Zb, y[ix], lam) != 0
     coef = [dict(feature=names[j], coefficient_std=float(b[j]), per_unit=float(b[j] / s[j]), mean=float(m[j]), std=float(s[j]), stability=float(sel[j] / boots)) for j in np.argsort(-np.abs(b)) if b[j] != 0]          # mean/std: so the rule can be applied to a new pattern (shell_rules_model.py)
     tmse = []
-    for te in folds(n, 5, 1): tr = np.setdiff1d(np.arange(n), te); t = fit_tree(X[tr], y[tr]); tmse.append(np.mean([(predict_tree(t, X[i]) - y[i]) ** 2 for i in te]))
+    for te in folds(n, 5, 1, groups): tr = np.setdiff1d(np.arange(n), te); t = fit_tree(X[tr], y[tr]); tmse.append(np.mean([(predict_tree(t, X[i]) - y[i]) ** 2 for i in te]))
     tree = fit_tree(X, y)
     out.update(status='ok', label=LABEL, lasso=dict(lambda_=float(lam), intercept=float(y.mean()), coefficients=coef, cv_mse=float(cvm[i1]), baseline_cv_mse=base, cv_r2=float(1 - cvm[i1] / base), support=n, n_selected=len(coef)),
                tree=dict(rules=tree_rules(tree, names), cv_mse=float(np.mean(tmse)), cv_r2=float(1 - np.mean(tmse) / base), support=n), target_mean=float(y.mean()), target_std=float(y.std()))
@@ -99,7 +105,7 @@ def run(camp, originals_only=False):
     """originals_only (2026-11-28, K): leave out the runs the GP proposer chose (source 'proposer:...'); the GP proposer itself still learns from every run."""
     rows = [r for r in sf.dataset(camp) if not r['control'] and not (originals_only and str(r.get('source', '')).startswith('proposer'))]
     res = dict(campaign=camp.name, generated=time.strftime('%Y-%m-%dT%H:%M:%S'), n_finished=len(rows), originals_only=bool(originals_only), min_runs=MIN_RUNS, label=LABEL,
-                                                                      method='lasso (CV, 1-SE rule, bootstrap stability) and a depth-3 tree; no symbolic regression (needs an extra package, K decides)', features=list(sf.FEATURES),
+                                                                      method='lasso (CV by seed family, 1-SE rule, bootstrap stability) and a depth-3 tree (CV by seed family); no symbolic regression (needs an extra package, K decides)', method_version=2, features=list(sf.FEATURES),
                                                                       targets=[analyse_target(rows, t) for t in sf.TARGETS])
     d = os.path.join(camp.d, 'analysis'); os.makedirs(d, exist_ok=True)
     for path in (os.path.join(d, 'rules_%06d.json' % len(rows)), os.path.join(d, 'rules.json')):

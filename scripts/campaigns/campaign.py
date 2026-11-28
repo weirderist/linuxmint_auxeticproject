@@ -67,12 +67,17 @@ def alive(att):
     return bool(pi and pi[0] == att.get('start_ticks') and pi[1] != 'Z')
 
 cmdlines = pc.cmdlines
+WIN_PARENT_FALLBACK = True          # the direct parent is always skipped, even when the scan did not list it
 
 def busy_reason():
     """Why a new run must wait: another relax_job.py / tile_sim.py process is alive (web-UI job, or a job of another campaign). Stale job_stage.json files
     (left by a power cut; no process works on that folder) are ignored. Returns '' if the machine is free."""
-    for pid, args in cmdlines():
-        if pid != os.getpid() and any(os.path.basename(a) in FOREIGN_JOB_SCRIPTS for a in args):
+    rows = pc.proc_rows(); par = {pid: ppid for pid, ppid, _ in rows}; anc, q = set(), os.getpid()          # 2026-11-28: ONE process scan; the caller's own parent processes never count (a shell
+    while q not in anc: anc.add(q); q = par.get(q, 0)                                                               # that started this job has the script name in its command line), and only a Python
+    if WIN_PARENT_FALLBACK and os.getppid() not in par: anc.add(os.getppid())                                     # interpreter running one of the scripts is a job (a 'bash -c "... relax_job.py ..."' wrapper was taken for a solver)
+    for pid, _, args in rows:
+        if pid in anc or not args or not os.path.basename(args[0]).lower().startswith('python'): continue
+        if any(os.path.basename(a) in FOREIGN_JOB_SCRIPTS for a in args[1:]):
             return 'pid %d: %s' % (pid, ' '.join(args)[:140])
     return ''
 
