@@ -12,6 +12,7 @@ HERE = os.path.dirname(os.path.abspath(__file__)); sys.path.insert(0, HERE)
 os.environ.setdefault('AUXETIC_ENV', os.path.join(os.path.expanduser('~'), '.auxetic_kaggle.env'))
 if os.name == 'nt': os.environ.setdefault('KAGGLE_BIN', os.path.join(os.path.expanduser('~'), 'auxetic_ws_venv', 'Scripts', 'kaggle.exe'))
 import kaggle_cli as kc          # noqa: E402
+sys.path.insert(0, os.path.join(os.path.dirname(HERE), 'campaigns')); import platform_compat as pc          # noqa: E402  ws_home (2026-11-28)
 
 SSH = ['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=30', 'server']; ROOT = '~/auxetic_project'
 
@@ -24,13 +25,13 @@ def main(camp):
     if not user: sys.exit('no KAGGLE_USERNAME in %s' % os.environ['AUXETIC_ENV'])
     kd = '%s/campaigns/shell_runs/%s/kaggle' % (ROOT, camp); rc, o = sh('cat %s/state.json' % kd)
     if rc != 0: sys.exit('server not reachable: %s' % o[-200:])
-    st = json.loads(o); local = os.path.join(os.path.expanduser('~'), 'auxetic_ws', 'kaggle_downloads'); os.makedirs(local, exist_ok=True)
+    st = json.loads(o); local = os.path.join(pc.ws_home(), 'kaggle_downloads'); os.makedirs(local, exist_ok=True)
     ents = [(n, e) for n, e in st.items() if not n.startswith('_') and isinstance(e, dict) and e.get('status') == 'running'] + [(e.get('slot') or k.split('-')[2], e) for k, e in (st.get('_awaiting') or {}).items()]
     for name, ent in ents:
         rc, o = kc.run(['kernels', 'status', '%s/%s' % (user, ent['slug'])]); print(name, o.strip())
         if 'complete' not in o.lower(): continue
         folder = '%s_%d' % (name, int(ent['t_push'])); ld = os.path.join(local, folder); os.makedirs(ld, exist_ok=True)
-        stg = os.path.join(os.path.expanduser('~'), 'auxetic_ws', 'kaggle_staging', ent['slug'])          # downloaded earlier while the server was away (2026-11-27): reuse it
+        stg = os.path.join(pc.ws_home(), 'kaggle_staging', ent['slug'])          # downloaded earlier while the server was away (2026-11-27): reuse it
         if os.path.isfile(os.path.join(stg, 'manifest.json')) and (json.load(open(os.path.join(stg, 'manifest.json'))).get('finished')):
             import shutil; shutil.copytree(stg, ld, dirs_exist_ok=True); rc = 0; print(name, 'using the staged download', stg)
         else: rc = 1

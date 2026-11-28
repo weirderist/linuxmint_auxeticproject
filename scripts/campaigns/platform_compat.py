@@ -146,3 +146,8 @@ def venv_bin(root, name):
 
 
 def venv_python(root): return venv_bin(root, 'python')
+
+def ws_home():
+    """The workstation's work folder (agent work, Kaggle downloads and staging). K 2026-11-28: the project lives on D:, so the folder is set by the
+    environment variable AUXETIC_WS_HOME (D:\\auxetic_ws on the workstation, set by K with setx); without it the old place ~/auxetic_ws."""
+    return os.environ.get('AUXETIC_WS_HOME') or os.path.join(os.path.expanduser('~'), 'auxetic_ws')

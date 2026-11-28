@@ -192,7 +192,7 @@ class Agent:
 
 def main(argv=None):
     a = argparse.ArgumentParser(); a.add_argument('--campaign', required=True); a.add_argument('--python', default=sys.executable, help='interpreter with jax, numpy, scipy')
-    a.add_argument('--work', default=os.path.join(os.path.expanduser('~'), 'auxetic_ws')); a.add_argument('--poll-s', type=float, default=60); a.add_argument('--host', default='server', help="ssh host of the hub, or 'local' when the hub is this machine")
+    a.add_argument('--work', default=os.environ.get('AUXETIC_WS_HOME') or os.path.join(os.path.expanduser('~'), 'auxetic_ws'))          # AUXETIC_WS_HOME: D:\\auxetic_ws (2026-11-28); a.add_argument('--poll-s', type=float, default=60); a.add_argument('--host', default='server', help="ssh host of the hub, or 'local' when the hub is this machine")
     a.add_argument('--remote-root', default='~/auxetic_project'); a.add_argument('--worker', default=''); a.add_argument('--once', action='store_true'); a.add_argument('--stub', action='store_true', help=argparse.SUPPRESS)
     g = a.parse_args(argv); ag = Agent(g)
     lk = open(os.path.join(ag.w, 'agent.lock'), 'a+')          # one agent per work folder: a second start (logon task while one runs) exits at once; the OS releases the lock when the process dies
